@@ -431,6 +431,43 @@ private func stubClient() -> GitHubClient {
     }
 }
 
+@Test @MainActor func recomputeStatusStampsReviewedOnIdleWithoutWorkingEdge() async throws {
+    // Simulates a resumed, already-finished review: the watcher replays a stale
+    // transcript verdict, so status goes straight to .idle (never .working). The
+    // working->idle notification edge must NOT fire, but claudeReviewedAt MUST be
+    // stamped so the "Reviewed" tag appears.
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()
+    try await store.upsert(review)
+    let poster = StubNotificationPoster()
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: poster,
+        statusReader: ClaudeStatusReader(idleThresholdSeconds: 0.1)
+    )
+    await model.load()
+    await model.ensureClaudeSession(for: review)
+
+    let staleEvent = Date().addingTimeInterval(-3600)
+    model.handleTranscriptEvent(reviewID: review.id, at: staleEvent, snippet: "Looks good")
+    model.recomputeStatus(for: review.id, now: Date())
+
+    if case .idle = model.claudeStatuses[review.id] {} else {
+        Issue.record("expected .idle, got \(String(describing: model.claudeStatuses[review.id]))")
+    }
+
+    try await Task.sleep(nanoseconds: 300_000_000)
+    #expect(model.reviews.first(where: { $0.id == review.id })?.claudeReviewedAt != nil)
+
+    let posted = await poster.posted
+    #expect(posted.isEmpty)
+}
+
 @Test @MainActor func firstIdleTransitionFiresNotificationOnce() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()

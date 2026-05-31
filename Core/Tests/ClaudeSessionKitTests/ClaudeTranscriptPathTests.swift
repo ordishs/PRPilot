@@ -7,9 +7,22 @@ import Foundation
     #expect(url.lastPathComponent == "-Users-me-dev-foo")
 }
 
-@Test func preservesSpacesAndOtherChars() {
+@Test func encodesSpacesToHyphens() {
+    // Must match Claude Code's own encoding: a space in the path (e.g. the macOS
+    // "Application Support" directory) becomes '-', not a preserved space. Otherwise
+    // the transcript watcher tails the wrong directory.
     let url = ClaudeTranscriptPath.directoryURL(forWorktreePath: "/Users/me/Application Support/foo")
-    #expect(url.lastPathComponent == "-Users-me-Application Support-foo")
+    #expect(url.lastPathComponent == "-Users-me-Application-Support-foo")
+}
+
+@Test func encodesDotsToHyphens() {
+    let url = ClaudeTranscriptPath.directoryURL(forWorktreePath: "/Users/me/masa.gi/code-reviewer")
+    #expect(url.lastPathComponent == "-Users-me-masa-gi-code-reviewer")
+}
+
+@Test func preservesExistingHyphensAndAlphanumerics() {
+    let url = ClaudeTranscriptPath.directoryURL(forWorktreePath: "/x/bsv-blockchain-teranode-pr990")
+    #expect(url.lastPathComponent == "-x-bsv-blockchain-teranode-pr990")
 }
 
 @Test func sitsUnderClaudeProjectsDir() {

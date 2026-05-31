@@ -2,10 +2,18 @@ import Foundation
 
 public enum ClaudeTranscriptPath {
     public static func directoryURL(forWorktreePath path: String) -> URL {
-        let encoded = path.replacingOccurrences(of: "/", with: "-")
+        // Claude Code derives the transcript folder name from the working directory by
+        // replacing every character that is not ASCII-alphanumeric or '-' with '-'.
+        // This must match exactly — e.g. "/Users/me/Application Support/x" must encode to
+        // "-Users-me-Application-Support-x" (space -> '-') and "masa.gi" to "masa-gi"
+        // ('.' -> '-'). If it doesn't, the transcript watcher tails the wrong (empty)
+        // directory, status stays .starting, and review state never updates.
+        let encoded = String(path.map { Self.encodedCharacters.contains($0) ? $0 : "-" })
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         return homeDir.appendingPathComponent(".claude/projects/\(encoded)")
     }
+
+    private static let encodedCharacters = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-")
 
     public static func latestSessionID(forWorktreePath path: String) -> String? {
         latestSessionID(in: directoryURL(forWorktreePath: path))
