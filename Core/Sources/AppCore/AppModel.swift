@@ -32,6 +32,7 @@ public final class AppModel {
     public var webPreloadHandler: ((Review) -> Void)?
 
     private var transcriptWatchers: [String: TranscriptWatcher] = [:]
+    private var claudePreparing: Set<String> = []
     private var lastEventAt: [String: Date] = [:]
     private var lastVerdictSnippet: [String: String] = [:]
     private var notifiedIdleForSession: Set<String> = []
@@ -312,6 +313,9 @@ public final class AppModel {
             claudePaneState[review.id] = .sessionLive
             return
         }
+        if claudePreparing.contains(review.id) { return }
+        claudePreparing.insert(review.id)
+        defer { claudePreparing.remove(review.id) }
         guard let executable = await claudeExecutable() else {
             claudePaneState[review.id] = .claudeUnavailable(Self.claudeNotFoundMessage)
             return
@@ -470,6 +474,19 @@ public final class AppModel {
     public func prewarmDiffs() {
         for review in reviews where !review.disabled {
             Task(priority: .background) { await loadDiff(for: review) }
+        }
+    }
+
+    public func prewarmClaude() {
+        Task(priority: .background) { [weak self] in
+            guard let self else { return }
+            _ = await self.claudeExecutable()
+            for review in self.reviews where !review.disabled {
+                if self.claudeSessions[review.id] != nil { continue }
+                guard let clonePath = self.registeredClonePath(for: review),
+                      FileManager.default.fileExists(atPath: clonePath) else { continue }
+                _ = try? await self.worktreeProvider.ensureWorktree(for: review, registeredClonePath: clonePath)
+            }
         }
     }
 
