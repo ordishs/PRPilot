@@ -11,7 +11,6 @@ struct DetailView: View {
     enum Pane: String, CaseIterable, Identifiable {
         case claude = "Claude Review"
         case github = "GitHub"
-        case diff = "Diff"
         var id: String { rawValue }
     }
 
@@ -33,9 +32,6 @@ struct DetailView: View {
             case .github:
                 WebPane(cache: webViewCache, review: review)
                     .id(review.id)
-            case .diff:
-                DiffPaneView(model: model, review: review)
-                    .id(review.id)
             case .claude:
                 ClaudePaneView(model: model, review: review)
                     .id(review.id)
@@ -55,8 +51,6 @@ struct DetailView: View {
                 .keyboardShortcut("1", modifiers: .command)
             Button("") { pane = .github }
                 .keyboardShortcut("2", modifiers: .command)
-            Button("") { pane = .diff }
-                .keyboardShortcut("3", modifiers: .command)
         }
         .opacity(0)
     }

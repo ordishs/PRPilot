@@ -462,7 +462,6 @@ public final class AppModel {
     public func prefetch(for review: Review) {
         guard !review.disabled else { return }
         Task { await ensureClaudeSession(for: review) }
-        Task { await loadDiff(for: review) }
     }
 
     private func autoLoadIfEnabled(_ review: Review) {

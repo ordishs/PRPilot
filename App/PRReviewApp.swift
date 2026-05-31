@@ -35,7 +35,6 @@ struct PRReviewApp: App {
                     }
                     await created.load()
                     created.startDiscoveryPolling()
-                    created.prewarmDiffs()
                     created.prewarmClaude()
                     for review in created.reviews where !review.disabled {
                         _ = webViewCache.ensure(for: review)
