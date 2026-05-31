@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PR Sidebar — Status Indicators Mockup</title>
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --sidebar: #2a2a2c;
+    --row-sel: #0a4da3;
+    --text: #f2f2f5;
+    --secondary: #a0a0a8;
+    --tertiary: #6e6e76;
+    --sep: rgba(255,255,255,0.08);
+    /* status colors (approx SwiftUI dark-mode system colors — brighter) */
+    --purple: #bf5af2; --green: #30d158; --orange: #ff9f0a;
+    --blue: #0a84ff; --red: #ff453a; --gray: #98989d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px;
+    font: 13px -apple-system, "SF Pro Text", system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { display: flex; gap: 48px; flex-wrap: wrap; align-items: flex-start; }
+  h2 { font-size: 13px; font-weight: 600; color: var(--secondary); margin: 0 0 10px 2px; text-transform: uppercase; letter-spacing: .04em; }
+
+  .sidebar {
+    width: 300px;
+    background: var(--sidebar);
+    border: 1px solid var(--sep);
+    border-radius: 10px;
+    padding: 8px 0;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.10);
+    overflow: hidden;
+  }
+  .titlebar {
+    font-weight: 600; font-size: 12px; color: var(--secondary);
+    padding: 4px 14px 10px; border-bottom: 1px solid var(--sep); margin-bottom: 6px;
+  }
+
+  .row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px; margin: 1px 6px; border-radius: 7px; cursor: default;
+    position: relative;
+  }
+  .row.sel { background: var(--row-sel); }
+  .row:hover:not(.sel) { background: rgba(0,0,0,0.035); }
+  .row .body { flex: 1; min-width: 0; }
+  .row .line1 { display: flex; align-items: center; gap: 6px; }
+  .row .title {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 13px; font-weight: 500;
+  }
+  .row .meta { font-size: 11px; color: var(--secondary); margin-top: 2px; }
+  .row .date { font-size: 10px; color: var(--tertiary); margin-top: 1px; }
+  .row.disabled { opacity: .45; }
+
+  /* status capsule */
+  .tag {
+    flex: none; font-size: 9px; font-weight: 700; line-height: 1;
+    text-transform: uppercase; letter-spacing: .05em;
+    padding: 3px 7px; border-radius: 999px; white-space: nowrap;
+  }
+  .tag.merged   { color: var(--purple); background: rgba(191,90,242,.20); }
+  .tag.closed   { color: var(--red);    background: rgba(255,69,58,.20); }
+  .tag.approved { color: var(--green);  background: rgba(48,209,88,.20); }
+  .tag.new      { color: var(--orange); background: rgba(255,159,10,.22); }
+  .tag.reviewed { color: #5ab0ff;       background: rgba(10,132,255,.24); }
+  .tag.draft    { color: var(--gray);   background: rgba(152,152,157,.22); }
+
+  /* live status dot (unchanged feature, shown for context) */
+  .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+  .dot.working { background: var(--blue); animation: pulse 1.1s ease-in-out infinite; }
+  .dot.ready   { background: var(--green); }
+  .dot.idle    { background: var(--gray); }
+  .dot.clear   { background: transparent; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1;   transform: scale(1); }
+    50%      { opacity: .35; transform: scale(.7); }
+  }
+
+  /* context menu */
+  .menu {
+    width: 240px; background: rgba(50,50,52,0.96);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.10); border-radius: 8px;
+    padding: 5px; box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  }
+  .mi { display: flex; align-items: center; gap: 9px; padding: 5px 9px; border-radius: 5px; font-size: 13px; }
+  .mi .ic { width: 16px; text-align: center; opacity: .8; }
+  .mi.hl { background: var(--blue); color: #fff; }
+  .mi.disabled { opacity: .38; }
+  .msep { height: 1px; background: rgba(255,255,255,0.12); margin: 5px 8px; }
+
+  .legend { font-size: 12px; color: var(--secondary); line-height: 1.9; }
+  .legend .tag { display: inline-block; margin-right: 6px; min-width: 64px; text-align: center; }
+  .note { max-width: 320px; font-size: 12px; color: var(--secondary); line-height: 1.55; }
+  .note code { background: rgba(0,0,0,.06); padding: 1px 4px; border-radius: 4px; font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div>
+    <h2>Sidebar — one tag per row, by precedence</h2>
+    <div class="sidebar">
+      <div class="titlebar">Reviews</div>
+
+      <!-- New: not yet opened -->
+      <div class="row">
+        <div class="body">
+          <div class="line1">
+            <span class="title">#944 · Fix race in session prewarm</span>
+            <span class="tag new">New</span>
+          </div>
+          <div class="meta">bsv/teranode · alice</div>
+          <div class="date">2m ago</div>
+        </div>
+        <span class="dot ready"></span>
+      </div>
+
+      <!-- Reviewed: opened, Claude finished -->
+      <div class="row">
+        <div class="body">
+          <div class="line1">
+            <span class="title">#938 · Add worktree GC on launch</span>
+            <span class="tag reviewed">Reviewed</span>
+          </div>
+          <div class="meta">bsv/teranode · bob</div>
+          <div class="date">1h ago</div>
+        </div>
+        <span class="dot ready"></span>
+      </div>
+
+      <!-- Approved -->
+      <div class="row sel">
+        <div class="body">
+          <div class="line1">
+            <span class="title">#931 · Coalesce diff computation</span>
+            <span class="tag approved">Approved</span>
+          </div>
+          <div class="meta">bsv/teranode · carol</div>
+          <div class="date">3h ago</div>
+        </div>
+        <span class="dot idle"></span>
+      </div>
+
+      <!-- Merged -->
+      <div class="row">
+        <div class="body">
+          <div class="line1">
+            <span class="title">#925 · Remote PR base diffing</span>
+            <span class="tag merged">Merged</span>
+          </div>
+          <div class="meta">bsv/teranode · dave</div>
+          <div class="date">yesterday</div>
+        </div>
+        <span class="dot clear"></span>
+      </div>
+
+      <!-- Draft + unopened => New wins -->
+      <div class="row">
+        <div class="body">
+          <div class="line1">
+            <span class="title">#949 · WIP: experimental cache layer</span>
+            <span class="tag new">New</span>
+          </div>
+          <div class="meta">bsv/teranode · alice</div>
+          <div class="date">just now</div>
+        </div>
+        <span class="dot working"></span>
+      </div>
+
+      <!-- Draft, opened, Claude not done => Draft -->
+      <div class="row">
+        <div class="body">
+          <div class="line1">
+            <span class="title">#947 · Draft: refactor status reader</span>
+            <span class="tag draft">Draft</span>
+          </div>
+          <div class="meta">bsv/teranode · bob</div>
+          <div class="date">20m ago</div>
+        </div>
+        <span class="dot working"></span>
+      </div>
+
+      <!-- Open: opened, nothing else => no tag -->
+      <div class="row">
+        <div class="body">
+          <div class="line1">
+            <span class="title">#940 · Tidy settings defaults</span>
+          </div>
+          <div class="meta">bsv/teranode · carol</div>
+          <div class="date">5h ago</div>
+        </div>
+        <span class="dot idle"></span>
+      </div>
+
+      <!-- Closed -->
+      <div class="row disabled">
+        <div class="body">
+          <div class="line1">
+            <span class="title">#902 · Abandoned approach</span>
+            <span class="tag closed">Closed</span>
+          </div>
+          <div class="meta">bsv/teranode · dave</div>
+          <div class="date">last week</div>
+        </div>
+        <span class="dot clear"></span>
+      </div>
+
+    </div>
+  </div>
+
+  <div>
+    <h2>Right-click menu</h2>
+    <div class="menu">
+      <div class="mi hl"><span class="ic">⧉</span> Copy Session ID</div>
+      <div class="msep"></div>
+      <div class="mi"><span class="ic">⏸</span> Disable</div>
+      <div class="msep"></div>
+      <div class="mi" style="color:#ff6961"><span class="ic">🗑</span> Remove from List</div>
+    </div>
+
+    <div style="height:22px"></div>
+    <h2>Menu — no session yet</h2>
+    <div class="menu">
+      <div class="mi disabled"><span class="ic">⧉</span> Copy Session ID</div>
+      <div class="msep"></div>
+      <div class="mi"><span class="ic">⏸</span> Disable</div>
+      <div class="msep"></div>
+      <div class="mi" style="color:#ff6961"><span class="ic">🗑</span> Remove from List</div>
+    </div>
+
+    <div style="height:28px"></div>
+    <h2>Tag colors & meaning</h2>
+    <div class="legend">
+      <span class="tag merged">Merged</span> PR is merged<br>
+      <span class="tag closed">Closed</span> PR closed unmerged<br>
+      <span class="tag approved">Approved</span> your GitHub review = APPROVED<br>
+      <span class="tag new">New</span> you haven't opened it yet<br>
+      <span class="tag reviewed">Reviewed</span> Claude review finished + opened<br>
+      <span class="tag draft">Draft</span> draft PR (low priority)<br>
+      <span style="display:inline-block;min-width:64px"></span> <span style="color:var(--tertiary)">(no tag)</span> opened, in progress
+    </div>
+
+    <div style="height:24px"></div>
+    <p class="note">
+      The small dot on the right is the <b>existing</b> live Claude status
+      (working / idle / done) — unchanged. The new capsule is the
+      <b>lifecycle</b> tag. Precedence (high→low):
+      <code>Merged › Closed › Approved › New › Reviewed › Draft › none</code>.
+    </p>
+  </div>
+
+</div>
+</body>
+</html>
