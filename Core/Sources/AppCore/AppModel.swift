@@ -415,6 +415,12 @@ public final class AppModel {
         if shouldFireReviewReady(old: oldStatus, new: newStatus, reviewID: reviewID) {
             notifiedIdleForSession.insert(reviewID)
             postReviewReadyNotification(for: reviewID, status: newStatus)
+        }
+        // Persist "reviewed" whenever a finished state is observed — not only on the
+        // live working->idle edge. Resumed/already-finished reviews replay a stale
+        // transcript event and go straight to .idle, so the edge never fires; this
+        // state-driven stamp (idempotent via markClaudeReviewed) covers them.
+        if isReviewFinished(newStatus), reviews.first(where: { $0.id == reviewID })?.claudeReviewedAt == nil {
             Task { await self.markClaudeReviewed(reviewID) }
         }
     }
@@ -424,6 +430,17 @@ public final class AppModel {
         guard case .idle = new else { return false }
         guard case .working = old else { return false }
         return true
+    }
+
+    private func isReviewFinished(_ status: ClaudeStatus) -> Bool {
+        switch status {
+        case .idle:
+            return true
+        case .ready(let code):
+            return code == 0
+        default:
+            return false
+        }
     }
 
     private func postReviewReadyNotification(for reviewID: String, status: ClaudeStatus) {
