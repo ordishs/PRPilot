@@ -538,6 +538,22 @@ public final class AppModel {
         }
     }
 
+    /// Discards the Claude session for a review: terminates the live process/watcher,
+    /// clears the persisted session id and the "reviewed" stamp. A fresh review starts
+    /// the next time the PR is opened or auto-loaded (no resume).
+    public func clearClaudeSession(for id: String) async {
+        terminateClaudeSession(for: id)
+        guard var review = reviews.first(where: { $0.id == id }) else { return }
+        review.claudeSessionID = nil
+        review.claudeReviewedAt = nil
+        do {
+            try await store.upsert(review)
+            reviews = await store.allReviews()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
     func markClaudeReviewed(_ id: String) async {
         guard var review = reviews.first(where: { $0.id == id }), review.claudeReviewedAt == nil else { return }
         review.claudeReviewedAt = Date()

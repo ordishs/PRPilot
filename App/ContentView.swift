@@ -118,6 +118,12 @@ struct ContentView: View {
                 Label("Copy Session ID", systemImage: "doc.on.clipboard")
             }
             .disabled(review.claudeSessionID == nil)
+            Button {
+                Task { await model.clearClaudeSession(for: review.id) }
+            } label: {
+                Label("Clear Claude Session", systemImage: "xmark.circle")
+            }
+            .disabled(review.claudeSessionID == nil)
             Divider()
             Button {
                 Task { await model.setReviewDisabled(!review.disabled, for: review.id) }
