@@ -28,7 +28,7 @@ import Foundation
 
 @Test func settingsDefaultHasExpectedValues() {
     let settings = Settings.default
-    #expect(settings.managedRoot.hasSuffix("PRReview"))
+    #expect(settings.managedRoot.hasSuffix("PRPilot"))
     #expect(settings.discoveryQueries == ["review-requested:@me is:open", "assignee:@me is:open"])
     #expect(settings.pollIntervalSeconds == 120)
     #expect(settings.diffMode == .unified)
