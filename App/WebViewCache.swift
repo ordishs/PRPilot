@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 import WebKit
-import PRReviewModels
+import PRPilotModels
 
 @MainActor
 @Observable

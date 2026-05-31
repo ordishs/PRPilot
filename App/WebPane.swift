@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 import WebKit
-import PRReviewModels
+import PRPilotModels
 
 struct WebPane: View {
     let cache: WebViewCache

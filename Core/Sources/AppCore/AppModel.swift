@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import PRReviewModels
+import PRPilotModels
 import ReviewStore
 import GitHubKit
 import ClaudeSessionKit

@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import PRReviewModels
+@testable import PRPilotModels
 
 private func review(
     prState: PRState = .open,

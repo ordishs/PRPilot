@@ -1,9 +1,9 @@
 import Testing
 import Foundation
-@testable import PRReviewModels
+@testable import PRPilotModels
 
 @Test func schemaVersionIsOne() {
-    #expect(PRReviewModels.schemaVersion == 1)
+    #expect(PRPilotModels.schemaVersion == 1)
 }
 
 @Test func reviewDefaultsDisabledToFalse() throws {

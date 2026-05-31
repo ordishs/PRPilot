@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build a signed, notarised, stapled DMG of PRReview, refresh Casks/prreview.rb
+# Build a signed, notarised, stapled DMG of PRPilot, refresh Casks/prpilot.rb
 # with the new version + sha256, and print the follow-up git/gh commands.
 #
 # One-time setup:
@@ -12,7 +12,7 @@
 #   2. Store an App Store Connect API key (or app-specific password) under a
 #      keychain profile so notarytool can pick it up non-interactively:
 #
-#        xcrun notarytool store-credentials prreview-notary \
+#        xcrun notarytool store-credentials prpilot-notary \
 #          --apple-id "<your-apple-id>" \
 #          --team-id "<your-team-id>" \
 #          --password "<app-specific-password>"
@@ -24,7 +24,7 @@
 #   4. Create a .env file in the repo root (gitignored) — this script loads it:
 #
 #        DEVELOPMENT_TEAM=ABCDE12345
-#        NOTARY_PROFILE=prreview-notary
+#        NOTARY_PROFILE=prpilot-notary
 #
 # Usage:
 #
@@ -50,17 +50,17 @@ fi
 VERSION="${1:?Usage: scripts/release.sh <version> (e.g. 0.1.0)}"
 
 BUILD_DIR="build/release"
-ARCHIVE="$BUILD_DIR/PRReview-$VERSION.xcarchive"
+ARCHIVE="$BUILD_DIR/PRPilot-$VERSION.xcarchive"
 EXPORT_DIR="$BUILD_DIR/export-$VERSION"
-APP_PATH="$EXPORT_DIR/PRReview.app"
-ZIP_PATH="$BUILD_DIR/PRReview-$VERSION.zip"
-DMG_PATH="$BUILD_DIR/PRReview-$VERSION.dmg"
+APP_PATH="$EXPORT_DIR/PR Pilot.app"
+ZIP_PATH="$BUILD_DIR/PRPilot-$VERSION.zip"
+DMG_PATH="$BUILD_DIR/PRPilot-$VERSION.dmg"
 EXPORT_OPTS="$BUILD_DIR/ExportOptions.plist"
 # The cask lives in the ordishs/homebrew-tap repo so users can run
-# `brew install ordishs/tap/prreview`. Default to a clone beside this repo;
+# `brew install ordishs/tap/prpilot`. Default to a clone beside this repo;
 # override with TAP_DIR in .env if yours is elsewhere.
 TAP_DIR="${TAP_DIR:-$REPO_ROOT/../homebrew-tap}"
-CASK="$TAP_DIR/Casks/prreview.rb"
+CASK="$TAP_DIR/Casks/prpilot.rb"
 
 if ! command -v create-dmg >/dev/null; then
     echo "create-dmg is not installed. Run: brew install create-dmg" >&2
@@ -92,8 +92,8 @@ echo "==> Archiving Release build for $VERSION"
 # wrong team and fail. Library targets statically link into the app and are
 # covered by the app-target signature.
 xcodebuild \
-    -project PRReview.xcodeproj \
-    -scheme PRReview \
+    -project PRPilot.xcodeproj \
+    -scheme PRPilot \
     -configuration Release \
     -archivePath "$ARCHIVE" \
     -derivedDataPath "$BUILD_DIR/DerivedData" \
@@ -137,10 +137,10 @@ xcrun stapler staple "$APP_PATH"
 
 echo "==> Building DMG"
 create-dmg \
-    --volname "PR Review $VERSION" \
+    --volname "PR Pilot $VERSION" \
     --window-size 540 380 \
     --icon-size 96 \
-    --icon "PRReview.app" 140 190 \
+    --icon "PR Pilot.app" 140 190 \
     --app-drop-link 400 190 \
     "$DMG_PATH" \
     "$APP_PATH"
@@ -164,13 +164,13 @@ echo "  sha256: $SHA"
 echo "  cask:   $CASK (updated)"
 echo ""
 echo "Next steps:"
-echo "  # 1) tag the app repo and publish the DMG (ordishs/PRReview):"
+echo "  # 1) tag the app repo and publish the DMG (ordishs/PRPilot):"
 echo "  git tag v$VERSION && git push origin main v$VERSION"
 echo "  gh release create v$VERSION \"$DMG_PATH\" --title \"v$VERSION\" --notes \"Release v$VERSION\""
 echo "  # 2) publish the updated cask in the tap (ordishs/homebrew-tap):"
-echo "  git -C \"$TAP_DIR\" add Casks/prreview.rb"
-echo "  git -C \"$TAP_DIR\" commit -m \"prreview $VERSION\""
+echo "  git -C \"$TAP_DIR\" add Casks/prpilot.rb"
+echo "  git -C \"$TAP_DIR\" commit -m \"prpilot $VERSION\""
 echo "  git -C \"$TAP_DIR\" push"
 echo ""
 echo "Then users can install via:"
-echo "  brew install ordishs/tap/prreview"
+echo "  brew install ordishs/tap/prpilot"
