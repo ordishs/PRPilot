@@ -17,6 +17,32 @@ private let sampleAssistantLine2 = """
 {"type":"assistant","timestamp":"2026-05-28T14:05:00.000Z","sessionId":"x","message":{"content":[{"type":"text","text":"Done"}]}}
 """
 
+private let toolUseLine = """
+{"type":"assistant","timestamp":"2026-05-28T14:06:00.000Z","sessionId":"x","message":{"stop_reason":"tool_use","content":[{"type":"text","text":"Let me check"}]}}
+"""
+
+private let endTurnLine = """
+{"type":"assistant","timestamp":"2026-05-28T14:07:00.000Z","sessionId":"x","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Review complete"}]}}
+"""
+
+@Test @MainActor func watcherReportsTurnCompletedOnlyForEndTurn() async throws {
+    let tempDir = try makeTempDir()
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let jsonl = tempDir.appendingPathComponent("session.jsonl")
+    try (toolUseLine + "\n" + endTurnLine + "\n").write(to: jsonl, atomically: true, encoding: .utf8)
+
+    let watcher = TranscriptWatcher(transcriptDir: tempDir)
+    var received: [(Date, String?, Bool)] = []
+    watcher.start { date, snippet, completed in received.append((date, snippet, completed)) }
+    try await Task.sleep(nanoseconds: 300_000_000)
+
+    // The tool_use line is not a completed turn; the end_turn line is.
+    #expect(received.contains { $0.1 == "Let me check" && $0.2 == false })
+    #expect(received.contains { $0.1 == "Review complete" && $0.2 == true })
+    watcher.stop()
+}
+
 @Test @MainActor func watcherDetectsExistingTranscript() async throws {
     let tempDir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -25,8 +51,8 @@ private let sampleAssistantLine2 = """
     try (sampleAssistantLine + "\n").write(to: jsonl, atomically: true, encoding: .utf8)
 
     let watcher = TranscriptWatcher(transcriptDir: tempDir)
-    var received: [(Date, String?)] = []
-    watcher.start { date, snippet in received.append((date, snippet)) }
+    var received: [(Date, String?, Bool)] = []
+    watcher.start { date, snippet, completed in received.append((date, snippet, completed)) }
 
     try await Task.sleep(nanoseconds: 300_000_000)
 
@@ -43,8 +69,8 @@ private let sampleAssistantLine2 = """
     try (sampleAssistantLine + "\n").write(to: jsonl, atomically: true, encoding: .utf8)
 
     let watcher = TranscriptWatcher(transcriptDir: tempDir)
-    var received: [(Date, String?)] = []
-    watcher.start { date, snippet in received.append((date, snippet)) }
+    var received: [(Date, String?, Bool)] = []
+    watcher.start { date, snippet, completed in received.append((date, snippet, completed)) }
     try await Task.sleep(nanoseconds: 300_000_000)
     let initialCount = received.count
 
@@ -68,8 +94,8 @@ private let sampleAssistantLine2 = """
     try (sampleAssistantLine + "\n").write(to: jsonl, atomically: true, encoding: .utf8)
 
     let watcher = TranscriptWatcher(transcriptDir: tempDir)
-    var received: [(Date, String?)] = []
-    watcher.start { date, snippet in received.append((date, snippet)) }
+    var received: [(Date, String?, Bool)] = []
+    watcher.start { date, snippet, completed in received.append((date, snippet, completed)) }
     try await Task.sleep(nanoseconds: 300_000_000)
     watcher.stop()
     let countAfterStop = received.count
@@ -93,8 +119,8 @@ private let sampleAssistantLine2 = """
     try mixed.write(to: jsonl, atomically: true, encoding: .utf8)
 
     let watcher = TranscriptWatcher(transcriptDir: tempDir)
-    var received: [(Date, String?)] = []
-    watcher.start { date, snippet in received.append((date, snippet)) }
+    var received: [(Date, String?, Bool)] = []
+    watcher.start { date, snippet, completed in received.append((date, snippet, completed)) }
     try await Task.sleep(nanoseconds: 300_000_000)
 
     #expect(received.count == 1)

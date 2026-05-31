@@ -7,7 +7,7 @@ public final class TranscriptWatcher {
     private var fileSource: DispatchSourceFileSystemObject?
     private var currentFileURL: URL?
     private var readOffset: Int = 0
-    private var onEvent: (@MainActor (Date, String?) -> Void)?
+    private var onEvent: (@MainActor (Date, String?, Bool) -> Void)?
     private let isoFormatter: ISO8601DateFormatter
     private let isoFormatterNoFrac: ISO8601DateFormatter
 
@@ -21,7 +21,11 @@ public final class TranscriptWatcher {
         self.isoFormatterNoFrac = fmt2
     }
 
-    public func start(onEvent: @escaping @MainActor (Date, String?) -> Void) {
+    /// Fires for each transcript line: (timestamp, assistant text snippet, turnCompleted).
+    /// `turnCompleted` is true when an assistant message finished its turn
+    /// (`stop_reason == "end_turn"`) — the signal that a review actually completed, as
+    /// opposed to merely going idle after being interrupted mid-task.
+    public func start(onEvent: @escaping @MainActor (Date, String?, Bool) -> Void) {
         self.onEvent = onEvent
         let fm = FileManager.default
         if !fm.fileExists(atPath: transcriptDir.path) {
@@ -132,7 +136,21 @@ public final class TranscriptWatcher {
         guard let ts = event.timestamp else { return }
         guard let date = isoFormatter.date(from: ts) ?? isoFormatterNoFrac.date(from: ts) else { return }
         let snippet = extractSnippet(from: data, type: event.type)
-        onEvent?(date, snippet)
+        let turnCompleted = isCompletedTurn(from: data, type: event.type)
+        onEvent?(date, snippet, turnCompleted)
+    }
+
+    private func isCompletedTurn(from data: Data, type: String?) -> Bool {
+        guard type == "assistant" else { return false }
+        struct AssistantStop: Decodable {
+            let message: MessageEnvelope?
+            struct MessageEnvelope: Decodable {
+                let stopReason: String?
+                enum CodingKeys: String, CodingKey { case stopReason = "stop_reason" }
+            }
+        }
+        guard let event = try? JSONDecoder().decode(AssistantStop.self, from: data) else { return false }
+        return event.message?.stopReason == "end_turn"
     }
 
     private func extractSnippet(from data: Data, type: String?) -> String? {

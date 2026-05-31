@@ -457,11 +457,40 @@ private func stubClient() -> GitHubClient {
     #expect(model.claudeStatuses[review.id] == nil)
 }
 
-@Test @MainActor func recomputeStatusStampsReviewedOnIdleWithoutWorkingEdge() async throws {
-    // Simulates a resumed, already-finished review: the watcher replays a stale
-    // transcript verdict, so status goes straight to .idle (never .working). The
-    // working->idle notification edge must NOT fire, but claudeReviewedAt MUST be
-    // stamped so the "Reviewed" tag appears.
+@Test @MainActor func idleWithoutCompletedTurnDoesNotStampReviewed() async throws {
+    // An interrupted-then-resumed review goes idle without ever completing a turn
+    // (no end_turn). It must NOT be marked reviewed just for being idle.
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()
+    try await store.upsert(review)
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster(),
+        statusReader: ClaudeStatusReader(idleThresholdSeconds: 0.1)
+    )
+    await model.load()
+    await model.ensureClaudeSession(for: review)
+
+    let staleEvent = Date().addingTimeInterval(-3600)
+    model.handleTranscriptEvent(reviewID: review.id, at: staleEvent, snippet: "Gathering details", turnCompleted: false)
+    model.recomputeStatus(for: review.id, now: Date())
+
+    if case .idle = model.claudeStatuses[review.id] {} else {
+        Issue.record("expected .idle, got \(String(describing: model.claudeStatuses[review.id]))")
+    }
+
+    try await Task.sleep(nanoseconds: 300_000_000)
+    #expect(model.reviews.first(where: { $0.id == review.id })?.claudeReviewedAt == nil)
+}
+
+@Test @MainActor func completedTurnStampsReviewed() async throws {
+    // A genuinely finished review (assistant reached end_turn) is marked reviewed,
+    // even without a live working->idle edge (e.g. replayed on resume).
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
     try await store.upsert(review)
@@ -479,17 +508,12 @@ private func stubClient() -> GitHubClient {
     await model.load()
     await model.ensureClaudeSession(for: review)
 
-    let staleEvent = Date().addingTimeInterval(-3600)
-    model.handleTranscriptEvent(reviewID: review.id, at: staleEvent, snippet: "Looks good")
-    model.recomputeStatus(for: review.id, now: Date())
-
-    if case .idle = model.claudeStatuses[review.id] {} else {
-        Issue.record("expected .idle, got \(String(describing: model.claudeStatuses[review.id]))")
-    }
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: "Review complete", turnCompleted: true)
 
     try await Task.sleep(nanoseconds: 300_000_000)
     #expect(model.reviews.first(where: { $0.id == review.id })?.claudeReviewedAt != nil)
 
+    // Completing a turn is silent — the notification only fires on a live working->idle edge.
     let posted = await poster.posted
     #expect(posted.isEmpty)
 }
