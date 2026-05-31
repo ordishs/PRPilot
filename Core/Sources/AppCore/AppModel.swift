@@ -383,14 +383,14 @@ public final class AppModel {
         if transcriptWatchers[reviewID] != nil { return }
         let dir = ClaudeTranscriptPath.directoryURL(forWorktreePath: worktreePath)
         let watcher = TranscriptWatcher(transcriptDir: dir)
-        watcher.start { [weak self] date, snippet in
+        watcher.start { [weak self] date, snippet, turnCompleted in
             guard let self else { return }
-            self.handleTranscriptEvent(reviewID: reviewID, at: date, snippet: snippet)
+            self.handleTranscriptEvent(reviewID: reviewID, at: date, snippet: snippet, turnCompleted: turnCompleted)
         }
         transcriptWatchers[reviewID] = watcher
     }
 
-    func handleTranscriptEvent(reviewID: String, at date: Date, snippet: String?) {
+    func handleTranscriptEvent(reviewID: String, at date: Date, snippet: String?, turnCompleted: Bool = false) {
         guard claudeSessions[reviewID] != nil else { return }
         let isNewer = lastEventAt[reviewID].map { $0 < date } ?? true
         if isNewer {
@@ -398,6 +398,12 @@ public final class AppModel {
         }
         if let snippet, !snippet.isEmpty {
             lastVerdictSnippet[reviewID] = snippet
+        }
+        // "Reviewed" means Claude actually completed a turn (stop_reason end_turn) — not
+        // merely that the session went idle, which also happens when a review is
+        // interrupted mid-task and later resumed.
+        if turnCompleted, reviews.first(where: { $0.id == reviewID })?.claudeReviewedAt == nil {
+            Task { await self.markClaudeReviewed(reviewID) }
         }
         recomputeStatus(for: reviewID, now: Date())
     }
@@ -416,13 +422,6 @@ public final class AppModel {
             notifiedIdleForSession.insert(reviewID)
             postReviewReadyNotification(for: reviewID, status: newStatus)
         }
-        // Persist "reviewed" whenever a finished state is observed — not only on the
-        // live working->idle edge. Resumed/already-finished reviews replay a stale
-        // transcript event and go straight to .idle, so the edge never fires; this
-        // state-driven stamp (idempotent via markClaudeReviewed) covers them.
-        if isReviewFinished(newStatus), reviews.first(where: { $0.id == reviewID })?.claudeReviewedAt == nil {
-            Task { await self.markClaudeReviewed(reviewID) }
-        }
     }
 
     private func shouldFireReviewReady(old: ClaudeStatus?, new: ClaudeStatus, reviewID: String) -> Bool {
@@ -430,17 +429,6 @@ public final class AppModel {
         guard case .idle = new else { return false }
         guard case .working = old else { return false }
         return true
-    }
-
-    private func isReviewFinished(_ status: ClaudeStatus) -> Bool {
-        switch status {
-        case .idle:
-            return true
-        case .ready(let code):
-            return code == 0
-        default:
-            return false
-        }
     }
 
     private func postReviewReadyNotification(for reviewID: String, status: ClaudeStatus) {
