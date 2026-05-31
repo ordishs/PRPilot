@@ -1,6 +1,6 @@
 import SwiftUI
 import AppCore
-import PRReviewModels
+import PRPilotModels
 
 struct SettingsView: View {
     @Bindable var model: AppModel

@@ -1,5 +1,5 @@
 import SwiftUI
-import PRReviewModels
+import PRPilotModels
 import DiffKit
 import AppCore
 

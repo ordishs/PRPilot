@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-import PRReviewModels
+import PRPilotModels
 import CommandSupport
 @testable import GitHubKit
 

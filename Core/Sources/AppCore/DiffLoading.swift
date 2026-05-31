@@ -1,5 +1,5 @@
 import DiffKit
-import PRReviewModels
+import PRPilotModels
 
 public enum DiffLoadState: Sendable, Equatable {
     case idle

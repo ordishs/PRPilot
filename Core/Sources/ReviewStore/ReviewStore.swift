@@ -1,5 +1,5 @@
 import Foundation
-import PRReviewModels
+import PRPilotModels
 
 public actor ReviewStore {
     private let fileURL: URL
@@ -79,7 +79,7 @@ public actor ReviewStore {
             withIntermediateDirectories: true
         )
         let initial = StoreState(
-            schemaVersion: PRReviewModels.schemaVersion,
+            schemaVersion: PRPilotModels.schemaVersion,
             reviews: [],
             registeredRepos: [],
             settings: .default

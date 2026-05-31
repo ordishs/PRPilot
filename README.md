@@ -1,4 +1,4 @@
-# PR Review
+# PR Pilot
 
 A native macOS app for reviewing GitHub pull requests. One window, a sidebar of
 in-progress PRs, and a detail panel that flips between an embedded Claude Code
@@ -71,14 +71,14 @@ poll cycle.
 xcodegen generate
 
 # Build and run from Xcode
-open PRReview.xcodeproj
+open PRPilot.xcodeproj
 
 # Or build from the command line
-xcodebuild -project PRReview.xcodeproj -scheme PRReview -configuration Debug \
+xcodebuild -project PRPilot.xcodeproj -scheme PRPilot -configuration Debug \
   -derivedDataPath DerivedData build
 
 # Launch the built app (use -n to force a fresh instance)
-open -n DerivedData/Build/Products/Debug/PRReview.app
+open -n "DerivedData/Build/Products/Debug/PR Pilot.app"
 ```
 
 ## Tests
@@ -97,7 +97,7 @@ swift test
 App/                       SwiftUI views and app shell
 Core/                      Swift package — headless, unit-testable logic
   Sources/
-    PRReviewModels/        Value types shared across modules
+    PRPilotModels/        Value types shared across modules
     CommandSupport/        Injectable command-runner abstraction
     ReviewStore/           Actor-backed durable state (JSON on disk)
     GitHubKit/             Wraps `gh` (discovery, add-by-URL, metadata)
@@ -106,7 +106,7 @@ Core/                      Swift package — headless, unit-testable logic
     ClaudeSessionKit/      SwiftTerm-backed PTY session for `claude`
     AppCore/               View-model layer composing the modules
 docs/                      Design specs and per-phase implementation plans
-project.yml                XcodeGen input that generates PRReview.xcodeproj
+project.yml                XcodeGen input that generates PRPilot.xcodeproj
 ```
 
 ## Design
@@ -117,7 +117,7 @@ The full design spec, decision log, and per-phase plans live under
 
 ## Distribution
 
-The Homebrew cask lives in the tap repo `ordishs/homebrew-tap` (`Casks/prreview.rb`). Cutting a release is one command — `scripts/release.sh` archives, signs, notarises, staples, builds a DMG, and rewrites the cask with the new version + sha256.
+The Homebrew cask lives in the tap repo `ordishs/homebrew-tap` (`Casks/prpilot.rb`). Cutting a release is one command — `scripts/release.sh` archives, signs, notarises, staples, builds a DMG, and rewrites the cask with the new version + sha256.
 
 One-time setup:
 
@@ -130,7 +130,7 @@ git clone git@github.com:ordishs/homebrew-tap.git ../homebrew-tap
 
 # Release config: create a .env in the repo root (gitignored) — the script loads it.
 #   DEVELOPMENT_TEAM=ABCDE12345
-#   NOTARY_PROFILE=prreview-notary
+#   NOTARY_PROFILE=prpilot-notary
 # Create the notarytool profile once (see scripts/release.sh header).
 ```
 
@@ -145,7 +145,7 @@ scripts/release.sh 0.1.0
 Users then install via the tap:
 
 ```bash
-brew install ordishs/tap/prreview
+brew install ordishs/tap/prpilot
 ```
 
 ## License

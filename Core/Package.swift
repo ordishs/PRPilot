@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "PRReviewCore",
+    name: "PRPilotCore",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "PRReviewModels", targets: ["PRReviewModels"]),
+        .library(name: "PRPilotModels", targets: ["PRPilotModels"]),
         .library(name: "CommandSupport", targets: ["CommandSupport"]),
         .library(name: "ReviewStore", targets: ["ReviewStore"]),
         .library(name: "GitHubKit", targets: ["GitHubKit"]),
@@ -18,29 +18,29 @@ let package = Package(
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.2.0"),
     ],
     targets: [
-        .target(name: "PRReviewModels"),
+        .target(name: "PRPilotModels"),
         .target(name: "CommandSupport"),
-        .target(name: "ReviewStore", dependencies: ["PRReviewModels"]),
-        .target(name: "GitHubKit", dependencies: ["PRReviewModels", "CommandSupport"]),
+        .target(name: "ReviewStore", dependencies: ["PRPilotModels"]),
+        .target(name: "GitHubKit", dependencies: ["PRPilotModels", "CommandSupport"]),
         .target(name: "WorktreeKit", dependencies: ["CommandSupport"]),
         .target(name: "DiffKit", dependencies: ["CommandSupport"]),
         .target(
             name: "ClaudeSessionKit",
             dependencies: [
-                "PRReviewModels",
+                "PRPilotModels",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ]
         ),
         .target(
             name: "AppCore",
-            dependencies: ["PRReviewModels", "ReviewStore", "GitHubKit", "CommandSupport", "WorktreeKit", "DiffKit", "ClaudeSessionKit"]
+            dependencies: ["PRPilotModels", "ReviewStore", "GitHubKit", "CommandSupport", "WorktreeKit", "DiffKit", "ClaudeSessionKit"]
         ),
-        .testTarget(name: "PRReviewModelsTests", dependencies: ["PRReviewModels"]),
-        .testTarget(name: "ReviewStoreTests", dependencies: ["ReviewStore", "PRReviewModels"]),
-        .testTarget(name: "GitHubKitTests", dependencies: ["GitHubKit", "PRReviewModels", "CommandSupport"]),
+        .testTarget(name: "PRPilotModelsTests", dependencies: ["PRPilotModels"]),
+        .testTarget(name: "ReviewStoreTests", dependencies: ["ReviewStore", "PRPilotModels"]),
+        .testTarget(name: "GitHubKitTests", dependencies: ["GitHubKit", "PRPilotModels", "CommandSupport"]),
         .testTarget(name: "CommandSupportTests", dependencies: ["CommandSupport"]),
         .testTarget(name: "WorktreeKitTests", dependencies: ["WorktreeKit", "CommandSupport"]),
-        .testTarget(name: "AppCoreTests", dependencies: ["AppCore", "PRReviewModels", "ReviewStore", "GitHubKit", "CommandSupport", "DiffKit", "ClaudeSessionKit"]),
+        .testTarget(name: "AppCoreTests", dependencies: ["AppCore", "PRPilotModels", "ReviewStore", "GitHubKit", "CommandSupport", "DiffKit", "ClaudeSessionKit"]),
         .testTarget(name: "DiffKitTests", dependencies: ["DiffKit", "CommandSupport"]),
         .testTarget(name: "ClaudeSessionKitTests", dependencies: ["ClaudeSessionKit"]),
     ]

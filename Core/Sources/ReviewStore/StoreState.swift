@@ -1,4 +1,4 @@
-import PRReviewModels
+import PRPilotModels
 
 struct StoreState: Codable, Sendable {
     var schemaVersion: Int

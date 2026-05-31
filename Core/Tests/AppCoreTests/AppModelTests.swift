@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-import PRReviewModels
+import PRPilotModels
 import GitHubKit
 import CommandSupport
 import ReviewStore

@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-import PRReviewModels
+import PRPilotModels
 @testable import ClaudeSessionKit
 
 private func sampleReview() -> Review {

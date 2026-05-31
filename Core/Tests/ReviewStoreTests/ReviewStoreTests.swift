@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-import PRReviewModels
+import PRPilotModels
 import ReviewStore
 
 private func tempStoreURL() -> URL {

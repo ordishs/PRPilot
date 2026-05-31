@@ -2,7 +2,7 @@ import SwiftUI
 import AppCore
 
 @main
-struct PRReviewApp: App {
+struct PRPilotApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model: AppModel?
     @State private var startupError: String?

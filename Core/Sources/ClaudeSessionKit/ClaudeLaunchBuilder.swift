@@ -1,5 +1,5 @@
 import Foundation
-import PRReviewModels
+import PRPilotModels
 
 public struct ClaudeLaunchSpec: Sendable, Equatable {
     public let executable: String

@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import PRReviewModels
+import PRPilotModels
 import AppCore
 import ClaudeSessionKit
 import SwiftTerm

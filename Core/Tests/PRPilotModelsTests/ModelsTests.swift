@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import PRReviewModels
+@testable import PRPilotModels
 
 @Test func reviewIDIsOwnerRepoNumber() {
     #expect(Review.makeID(owner: "bsv-blockchain", repo: "teranode", number: 944) == "bsv-blockchain/teranode#944")
