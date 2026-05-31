@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import PRReviewModels
 import AppCore
@@ -93,7 +94,7 @@ struct ContentView: View {
                 HStack(spacing: 4) {
                     Text("#\(review.number) · \(review.title)")
                         .lineLimit(1)
-                    stateBadge(for: review.prState)
+                    statusBadge(for: review)
                 }
                 Text("\(review.owner)/\(review.repo) · \(review.author)")
                     .font(.caption)
@@ -108,6 +109,16 @@ struct ContentView: View {
         }
         .opacity(review.disabled ? 0.45 : 1.0)
         .contextMenu {
+            Button {
+                if let sessionID = review.claudeSessionID {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(sessionID, forType: .string)
+                }
+            } label: {
+                Label("Copy Session ID", systemImage: "doc.on.clipboard")
+            }
+            .disabled(review.claudeSessionID == nil)
+            Divider()
             Button {
                 Task { await model.setReviewDisabled(!review.disabled, for: review.id) }
             } label: {
@@ -191,19 +202,25 @@ struct ContentView: View {
     private func daysAgo(_ date: Date) -> Int {
         Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0
     }
-}
 
-@ViewBuilder
-private func stateBadge(for state: PRState) -> some View {
-    switch state {
-    case .open:
-        EmptyView()
-    case .draft:
-        StateBadge(text: "Draft", color: .gray)
-    case .merged:
-        StateBadge(text: "Merged", color: .purple)
-    case .closed:
-        StateBadge(text: "Closed", color: .red)
+    @ViewBuilder
+    private func statusBadge(for review: Review) -> some View {
+        switch review.sidebarStatus {
+        case .merged:
+            StateBadge(text: "Merged", color: .purple)
+        case .closed:
+            StateBadge(text: "Closed", color: .red)
+        case .approved:
+            StateBadge(text: "Approved", color: .green)
+        case .new:
+            StateBadge(text: "New", color: .orange)
+        case .reviewed:
+            StateBadge(text: "Reviewed", color: .blue)
+        case .draft:
+            StateBadge(text: "Draft", color: .gray)
+        case .open:
+            EmptyView()
+        }
     }
 }
 
@@ -212,11 +229,12 @@ private struct StateBadge: View {
     let color: Color
 
     var body: some View {
-        Text(text)
-            .font(.caption2)
+        Text(text.uppercased())
+            .font(.system(size: 9, weight: .semibold))
+            .tracking(0.5)
             .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .background(color.opacity(0.18))
+            .padding(.vertical, 2)
+            .background(color.opacity(0.22))
             .foregroundStyle(color)
             .clipShape(Capsule())
     }
@@ -224,12 +242,28 @@ private struct StateBadge: View {
 
 private struct StatusDot: View {
     let status: ClaudeStatus?
+    @State private var pulse = false
 
     var body: some View {
         Circle()
             .fill(color)
             .frame(width: 8, height: 8)
+            .opacity(isWorking && pulse ? 0.3 : 1.0)
+            .onAppear {
+                if isWorking {
+                    withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { pulse = true }
+                }
+            }
+            .onChange(of: isWorking) { _, working in
+                if working {
+                    withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { pulse = true }
+                } else {
+                    withAnimation(.default) { pulse = false }
+                }
+            }
     }
+
+    private var isWorking: Bool { status == .working }
 
     private var color: Color {
         switch status {

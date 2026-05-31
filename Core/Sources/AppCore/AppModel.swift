@@ -26,6 +26,7 @@ public final class AppModel {
     public private(set) var claudeSessions: [String: ClaudeSession] = [:]
     public private(set) var claudePaneState: [String: ClaudePaneState] = [:]
     public private(set) var claudeStatuses: [String: ClaudeStatus] = [:]
+    public private(set) var currentLogin: String?
     public private(set) var settings: Settings = .default
     public var diffMode: DiffMode { settings.diffMode }
 
@@ -77,6 +78,9 @@ public final class AppModel {
         reviews = await store.allReviews()
         registeredRepos = await store.allRepos()
         settings = await store.settings()
+        if currentLogin == nil {
+            currentLogin = try? await client.fetchCurrentLogin()
+        }
         if selection == nil {
             selection = reviews
                 .sorted { (a, b) in
@@ -108,10 +112,12 @@ public final class AppModel {
         guard discoveryTask == nil else { return }
         discoveryTask = Task { @MainActor in
             await self.discoverNow()
+            await self.refreshReviewStates()
             while !Task.isCancelled {
                 let intervalNs = UInt64(self.settings.pollIntervalSeconds) * 1_000_000_000
                 try? await Task.sleep(nanoseconds: intervalNs)
                 await self.discoverNow()
+                await self.refreshReviewStates()
             }
         }
     }
@@ -409,6 +415,7 @@ public final class AppModel {
         if shouldFireReviewReady(old: oldStatus, new: newStatus, reviewID: reviewID) {
             notifiedIdleForSession.insert(reviewID)
             postReviewReadyNotification(for: reviewID, status: newStatus)
+            Task { await self.markClaudeReviewed(reviewID) }
         }
     }
 
@@ -508,8 +515,50 @@ public final class AppModel {
         do {
             try await store.upsert(review)
             reviews = await store.allReviews()
+            await refreshReviewState(for: id)
         } catch {
             errorMessage = String(describing: error)
+        }
+    }
+
+    func markClaudeReviewed(_ id: String) async {
+        guard var review = reviews.first(where: { $0.id == id }), review.claudeReviewedAt == nil else { return }
+        review.claudeReviewedAt = Date()
+        do {
+            try await store.upsert(review)
+            reviews = await store.allReviews()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func refreshReviewState(for id: String) async {
+        guard let login = currentLogin,
+              let review = reviews.first(where: { $0.id == id }),
+              review.prState != .merged, review.prState != .closed else { return }
+        let ref = PRRef(owner: review.owner, repo: review.repo, number: review.number)
+        guard let state = try? await client.fetchReviewState(for: ref, login: login) else { return }
+        guard var current = reviews.first(where: { $0.id == id }),
+              current.approvedByMe != state.approvedByMe || current.prState != state.prState else { return }
+        current.approvedByMe = state.approvedByMe
+        current.prState = state.prState
+        do {
+            try await store.upsert(current)
+            reviews = await store.allReviews()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func refreshReviewStates() async {
+        if currentLogin == nil {
+            currentLogin = try? await client.fetchCurrentLogin()
+        }
+        let ids = reviews
+            .filter { $0.prState != .merged && $0.prState != .closed }
+            .map(\.id)
+        for id in ids {
+            await refreshReviewState(for: id)
         }
     }
 

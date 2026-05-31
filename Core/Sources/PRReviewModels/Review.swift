@@ -21,6 +21,8 @@ public struct Review: Codable, Sendable, Identifiable, Equatable {
     public var closingIssueNumber: Int?
     public var disabled: Bool
     public var viewedFiles: [String]
+    public var claudeReviewedAt: Date?
+    public var approvedByMe: Bool
 
     public init(
         owner: String,
@@ -41,7 +43,9 @@ public struct Review: Codable, Sendable, Identifiable, Equatable {
         lastOpenedAt: Date? = nil,
         closingIssueNumber: Int? = nil,
         disabled: Bool = false,
-        viewedFiles: [String] = []
+        viewedFiles: [String] = [],
+        claudeReviewedAt: Date? = nil,
+        approvedByMe: Bool = false
     ) {
         self.id = Review.makeID(owner: owner, repo: repo, number: number)
         self.owner = owner
@@ -63,6 +67,8 @@ public struct Review: Codable, Sendable, Identifiable, Equatable {
         self.closingIssueNumber = closingIssueNumber
         self.disabled = disabled
         self.viewedFiles = viewedFiles
+        self.claudeReviewedAt = claudeReviewedAt
+        self.approvedByMe = approvedByMe
     }
 
     public init(from decoder: Decoder) throws {
@@ -87,6 +93,8 @@ public struct Review: Codable, Sendable, Identifiable, Equatable {
         self.closingIssueNumber = try container.decodeIfPresent(Int.self, forKey: .closingIssueNumber)
         self.disabled = try container.decodeIfPresent(Bool.self, forKey: .disabled) ?? false
         self.viewedFiles = try container.decodeIfPresent([String].self, forKey: .viewedFiles) ?? []
+        self.claudeReviewedAt = try container.decodeIfPresent(Date.self, forKey: .claudeReviewedAt)
+        self.approvedByMe = try container.decodeIfPresent(Bool.self, forKey: .approvedByMe) ?? false
     }
 
     public static func makeID(owner: String, repo: String, number: Int) -> String {

@@ -516,6 +516,7 @@ private let prFetchJSON = """
 @Test @MainActor func discoverNowPopulatesNewReviews() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: sampleSearchHitJSON, standardError: ""),
         CommandResult(exitCode: 0, standardOutput: emptySearchJSON, standardError: ""),
         CommandResult(exitCode: 0, standardOutput: prFetchJSON, standardError: "")
@@ -543,6 +544,7 @@ private let prFetchJSON = """
     let store = try ReviewStore(fileURL: tempStoreURL())
     try await store.upsert(sampleReview())
     let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: sampleSearchHitJSON, standardError: ""),
         CommandResult(exitCode: 0, standardOutput: emptySearchJSON, standardError: "")
     ])
@@ -598,6 +600,7 @@ private let prFetchJSON = """
     existing.origin = .discovered
     try await store.upsert(existing)
     let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: sampleMergedSearchHitJSON, standardError: ""),
         CommandResult(exitCode: 0, standardOutput: emptySearchJSON, standardError: "")
     ])
@@ -621,6 +624,7 @@ private let prFetchJSON = """
 @Test @MainActor func discoverNowDeduplicatesAcrossQueries() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: sampleSearchHitJSON, standardError: ""),
         CommandResult(exitCode: 0, standardOutput: sampleSearchHitJSON, standardError: ""),
         CommandResult(exitCode: 0, standardOutput: prFetchJSON, standardError: "")
@@ -798,6 +802,7 @@ private let prFetchJSON = """
     seed.discoveryQueries = ["custom:query"]
     try await store.updateSettings(seed)
     let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: "[]", standardError: "")
     ])
     let client = GitHubClient(runner: runner, ghPath: "gh")
@@ -815,8 +820,8 @@ private let prFetchJSON = """
     await model.discoverNow()
 
     let args = await runner.recordedArguments
-    let firstCall = args.first ?? []
-    #expect(firstCall.contains("custom:query"))
+    let containsQuery = args.contains { $0.contains("custom:query") }
+    #expect(containsQuery)
 }
 
 @Test @MainActor func updateSettingsTriggersPollWhenQueriesChange() async throws {
@@ -1040,4 +1045,70 @@ private let prFetchJSON = """
     await model.setFileViewed(true, filePath: "x.swift", reviewID: sampleReview().id)
     await model.setFileViewed(true, filePath: "x.swift", reviewID: sampleReview().id)
     #expect(model.reviews.first?.viewedFiles == ["x.swift"])
+}
+
+@Test @MainActor func loadCachesCurrentLogin() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let client = GitHubClient(runner: StubRunner(result: CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: "")), ghPath: "gh")
+    let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+
+    await model.load()
+
+    #expect(model.currentLogin == "ordishs")
+}
+
+@Test @MainActor func markClaudeReviewedStampsOnce() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    try await store.upsert(sampleReview())
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.markClaudeReviewed("bsv-blockchain/teranode#944")
+    let first = model.reviews.first?.claudeReviewedAt
+    #expect(first != nil)
+
+    await model.markClaudeReviewed("bsv-blockchain/teranode#944")
+    #expect(model.reviews.first?.claudeReviewedAt == first)
+}
+
+@Test @MainActor func refreshReviewStateSetsApprovedByMe() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    try await store.upsert(sampleReview())
+    let reviewsJSON = """
+    {"state":"OPEN","isDraft":false,"reviews":[{"author":{"login":"ordishs"},"state":"APPROVED"}]}
+    """
+    let client = GitHubClient(runner: StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: reviewsJSON, standardError: "")
+    ]), ghPath: "gh")
+    let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.refreshReviewState(for: "bsv-blockchain/teranode#944")
+
+    #expect(model.reviews.first?.approvedByMe == true)
+}
+
+@Test @MainActor func refreshReviewStatesSkipsTerminalPRs() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    var merged = sampleReview()
+    merged.prState = .merged
+    try await store.upsert(merged)
+    let approvedJSON = """
+    {"state":"OPEN","isDraft":false,"reviews":[{"author":{"login":"ordishs"},"state":"APPROVED"}]}
+    """
+    let client = GitHubClient(runner: StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: approvedJSON, standardError: "")
+    ]), ghPath: "gh")
+    let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.refreshReviewStates()
+
+    #expect(model.reviews.first?.approvedByMe == false)
+    #expect(model.reviews.first?.prState == .merged)
 }
