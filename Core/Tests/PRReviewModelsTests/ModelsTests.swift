@@ -40,6 +40,41 @@ import Foundation
     #expect(decoded == .both)
 }
 
+@Test func reviewEncodesAndDecodesNewStatusFields() throws {
+    let review = Review(
+        owner: "bsv-blockchain", repo: "teranode", number: 944,
+        url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/944")!,
+        title: "centrifuge fix", author: "icellan",
+        headBranch: "fix/centrifuge", baseBranch: "main",
+        origin: .added, prState: .open,
+        addedAt: Date(timeIntervalSince1970: 1_700_000_000),
+        claudeReviewedAt: Date(timeIntervalSince1970: 1_700_000_500),
+        approvedByMe: true
+    )
+    let data = try JSONEncoder().encode(review)
+    let decoded = try JSONDecoder().decode(Review.self, from: data)
+    #expect(decoded == review)
+    #expect(decoded.claudeReviewedAt == Date(timeIntervalSince1970: 1_700_000_500))
+    #expect(decoded.approvedByMe == true)
+}
+
+@Test func reviewDecodesLegacyJSONWithoutNewFields() throws {
+    let legacy = """
+    {
+      "id": "bsv-blockchain/teranode#944",
+      "owner": "bsv-blockchain", "repo": "teranode", "number": 944,
+      "url": "https://github.com/bsv-blockchain/teranode/pull/944",
+      "title": "centrifuge fix", "author": "icellan",
+      "headBranch": "fix/centrifuge", "baseBranch": "main",
+      "origin": "added", "prState": "open",
+      "addedAt": 631152000, "disabled": false, "viewedFiles": []
+    }
+    """
+    let decoded = try JSONDecoder().decode(Review.self, from: Data(legacy.utf8))
+    #expect(decoded.claudeReviewedAt == nil)
+    #expect(decoded.approvedByMe == false)
+}
+
 @Test func registeredRepoRoundTripsThroughCodable() throws {
     let repo = RegisteredRepo(
         remoteIdentity: "github.com/bsv-blockchain/teranode",
