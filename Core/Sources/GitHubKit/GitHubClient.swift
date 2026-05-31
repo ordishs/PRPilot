@@ -70,6 +70,51 @@ public struct GitHubClient: Sendable {
         }
         return .open
     }
+
+    public struct ReviewState: Sendable, Equatable {
+        public let approvedByMe: Bool
+        public let prState: PRState
+        public init(approvedByMe: Bool, prState: PRState) {
+            self.approvedByMe = approvedByMe
+            self.prState = prState
+        }
+    }
+
+    public func fetchCurrentLogin() async throws -> String {
+        let result = try await runner.run(executable: ghPath, arguments: ["api", "user", "--jq", ".login"])
+        guard result.exitCode == 0 else {
+            throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
+        }
+        let login = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !login.isEmpty else {
+            throw GitHubError.decodingFailed("empty login from gh api user")
+        }
+        return login
+    }
+
+    public func fetchReviewState(for ref: PRRef, login: String) async throws -> ReviewState {
+        let result = try await runner.run(
+            executable: ghPath,
+            arguments: prViewArguments(ref: ref, fields: "state,isDraft,reviews")
+        )
+        guard result.exitCode == 0 else {
+            throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
+        }
+        let payload: GHReviewStatePayload
+        do {
+            payload = try JSONDecoder().decode(GHReviewStatePayload.self, from: Data(result.standardOutput.utf8))
+        } catch {
+            throw GitHubError.decodingFailed(String(describing: error))
+        }
+        let decisive = payload.reviews.filter {
+            $0.author?.login == login && ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].contains($0.state)
+        }
+        let approvedByMe = decisive.last?.state == "APPROVED"
+        return ReviewState(
+            approvedByMe: approvedByMe,
+            prState: GitHubClient.mapState(state: payload.state, isDraft: payload.isDraft)
+        )
+    }
 }
 
 public struct DiscoveryHit: Sendable, Equatable {
@@ -145,6 +190,17 @@ extension GitHubClient {
     public static func mapDiscoveryState(state: String, isDraft: Bool) -> PRState {
         mapState(state: state.uppercased(), isDraft: isDraft)
     }
+}
+
+struct GHReviewStatePayload: Decodable {
+    struct Review: Decodable {
+        struct Author: Decodable { let login: String }
+        let author: Author?  // null for reviews by deleted accounts
+        let state: String
+    }
+    let state: String
+    let isDraft: Bool
+    let reviews: [Review]
 }
 
 struct GHPullRequest: Decodable {

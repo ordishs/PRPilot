@@ -293,3 +293,66 @@ private let sampleSearchJSONWithMalformedRepo = """
     #expect(GitHubClient.mapDiscoveryState(state: "closed", isDraft: false) == .closed)
     #expect(GitHubClient.mapDiscoveryState(state: "MERGED", isDraft: false) == .merged)
 }
+
+@Test func fetchCurrentLoginTrimsOutput() async throws {
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "/opt/homebrew/bin/gh")
+    let login = try await client.fetchCurrentLogin()
+    #expect(login == "ordishs")
+    let args = await runner.lastArguments
+    #expect(args == ["api", "user", "--jq", ".login"])
+}
+
+@Test func fetchReviewStateApprovedWhenMyLatestDecisiveReviewIsApproved() async throws {
+    let json = """
+    {"state":"OPEN","isDraft":false,"reviews":[
+      {"author":{"login":"someoneelse"},"state":"CHANGES_REQUESTED"},
+      {"author":{"login":"ordishs"},"state":"COMMENTED"},
+      {"author":{"login":"ordishs"},"state":"APPROVED"},
+      {"author":{"login":"ordishs"},"state":"COMMENTED"}
+    ]}
+    """
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 944)
+    let state = try await client.fetchReviewState(for: ref, login: "ordishs")
+    #expect(state.approvedByMe == true)
+    #expect(state.prState == .open)
+}
+
+@Test func fetchReviewStateNotApprovedWhenMyApprovalWasDismissed() async throws {
+    let json = """
+    {"state":"OPEN","isDraft":false,"reviews":[
+      {"author":{"login":"ordishs"},"state":"APPROVED"},
+      {"author":{"login":"ordishs"},"state":"DISMISSED"}
+    ]}
+    """
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 944)
+    let state = try await client.fetchReviewState(for: ref, login: "ordishs")
+    #expect(state.approvedByMe == false)
+}
+
+@Test func fetchReviewStateNotApprovedWhenOnlySomeoneElseApproved() async throws {
+    let json = """
+    {"state":"MERGED","isDraft":false,"reviews":[
+      {"author":{"login":"someoneelse"},"state":"APPROVED"}
+    ]}
+    """
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 944)
+    let state = try await client.fetchReviewState(for: ref, login: "ordishs")
+    #expect(state.approvedByMe == false)
+    #expect(state.prState == .merged)
+}
+
+@Test func fetchReviewStateThrowsOnNonZeroExit() async {
+    let runner = RecordingRunner(result: CommandResult(exitCode: 1, standardOutput: "", standardError: "no pull requests found"))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 999)
+    await #expect(throws: GitHubError.self) {
+        try await client.fetchReviewState(for: ref, login: "ordishs")
+    }
+}
