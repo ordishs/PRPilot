@@ -11,16 +11,25 @@ struct WebPane: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Button(action: { cache.reload(for: review) }) {
-                    Label("Refresh", systemImage: "arrow.clockwise")
+                    Image(systemName: "arrow.clockwise")
                 }
+                .buttonStyle(.borderless)
                 .keyboardShortcut("r", modifiers: [.command])
                 .help("Refresh (\u{2318}R)")
 
-                Spacer()
-
-                Text(review.url.host ?? "github.com")
+                Text(review.url.absoluteString)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button(action: { copyURL() }) {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .help("Copy URL")
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -30,6 +39,11 @@ struct WebPane: View {
 
             WebViewHost(cache: cache, review: review)
         }
+    }
+
+    private func copyURL() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(review.url.absoluteString, forType: .string)
     }
 }
 
