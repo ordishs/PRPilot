@@ -431,6 +431,32 @@ private func stubClient() -> GitHubClient {
     }
 }
 
+@Test @MainActor func clearClaudeSessionResetsSessionAndReviewedState() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    var review = sampleReview()
+    review.claudeSessionID = "existing-session"
+    review.claudeReviewedAt = Date(timeIntervalSince1970: 1_700_000_000)
+    try await store.upsert(review)
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.clearClaudeSession(for: review.id)
+
+    let cleared = model.reviews.first(where: { $0.id == review.id })
+    #expect(cleared?.claudeSessionID == nil)
+    #expect(cleared?.claudeReviewedAt == nil)
+    #expect(model.claudeStatuses[review.id] == nil)
+}
+
 @Test @MainActor func recomputeStatusStampsReviewedOnIdleWithoutWorkingEdge() async throws {
     // Simulates a resumed, already-finished review: the watcher replays a stale
     // transcript verdict, so status goes straight to .idle (never .working). The
