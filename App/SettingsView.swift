@@ -30,8 +30,8 @@ private struct DiscoverySettingsTab: View {
     var body: some View {
         Form {
             Section("Auto load") {
-                Toggle("Start a Claude session and load GitHub when a PR is first added", isOn: $autoLoad)
-                Text("Applies the first time a PR appears, whether added manually or found by discovery.")
+                Toggle("Automatically start a Claude review for every PR", isOn: $autoLoad)
+                Text("Reviews each PR at least once: resumes its session, or starts a fresh review for a new one. Runs at launch and when a PR is added (manually or via discovery). Repos without a local clone are reviewed when first opened.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -485,7 +485,11 @@ public final class AppModel {
                 if self.claudeSessions[review.id] != nil { continue }
                 guard let clonePath = self.registeredClonePath(for: review),
                       FileManager.default.fileExists(atPath: clonePath) else { continue }
-                _ = try? await self.worktreeProvider.ensureWorktree(for: review, registeredClonePath: clonePath)
+                if self.settings.autoLoad {
+                    await self.ensureClaudeSession(for: review)
+                } else {
+                    _ = try? await self.worktreeProvider.ensureWorktree(for: review, registeredClonePath: clonePath)
+                }
             }
         }
     }
