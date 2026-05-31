@@ -85,6 +85,6 @@ public struct Settings: Codable, Sendable, Equatable {
     public static func defaultManagedRoot() -> String {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("PRReview", isDirectory: true).path
+        return base.appendingPathComponent("PRPilot", isDirectory: true).path
     }
 }
