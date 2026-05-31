@@ -12,8 +12,34 @@ final class WebViewCache {
     init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
+        let controller = WKUserContentController()
+        controller.addUserScript(Self.hideChromeScript)
+        config.userContentController = controller
         self.configuration = config
     }
+
+    // Hides GitHub's global navigation bar and the repository tab row
+    // (Code / Issues / Pull requests / …) so the embedded view stays focused on
+    // the PR and the user can't wander off. The PR's own sub-tabs (Conversation,
+    // Commits, Files changed) live outside these containers and are preserved.
+    // Selectors track GitHub's current markup and may need updating if it changes.
+    private static let hideChromeCSS = """
+    .AppHeader,
+    header[role="banner"],
+    #repository-container-header,
+    nav[aria-label="Repository"] { display: none !important; }
+    """
+
+    private static let hideChromeScript: WKUserScript = {
+        let source = """
+        (function() {
+          var style = document.createElement('style');
+          style.textContent = `\(hideChromeCSS)`;
+          (document.head || document.documentElement).appendChild(style);
+        })();
+        """
+        return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+    }()
 
     func ensure(for review: Review) -> WKWebView {
         if let existing = webViews[review.id] {
