@@ -33,17 +33,12 @@ public struct WorktreeProvider: WorktreeProviding {
             remoteURL: remoteURL,
             registeredClonePath: registeredClonePath
         )
-        let remoteName: String
-        if registeredClonePath != nil {
-            let remotes = try await worktreeManager.listRemotes(clonePath: clonePath)
-            let target = "\(review.owner)/\(review.repo)".lowercased()
-            remoteName = remotes.first { entry in
-                guard let (owner, repo) = GitOriginParser.parse(entry.url) else { return false }
-                return "\(owner)/\(repo)".lowercased() == target
-            }?.name ?? "origin"
-        } else {
-            remoteName = "origin"
-        }
+        let remotes = (try? await worktreeManager.listRemotes(clonePath: clonePath)) ?? []
+        let target = "\(review.owner)/\(review.repo)".lowercased()
+        let remoteName = remotes.first { entry in
+            guard let (owner, repo) = GitOriginParser.parse(entry.url) else { return false }
+            return "\(owner)/\(repo)".lowercased() == target
+        }?.name ?? "origin"
         let worktreePath: String
         if let existing = review.worktreePath, FileManager.default.fileExists(atPath: existing) {
             worktreePath = existing
