@@ -1090,3 +1090,25 @@ private let prFetchJSON = """
 
     #expect(model.reviews.first?.approvedByMe == true)
 }
+
+@Test @MainActor func refreshReviewStatesSkipsTerminalPRs() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    var merged = sampleReview()
+    merged.prState = .merged
+    try await store.upsert(merged)
+    let approvedJSON = """
+    {"state":"OPEN","isDraft":false,"reviews":[{"author":{"login":"ordishs"},"state":"APPROVED"}]}
+    """
+    let client = GitHubClient(runner: StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: approvedJSON, standardError: "")
+    ]), ghPath: "gh")
+    let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.refreshReviewStates()
+
+    #expect(model.reviews.first?.approvedByMe == false)
+    #expect(model.reviews.first?.prState == .merged)
+}

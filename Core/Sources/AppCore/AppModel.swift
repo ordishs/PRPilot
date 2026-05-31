@@ -551,6 +551,9 @@ public final class AppModel {
     }
 
     func refreshReviewStates() async {
+        if currentLogin == nil {
+            currentLogin = try? await client.fetchCurrentLogin()
+        }
         let ids = reviews
             .filter { $0.prState != .merged && $0.prState != .closed }
             .map(\.id)
