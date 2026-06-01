@@ -366,11 +366,24 @@ public final class AppModel {
         // --resume` exits with "No conversation found".
         let sessionID: String
         let resume: Bool
-        if !forceFresh, let existing = updated.claudeSessionID {
-            sessionID = existing
-            resume = true
-            appendPrepLog("Resuming session \(existing)", for: review.id)
-        } else if !forceFresh, let latest = ClaudeTranscriptPath.latestSessionID(forWorktreePath: ready.worktreePath) {
+        if forceFresh {
+            sessionID = UUID().uuidString.lowercased()
+            resume = false
+            appendPrepLog("Starting fresh /review", for: review.id)
+        } else if let existing = updated.claudeSessionID {
+            // Resume the persisted session only if its transcript still exists. If it was
+            // archived or pruned, `claude --resume` would exit 256 ("No conversation found"),
+            // so fall back to a fresh review instead.
+            if ClaudeTranscriptPath.transcriptExists(forWorktreePath: ready.worktreePath, sessionID: existing) {
+                sessionID = existing
+                resume = true
+                appendPrepLog("Resuming session \(existing)", for: review.id)
+            } else {
+                sessionID = UUID().uuidString.lowercased()
+                resume = false
+                appendPrepLog("Previous session not found; starting fresh /review", for: review.id)
+            }
+        } else if let latest = ClaudeTranscriptPath.latestSessionID(forWorktreePath: ready.worktreePath) {
             sessionID = latest
             resume = true
             appendPrepLog("Resuming session \(latest)", for: review.id)

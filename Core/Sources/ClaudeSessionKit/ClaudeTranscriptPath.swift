@@ -19,6 +19,15 @@ public enum ClaudeTranscriptPath {
         latestSessionID(in: directoryURL(forWorktreePath: path))
     }
 
+    /// Whether a transcript still exists for `sessionID` under the worktree's project dir.
+    /// Used to decide if `claude --resume <sessionID>` is safe: a persisted session whose
+    /// transcript has been archived or pruned would otherwise exit with "No conversation
+    /// found", so the caller starts a fresh review instead.
+    public static func transcriptExists(forWorktreePath path: String, sessionID: String) -> Bool {
+        let url = directoryURL(forWorktreePath: path).appendingPathComponent("\(sessionID).jsonl")
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
     /// Moves a worktree's session transcripts into an `archived/` subdirectory so they are
     /// no longer discovered by `latestSessionID` (or tailed by the watcher). This forces a
     /// brand-new Claude session — used when clearing a session to start a fresh review,

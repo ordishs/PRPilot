@@ -381,6 +381,33 @@ private func stubClient() -> GitHubClient {
     #expect(messages.contains("Fetching PR #944…"))
 }
 
+@Test @MainActor func ensureClaudeSessionStartsFreshWhenPersistedTranscriptMissing() async throws {
+    // A persisted session whose transcript no longer exists (archived/pruned) must not be
+    // resumed — `claude --resume` would exit "No conversation found". The model should
+    // assign a fresh session id instead. The stub worktree path points at /tmp/wt, whose
+    // ~/.claude/projects transcript dir has no transcript for this id.
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.claudeSessionID = "ghost-session-\(UUID().uuidString.lowercased())"
+    try await store.upsert(review)
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.ensureClaudeSession(for: review)
+
+    let refreshed = model.reviews.first(where: { $0.id == review.id })
+    #expect(refreshed?.claudeSessionID != nil)
+    #expect(refreshed?.claudeSessionID != review.claudeSessionID)
+}
+
 @Test @MainActor func prepLogRetainedOnSessionLive() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
