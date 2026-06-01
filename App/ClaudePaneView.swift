@@ -15,6 +15,7 @@ struct ClaudePaneView: View {
     let model: AppModel
     let review: Review
     @State private var showPrepDetails = false
+    @State private var showPrepLog = false
 
     var body: some View {
         Group {
@@ -31,6 +32,11 @@ struct ClaudePaneView: View {
                         exitOverlay(for: session)
                         TerminalHost(session: session)
                     }
+                    .overlay(alignment: .topTrailing) {
+                        if !prepEntries.isEmpty {
+                            prepLogToggle()
+                        }
+                    }
                 } else {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -41,6 +47,29 @@ struct ClaudePaneView: View {
         }
         .onChange(of: review.id) {
             showPrepDetails = false
+            showPrepLog = false
+        }
+    }
+
+    @ViewBuilder
+    private func prepLogToggle() -> some View {
+        Button {
+            showPrepLog.toggle()
+        } label: {
+            Image(systemName: "list.bullet.rectangle")
+        }
+        .buttonStyle(.borderless)
+        .help("Show preparation log")
+        .padding(6)
+        .popover(isPresented: $showPrepLog, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Preparation log")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                prepLogList()
+            }
+            .padding(10)
+            .frame(width: 380, height: 260)
         }
     }
 

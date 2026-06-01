@@ -381,7 +381,7 @@ private func stubClient() -> GitHubClient {
     #expect(messages.contains("Fetching PR #944…"))
 }
 
-@Test @MainActor func prepLogClearedOnSessionLive() async throws {
+@Test @MainActor func prepLogRetainedOnSessionLive() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
     try await store.upsert(review)
@@ -398,8 +398,12 @@ private func stubClient() -> GitHubClient {
 
     await model.ensureClaudeSession(for: review)
 
+    // The prep log persists after the session goes live so the pane can re-open it
+    // on demand; it is reset at the start of the next prep run, not cleared here.
     #expect(model.claudePaneState[review.id] == .sessionLive)
-    #expect(model.claudePrepLog[review.id] == nil)
+    let messages = (model.claudePrepLog[review.id] ?? []).map(\.message)
+    #expect(messages.contains("Fetching PR #944…"))
+    #expect(messages.contains("Starting fresh /review"))
 }
 
 @Test @MainActor func ensureClaudeSessionFlagsWorktreeFailure() async throws {

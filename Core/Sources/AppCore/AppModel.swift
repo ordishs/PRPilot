@@ -353,7 +353,6 @@ public final class AppModel {
         }
         if claudeSessions[review.id] != nil {
             claudePaneState[review.id] = .sessionLive
-            claudePrepLog[review.id] = nil
             return
         }
         guard reviews.contains(where: { $0.id == review.id }) else { return }
@@ -392,7 +391,6 @@ public final class AppModel {
         let session = ClaudeSession(spec: spec)
         claudeSessions[review.id] = session
         claudePaneState[review.id] = .sessionLive
-        claudePrepLog[review.id] = nil
         session.start()
         attachTranscriptWatcher(reviewID: review.id, worktreePath: ready.worktreePath)
         recomputeStatus(for: review.id, now: Date())

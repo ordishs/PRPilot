@@ -26,8 +26,15 @@ existing clone", "Fetching PR #991…", "Found existing worktree", "Starting fre
 ## Non-Goals (YAGNI)
 
 - Persisting the log across app restarts.
-- A persistent show/hide toggle that re-opens the prep log after the session is live.
 - Log levels, filtering, or search.
+
+## Revision (2026-06-01)
+
+The original design discarded the log once the session went live. In practice the prep
+window for already-cloned PRs is sub-second (and worktrees are prewarmed at launch), so the
+log was effectively never seen. The log is now **retained** after `.sessionLive` and re-opened
+on demand from a toggle on the live pane (the persistent-toggle option, originally deferred).
+It is still reset at the start of each prep run, so it never shows stale data.
 
 ## Architecture
 
@@ -108,10 +115,11 @@ Exact wording may be refined during implementation; the set of steps is what mat
 
 - `ensureClaudeSession` sets `claudePrepLog[id] = []` at the start of a prep run (fresh log
   per attempt, including retries and the clear-session relaunch).
-- On `.sessionLive` (success): clear `claudePrepLog[id]` — prep-only; the terminal replaces
-  the placeholder view, so the log is no longer needed.
+- On `.sessionLive` (success): **retain** `claudePrepLog[id]` so the live pane can re-open it
+  via a toggle. (Superseded the original "clear on success" — see Revision above.)
 - On `.worktreeFailed`: retain `claudePrepLog[id]` so the failure view can show the steps
   that preceded the error.
+- On `.claudeUnavailable`: clear `claudePrepLog[id]` (that view does not surface the log).
 
 ### UI (`ClaudePaneView`)
 
@@ -121,7 +129,9 @@ Exact wording may be refined during implementation; the set of steps is what mat
     as `HH:mm:ss  message`, monospaced, selectable.
 - `.worktreeFailed(message)`: existing error view, with the same expandable step list shown
   above the error text.
-- `.sessionLive`: unchanged (terminal host).
+- `.sessionLive`: terminal host with a small "preparation log" button overlaid top-trailing
+  (shown only when the log is non-empty); tapping it presents the timestamped history in a
+  popover.
 
 A stuck preparation is now diagnosable: the latest line stays on the offending step (e.g.
 "Fetching PR #991…") rather than presenting an indistinguishable spinner.
