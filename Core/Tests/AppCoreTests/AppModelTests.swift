@@ -102,7 +102,11 @@ private actor StubNotificationPoster: NotificationPosting {
 private struct StubWorktreeProvider: WorktreeProviding {
     var result: WorktreeReady = WorktreeReady(clonePath: "/tmp/clone", worktreePath: "/tmp/wt", remoteName: "origin")
     var shouldThrow = false
-    func ensureWorktree(for review: Review, registeredClonePath: String?) async throws -> WorktreeReady {
+    var progressLines: [String] = []
+    func ensureWorktree(for review: Review, registeredClonePath: String?, progress: @escaping PrepProgress) async throws -> WorktreeReady {
+        for line in progressLines {
+            await progress(line)
+        }
         if shouldThrow {
             throw WorktreeError.gitFailed(arguments: ["stub"], exitCode: 1, message: "stub failure")
         }
@@ -485,6 +489,21 @@ private func stubClient() -> GitHubClient {
     let refreshed = model.reviews.first(where: { $0.id == review.id })
     #expect(refreshed?.claudeSessionID != nil)
     #expect(refreshed?.claudeSessionID != "existing-session")
+}
+
+@Test func ensureWorktreeTwoArgOverloadForwardsToProgressVariant() async throws {
+    final class Box: @unchecked Sendable { var called = false }
+    struct Recorder: WorktreeProviding {
+        let box: Box
+        func ensureWorktree(for review: Review, registeredClonePath: String?, progress: @escaping PrepProgress) async throws -> WorktreeReady {
+            box.called = true
+            return WorktreeReady(clonePath: "/c", worktreePath: "/w", remoteName: "origin")
+        }
+    }
+    let box = Box()
+    let recorder = Recorder(box: box)
+    _ = try await recorder.ensureWorktree(for: sampleReview(), registeredClonePath: nil)
+    #expect(box.called == true)
 }
 
 @Test @MainActor func idleWithoutCompletedTurnDoesNotStampReviewed() async throws {

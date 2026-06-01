@@ -14,8 +14,20 @@ public struct WorktreeReady: Sendable, Equatable {
     }
 }
 
+public typealias PrepProgress = @Sendable (String) async -> Void
+
 public protocol WorktreeProviding: Sendable {
-    func ensureWorktree(for review: Review, registeredClonePath: String?) async throws -> WorktreeReady
+    func ensureWorktree(
+        for review: Review,
+        registeredClonePath: String?,
+        progress: @escaping PrepProgress
+    ) async throws -> WorktreeReady
+}
+
+public extension WorktreeProviding {
+    func ensureWorktree(for review: Review, registeredClonePath: String?) async throws -> WorktreeReady {
+        try await ensureWorktree(for: review, registeredClonePath: registeredClonePath, progress: { _ in })
+    }
 }
 
 public struct WorktreeProvider: WorktreeProviding {
@@ -25,14 +37,20 @@ public struct WorktreeProvider: WorktreeProviding {
         self.worktreeManager = worktreeManager
     }
 
-    public func ensureWorktree(for review: Review, registeredClonePath: String?) async throws -> WorktreeReady {
+    public func ensureWorktree(
+        for review: Review,
+        registeredClonePath: String?,
+        progress: @escaping PrepProgress
+    ) async throws -> WorktreeReady {
         let remoteURL = "https://github.com/\(review.owner)/\(review.repo).git"
         let clonePath = try await worktreeManager.resolveClone(
             owner: review.owner,
             repo: review.repo,
             remoteURL: remoteURL,
-            registeredClonePath: registeredClonePath
+            registeredClonePath: registeredClonePath,
+            progress: progress
         )
+        await progress("Detecting remote…")
         let remotes = (try? await worktreeManager.listRemotes(clonePath: clonePath)) ?? []
         let target = "\(review.owner)/\(review.repo)".lowercased()
         let remoteName = remotes.first { entry in
@@ -42,6 +60,7 @@ public struct WorktreeProvider: WorktreeProviding {
         let worktreePath: String
         if let existing = review.worktreePath, FileManager.default.fileExists(atPath: existing) {
             worktreePath = existing
+            await progress("Refreshing existing worktree…")
             _ = try await worktreeManager.refreshWorktree(
                 clonePath: clonePath,
                 worktreePath: existing,
@@ -54,7 +73,8 @@ public struct WorktreeProvider: WorktreeProviding {
                 owner: review.owner,
                 repo: review.repo,
                 number: review.number,
-                remoteName: remoteName
+                remoteName: remoteName,
+                progress: progress
             )
         }
         return WorktreeReady(clonePath: clonePath, worktreePath: worktreePath, remoteName: remoteName)
