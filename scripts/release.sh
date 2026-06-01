@@ -28,7 +28,8 @@
 #
 # Usage:
 #
-#   scripts/release.sh 0.1.0
+#   scripts/release.sh 0.1.0              # build + notarise + refresh cask only
+#   scripts/release.sh 0.1.0 --publish    # also tag, publish the DMG, push the cask
 #
 
 set -euo pipefail
@@ -47,7 +48,33 @@ fi
 : "${DEVELOPMENT_TEAM:?Set DEVELOPMENT_TEAM (10-char Apple team id) in .env or the environment}"
 : "${NOTARY_PROFILE:?Set NOTARY_PROFILE (notarytool keychain profile) in .env or the environment}"
 
-VERSION="${1:?Usage: scripts/release.sh <version> (e.g. 0.1.0)}"
+VERSION=""
+PUBLISH=false
+for arg in "$@"; do
+    case "$arg" in
+        --publish) PUBLISH=true ;;
+        -*) echo "Unknown flag: $arg" >&2; exit 1 ;;
+        *)
+            if [ -z "$VERSION" ]; then
+                VERSION="$arg"
+            else
+                echo "Unexpected argument: $arg" >&2
+                exit 1
+            fi
+            ;;
+    esac
+done
+
+: "${VERSION:?Usage: scripts/release.sh <version> [--publish] (e.g. 0.1.0)}"
+
+# The app repo that hosts the GitHub release + DMG asset. Override with
+# APP_REPO in .env if your remote differs.
+APP_REPO="${APP_REPO:-ordishs/PRPilot}"
+
+if [ "$PUBLISH" = true ] && ! command -v gh >/dev/null; then
+    echo "--publish needs the gh CLI. Run: brew install gh" >&2
+    exit 1
+fi
 
 BUILD_DIR="build/release"
 ARCHIVE="$BUILD_DIR/PRPilot-$VERSION.xcarchive"
@@ -162,15 +189,50 @@ echo "Release artifacts:"
 echo "  DMG:    $DMG_PATH"
 echo "  sha256: $SHA"
 echo "  cask:   $CASK (updated)"
+if [ "$PUBLISH" = false ]; then
+    echo ""
+    echo "Next steps (or re-run with --publish to do these automatically):"
+    echo "  # 1) tag the app repo and publish the DMG ($APP_REPO):"
+    echo "  git tag v$VERSION && git push origin main v$VERSION"
+    echo "  gh release create v$VERSION \"$DMG_PATH\" --title \"v$VERSION\" --notes \"Release v$VERSION\""
+    echo "  # 2) publish the updated cask in the tap (ordishs/homebrew-tap):"
+    echo "  git -C \"$TAP_DIR\" add Casks/prpilot.rb"
+    echo "  git -C \"$TAP_DIR\" commit -m \"prpilot $VERSION\""
+    echo "  git -C \"$TAP_DIR\" push"
+    echo ""
+    echo "Then users can install via:"
+    echo "  brew install ordishs/tap/prpilot"
+    exit 0
+fi
+
 echo ""
-echo "Next steps:"
-echo "  # 1) tag the app repo and publish the DMG (ordishs/PRPilot):"
-echo "  git tag v$VERSION && git push origin main v$VERSION"
-echo "  gh release create v$VERSION \"$DMG_PATH\" --title \"v$VERSION\" --notes \"Release v$VERSION\""
-echo "  # 2) publish the updated cask in the tap (ordishs/homebrew-tap):"
-echo "  git -C \"$TAP_DIR\" add Casks/prpilot.rb"
-echo "  git -C \"$TAP_DIR\" commit -m \"prpilot $VERSION\""
-echo "  git -C \"$TAP_DIR\" push"
+echo "==> Tagging $APP_REPO and pushing v$VERSION"
+if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+    echo "  tag v$VERSION already exists locally, reusing it"
+else
+    git tag "v$VERSION"
+fi
+git push origin main "v$VERSION"
+
+echo "==> Publishing DMG to the v$VERSION release"
+if gh release view "v$VERSION" --repo "$APP_REPO" >/dev/null 2>&1; then
+    gh release upload "v$VERSION" "$DMG_PATH" --repo "$APP_REPO" --clobber
+else
+    gh release create "v$VERSION" "$DMG_PATH" \
+        --repo "$APP_REPO" \
+        --title "v$VERSION" \
+        --notes "Release v$VERSION"
+fi
+
+echo "==> Publishing updated cask to the tap"
+git -C "$TAP_DIR" add Casks/prpilot.rb
+if git -C "$TAP_DIR" diff --cached --quiet; then
+    echo "  no cask changes to commit"
+else
+    git -C "$TAP_DIR" commit -m "prpilot $VERSION"
+fi
+git -C "$TAP_DIR" push
+
 echo ""
-echo "Then users can install via:"
+echo "Published. Users can install via:"
 echo "  brew install ordishs/tap/prpilot"
