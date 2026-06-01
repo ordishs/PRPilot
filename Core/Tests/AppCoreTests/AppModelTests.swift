@@ -452,9 +452,39 @@ private func stubClient() -> GitHubClient {
     await model.clearClaudeSession(for: review.id)
 
     let cleared = model.reviews.first(where: { $0.id == review.id })
-    #expect(cleared?.claudeSessionID == nil)
+    // Clearing archives the old session and starts a fresh one (new id), and
+    // resets the "reviewed" stamp so the fresh review can re-stamp it.
+    #expect(cleared?.claudeSessionID != nil)
+    #expect(cleared?.claudeSessionID != "existing-session")
     #expect(cleared?.claudeReviewedAt == nil)
-    #expect(model.claudeStatuses[review.id] == nil)
+}
+
+@Test @MainActor func clearClaudeSessionStartsFreshSessionForOpenPane() async throws {
+    // Clearing the session for the currently-open PR must immediately start a fresh
+    // session. The pane only re-triggers ensureClaudeSession when review.id changes,
+    // so if clear left the pane state nil it would hang on "Preparing worktree…".
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.claudeSessionID = "existing-session"
+    try await store.upsert(review)
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    await model.ensureClaudeSession(for: review)
+
+    await model.clearClaudeSession(for: review.id)
+
+    #expect(model.claudePaneState[review.id] == .sessionLive)
+    let refreshed = model.reviews.first(where: { $0.id == review.id })
+    #expect(refreshed?.claudeSessionID != nil)
+    #expect(refreshed?.claudeSessionID != "existing-session")
 }
 
 @Test @MainActor func idleWithoutCompletedTurnDoesNotStampReviewed() async throws {

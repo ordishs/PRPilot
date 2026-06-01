@@ -446,6 +446,7 @@ public final class AppModel {
     func terminateClaudeSession(for id: String) {
         claudeSessions[id]?.terminate()
         claudeSessions.removeValue(forKey: id)
+        claudePreparing.remove(id)
         claudePaneState.removeValue(forKey: id)
         transcriptWatchers[id]?.stop()
         transcriptWatchers.removeValue(forKey: id)
@@ -526,14 +527,18 @@ public final class AppModel {
         }
     }
 
-    /// Discards the Claude session for a review: terminates the live process/watcher,
-    /// clears the persisted session id and the "reviewed" stamp. A fresh review starts
-    /// the next time the PR is opened or auto-loaded (no resume).
+    /// Discards the Claude session for a review and immediately starts a fresh one:
+    /// terminates the live process/watcher, clears the persisted session id and the
+    /// "reviewed" stamp, archives the prior transcripts, then relaunches a clean
+    /// /review (no resume). Restarting here is what makes the open pane recover —
+    /// ClaudePaneView only auto-triggers ensureClaudeSession when review.id changes,
+    /// so a cleared-but-not-restarted session would leave the pane stuck on the
+    /// "Preparing worktree…" placeholder.
     public func clearClaudeSession(for id: String) async {
         terminateClaudeSession(for: id)
         guard var review = reviews.first(where: { $0.id == id }) else { return }
         // Archive the prior transcripts so ensureClaudeSession can't re-discover and
-        // --resume the old session; the next open starts a fresh /review instead.
+        // --resume the old session; the relaunch below starts a fresh /review instead.
         if let worktreePath = review.worktreePath {
             ClaudeTranscriptPath.archiveTranscripts(forWorktreePath: worktreePath)
         }
@@ -544,7 +549,10 @@ public final class AppModel {
             reviews = await store.allReviews()
         } catch {
             errorMessage = String(describing: error)
+            return
         }
+        guard let refreshed = reviews.first(where: { $0.id == id }) else { return }
+        await ensureClaudeSession(for: refreshed)
     }
 
     func markClaudeReviewed(_ id: String) async {
