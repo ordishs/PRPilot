@@ -32,6 +32,36 @@ import Foundation
     #expect(path.hasSuffix("/-x"))
 }
 
+@Test func archiveTranscriptsMovesJsonlAndHidesThemFromLatest() throws {
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let a = dir.appendingPathComponent("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jsonl")
+    let b = dir.appendingPathComponent("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl")
+    try "{}".write(to: a, atomically: true, encoding: .utf8)
+    try "{}".write(to: b, atomically: true, encoding: .utf8)
+
+    #expect(ClaudeTranscriptPath.latestSessionID(in: dir) != nil)
+
+    let moved = ClaudeTranscriptPath.archiveTranscripts(in: dir)
+    #expect(moved == 2)
+
+    // No longer discoverable as a resumable session.
+    #expect(ClaudeTranscriptPath.latestSessionID(in: dir) == nil)
+    // Preserved under archived/.
+    let archived = dir.appendingPathComponent("archived")
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: archived.path)) ?? []
+    #expect(names.sorted() == ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jsonl", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl"])
+}
+
+@Test func archiveTranscriptsReturnsZeroWhenNothingToArchive() throws {
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    #expect(ClaudeTranscriptPath.archiveTranscripts(in: dir) == 0)
+}
+
 @Test func latestSessionIDReturnsNilWhenDirectoryMissing() {
     let url = URL(fileURLWithPath: "/tmp/does-not-exist-\(UUID().uuidString)")
     #expect(ClaudeTranscriptPath.latestSessionID(in: url) == nil)

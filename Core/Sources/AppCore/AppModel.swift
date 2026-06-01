@@ -532,6 +532,11 @@ public final class AppModel {
     public func clearClaudeSession(for id: String) async {
         terminateClaudeSession(for: id)
         guard var review = reviews.first(where: { $0.id == id }) else { return }
+        // Archive the prior transcripts so ensureClaudeSession can't re-discover and
+        // --resume the old session; the next open starts a fresh /review instead.
+        if let worktreePath = review.worktreePath {
+            ClaudeTranscriptPath.archiveTranscripts(forWorktreePath: worktreePath)
+        }
         review.claudeSessionID = nil
         review.claudeReviewedAt = nil
         do {

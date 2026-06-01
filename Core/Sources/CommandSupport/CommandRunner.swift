@@ -24,6 +24,17 @@ public struct ProcessCommandRunner: CommandRunner {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
 
+        // A GUI-launched app has no controlling terminal, so any git/ssh credential,
+        // passphrase, or host-key prompt would block forever. Force non-interactive so
+        // such commands fail fast instead of hanging (auth still works via ssh-agent or
+        // the macOS keychain, which are non-interactive).
+        var environment = ProcessInfo.processInfo.environment
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        if environment["GIT_SSH_COMMAND"] == nil {
+            environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+        }
+        process.environment = environment
+
         let outputPipe = Pipe()
         let errorPipe = Pipe()
         process.standardOutput = outputPipe
