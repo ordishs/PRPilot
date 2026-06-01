@@ -353,6 +353,7 @@ public final class AppModel {
         }
         if claudeSessions[review.id] != nil {
             claudePaneState[review.id] = .sessionLive
+            claudePrepLog[review.id] = nil
             return
         }
         guard reviews.contains(where: { $0.id == review.id }) else { return }
