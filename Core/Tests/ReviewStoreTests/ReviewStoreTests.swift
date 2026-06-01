@@ -5,7 +5,7 @@ import ReviewStore
 
 private func tempStoreURL() -> URL {
     FileManager.default.temporaryDirectory
-        .appendingPathComponent("prreview-tests-\(UUID().uuidString)", isDirectory: true)
+        .appendingPathComponent("prpilot-tests-\(UUID().uuidString)", isDirectory: true)
         .appendingPathComponent("store.json")
 }
 
