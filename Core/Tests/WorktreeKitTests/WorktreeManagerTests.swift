@@ -292,3 +292,56 @@ private func makeFixture(prNumber: Int) async throws -> GitFixture {
     let firstCall = args.first ?? []
     #expect(firstCall == ["-C", "/tmp/clone", "worktree", "prune"])
 }
+
+private actor LineCollector {
+    private(set) var lines: [String] = []
+    func add(_ s: String) { lines.append(s) }
+}
+
+@Test func resolveCloneEmitsProgressForAutoClone() async throws {
+    let fixture = try await makeFixture(prNumber: 944)
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: fixture.managedRoot)
+    let collector = LineCollector()
+    _ = try await manager.resolveClone(
+        owner: "bsv-blockchain", repo: "teranode",
+        remoteURL: fixture.remoteURL, registeredClonePath: nil,
+        progress: { await collector.add($0) }
+    )
+    let lines = await collector.lines
+    #expect(lines.contains("Resolving clone…"))
+    #expect(lines.contains(where: { $0.hasPrefix("Cloning bsv-blockchain/teranode") }))
+}
+
+@Test func resolveCloneEmitsFoundExistingForRegisteredClone() async throws {
+    let fixture = try await makeFixture(prNumber: 944)
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: fixture.managedRoot)
+    let collector = LineCollector()
+    _ = try await manager.resolveClone(
+        owner: "o", repo: "r",
+        remoteURL: fixture.remoteURL, registeredClonePath: fixture.root + "/work",
+        progress: { await collector.add($0) }
+    )
+    let lines = await collector.lines
+    #expect(lines.contains("Found existing clone"))
+}
+
+@Test func createWorktreeEmitsFetchAndAddProgress() async throws {
+    let tempRoot = NSTemporaryDirectory() + "wt-prog-\(UUID().uuidString)"
+    defer { try? FileManager.default.removeItem(atPath: tempRoot) }
+    let runner = QueuedStubRunner(scriptedResponses: [
+        CommandResult(exitCode: 0, standardOutput: "", standardError: ""),        // prune
+        CommandResult(exitCode: 0, standardOutput: "", standardError: ""),        // fetch
+        CommandResult(exitCode: 0, standardOutput: "abc123\n", standardError: ""),// rev-parse FETCH_HEAD
+        CommandResult(exitCode: 0, standardOutput: "", standardError: "")         // worktree add
+    ])
+    let manager = WorktreeManager(runner: runner, gitPath: "git", managedRoot: tempRoot)
+    let collector = LineCollector()
+    _ = try await manager.createWorktree(
+        clonePath: "/tmp/clone", owner: "o", repo: "r", number: 999, remoteName: "origin",
+        progress: { await collector.add($0) }
+    )
+    let lines = await collector.lines
+    #expect(lines.contains("Pruning stale worktrees…"))
+    #expect(lines.contains("Fetching PR #999…"))
+    #expect(lines.contains("Adding worktree…"))
+}

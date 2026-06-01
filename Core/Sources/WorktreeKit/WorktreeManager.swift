@@ -12,27 +12,45 @@ public struct WorktreeManager: Sendable {
         self.managedRoot = managedRoot
     }
 
-    public func resolveClone(owner: String, repo: String, remoteURL: String, registeredClonePath: String?) async throws -> String {
+    public func resolveClone(
+        owner: String,
+        repo: String,
+        remoteURL: String,
+        registeredClonePath: String?,
+        progress: @escaping @Sendable (String) async -> Void = { _ in }
+    ) async throws -> String {
+        await progress("Resolving clone…")
         let fileManager = FileManager.default
         if let registeredClonePath, fileManager.fileExists(atPath: registeredClonePath) {
+            await progress("Found existing clone")
             return registeredClonePath
         }
         let reposDir = managedRoot + "/repos/" + owner
         let clonePath = reposDir + "/" + repo
         if fileManager.fileExists(atPath: clonePath) {
+            await progress("Found existing clone")
             return clonePath
         }
         try fileManager.createDirectory(atPath: reposDir, withIntermediateDirectories: true)
+        await progress("Cloning \(owner)/\(repo)… (first time, this can take a while)")
         try await runGit(["clone", remoteURL, clonePath])
         return clonePath
     }
 
-    public func createWorktree(clonePath: String, owner: String, repo: String, number: Int, remoteName: String = "origin") async throws -> String {
+    public func createWorktree(
+        clonePath: String,
+        owner: String,
+        repo: String,
+        number: Int,
+        remoteName: String = "origin",
+        progress: @escaping @Sendable (String) async -> Void = { _ in }
+    ) async throws -> String {
         let worktreesDir = managedRoot + "/worktrees"
         let worktreePath = worktreesDir + "/" + owner + "-" + repo + "-pr" + String(number)
         if FileManager.default.fileExists(atPath: worktreePath) {
             let listing = try await runGit(["-C", clonePath, "worktree", "list", "--porcelain"])
             if listing.contains("worktree \(worktreePath)\n") || listing.contains("worktree \(worktreePath)") {
+                await progress("Found existing worktree")
                 return worktreePath
             }
             throw WorktreeError.gitFailed(
@@ -41,10 +59,13 @@ public struct WorktreeManager: Sendable {
                 message: "directory exists but is not a registered git worktree: \(worktreePath). Remove it with: rm -rf '\(worktreePath)'"
             )
         }
+        await progress("Pruning stale worktrees…")
         try await runGit(["-C", clonePath, "worktree", "prune"])
+        await progress("Fetching PR #\(number)…")
         try await runGit(["-C", clonePath, "fetch", remoteName, "refs/pull/\(number)/head"])
         let sha = try await runGit(["-C", clonePath, "rev-parse", "FETCH_HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
         try FileManager.default.createDirectory(atPath: worktreesDir, withIntermediateDirectories: true)
+        await progress("Adding worktree…")
         try await runGit(["-C", clonePath, "worktree", "add", "--detach", worktreePath, sha])
         return worktreePath
     }
