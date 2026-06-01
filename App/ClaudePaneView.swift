@@ -5,21 +5,22 @@ import AppCore
 import ClaudeSessionKit
 import SwiftTerm
 
+private let prepLogTimeFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "HH:mm:ss"
+    return f
+}()
+
 struct ClaudePaneView: View {
     let model: AppModel
     let review: Review
+    @State private var showPrepDetails = false
 
     var body: some View {
         Group {
             switch model.claudePaneState[review.id] ?? .idle {
             case .idle, .preparingWorktree:
-                VStack(spacing: 10) {
-                    ProgressView()
-                    Text("Preparing worktree…")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                prepProgressView()
             case .worktreeFailed(let message):
                 worktreeFailureView(message: message)
             case .claudeUnavailable(let message):
@@ -38,6 +39,48 @@ struct ClaudePaneView: View {
         .task(id: review.id) {
             await model.ensureClaudeSession(for: review)
         }
+        .onChange(of: review.id) {
+            showPrepDetails = false
+        }
+    }
+
+    private var prepEntries: [PrepLogEntry] {
+        model.claudePrepLog[review.id] ?? []
+    }
+
+    @ViewBuilder
+    private func prepProgressView() -> some View {
+        VStack(spacing: 10) {
+            ProgressView()
+            Text(prepEntries.last?.message ?? "Preparing…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            if !prepEntries.isEmpty {
+                DisclosureGroup("Show details", isExpanded: $showPrepDetails) {
+                    prepLogList()
+                        .frame(maxHeight: 180)
+                }
+                .font(.caption)
+                .frame(maxWidth: 360)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func prepLogList() -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(prepEntries) { entry in
+                    Text("\(prepLogTimeFormatter.string(from: entry.date))  \(entry.message)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.vertical, 4)
+        }
     }
 
     @ViewBuilder
@@ -45,6 +88,10 @@ struct ClaudePaneView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Couldn't prepare the worktree")
                 .font(.headline)
+            if !prepEntries.isEmpty {
+                prepLogList()
+                    .frame(maxHeight: 140)
+            }
             ScrollView {
                 Text(message)
                     .font(.system(.caption, design: .monospaced))
