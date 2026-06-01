@@ -318,7 +318,7 @@ public final class AppModel {
         claudePrepLog[id, default: []].append(PrepLogEntry(date: Date(), message: message))
     }
 
-    public func ensureClaudeSession(for review: Review) async {
+    public func ensureClaudeSession(for review: Review, forceFresh: Bool = false) async {
         guard !review.disabled else { return }
         if claudeSessions[review.id] != nil {
             claudePaneState[review.id] = .sessionLive
@@ -359,13 +359,18 @@ public final class AppModel {
         var updated = review
         updated.worktreePath = ready.worktreePath
 
+        // forceFresh (used when clearing a session) starts a brand-new /review and never
+        // resumes. Resuming an inferred session here is unsafe right after a clear: the
+        // just-terminated process can flush a stub transcript back into the directory after
+        // archiveTranscripts runs, so latestSessionID would pick that stub and `claude
+        // --resume` exits with "No conversation found".
         let sessionID: String
         let resume: Bool
-        if let existing = updated.claudeSessionID {
+        if !forceFresh, let existing = updated.claudeSessionID {
             sessionID = existing
             resume = true
             appendPrepLog("Resuming session \(existing)", for: review.id)
-        } else if let latest = ClaudeTranscriptPath.latestSessionID(forWorktreePath: ready.worktreePath) {
+        } else if !forceFresh, let latest = ClaudeTranscriptPath.latestSessionID(forWorktreePath: ready.worktreePath) {
             sessionID = latest
             resume = true
             appendPrepLog("Resuming session \(latest)", for: review.id)
@@ -569,7 +574,7 @@ public final class AppModel {
             return
         }
         guard let refreshed = reviews.first(where: { $0.id == id }) else { return }
-        await ensureClaudeSession(for: refreshed)
+        await ensureClaudeSession(for: refreshed, forceFresh: true)
     }
 
     func markClaudeReviewed(_ id: String) async {
