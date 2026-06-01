@@ -19,9 +19,12 @@ struct ClaudePaneView: View {
 
     var body: some View {
         Group {
-            switch model.claudePaneState[review.id] ?? .idle {
-            case .idle, .preparingWorktree:
-                prepProgressView()
+            if review.disabled {
+                disabledView()
+            } else {
+                switch model.claudePaneState[review.id] ?? .idle {
+                case .idle, .preparingWorktree:
+                    prepProgressView()
             case .worktreeFailed(let message):
                 worktreeFailureView(message: message)
             case .claudeUnavailable(let message):
@@ -40,6 +43,7 @@ struct ClaudePaneView: View {
                 } else {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                }
             }
         }
         .task(id: review.id) {
@@ -49,6 +53,28 @@ struct ClaudePaneView: View {
             showPrepDetails = false
             showPrepLog = false
         }
+        .onChange(of: review.disabled) {
+            if !review.disabled {
+                Task { await model.ensureClaudeSession(for: review) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func disabledView() -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: "pause.circle")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("Claude review is disabled for this PR")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Text("Enable it from the PR’s context menu to start a review.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
     }
 
     @ViewBuilder
