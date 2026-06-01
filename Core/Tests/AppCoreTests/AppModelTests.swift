@@ -356,6 +356,52 @@ private func stubClient() -> GitHubClient {
     #expect(!FileManager.default.fileExists(atPath: tempWorktree))
 }
 
+@Test @MainActor func prepLogRetainedOnWorktreeFailure() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()
+    try await store.upsert(review)
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(shouldThrow: true, progressLines: ["Fetching PR #944…"]),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.ensureClaudeSession(for: review)
+
+    if case .worktreeFailed = model.claudePaneState[review.id] {} else {
+        Issue.record("expected .worktreeFailed, got \(String(describing: model.claudePaneState[review.id]))")
+    }
+    let messages = (model.claudePrepLog[review.id] ?? []).map(\.message)
+    #expect(messages.contains("Locating claude…"))
+    #expect(messages.contains("Fetching PR #944…"))
+}
+
+@Test @MainActor func prepLogClearedOnSessionLive() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()
+    try await store.upsert(review)
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(progressLines: ["Fetching PR #944…"]),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.ensureClaudeSession(for: review)
+
+    #expect(model.claudePaneState[review.id] == .sessionLive)
+    #expect(model.claudePrepLog[review.id] == nil)
+}
+
 @Test @MainActor func ensureClaudeSessionFlagsWorktreeFailure() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let model = AppModel(

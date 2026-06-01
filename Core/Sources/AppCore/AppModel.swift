@@ -25,6 +25,7 @@ public final class AppModel {
     public private(set) var registeredRepos: [RegisteredRepo] = []
     public private(set) var claudeSessions: [String: ClaudeSession] = [:]
     public private(set) var claudePaneState: [String: ClaudePaneState] = [:]
+    public private(set) var claudePrepLog: [String: [PrepLogEntry]] = [:]
     public private(set) var claudeStatuses: [String: ClaudeStatus] = [:]
     public private(set) var currentLogin: String?
     public private(set) var settings: Settings = .default
@@ -313,6 +314,10 @@ public final class AppModel {
         return nil
     }
 
+    private func appendPrepLog(_ message: String, for id: String) {
+        claudePrepLog[id, default: []].append(PrepLogEntry(date: Date(), message: message))
+    }
+
     public func ensureClaudeSession(for review: Review) async {
         guard !review.disabled else { return }
         if claudeSessions[review.id] != nil {
@@ -322,16 +327,25 @@ public final class AppModel {
         if claudePreparing.contains(review.id) { return }
         claudePreparing.insert(review.id)
         defer { claudePreparing.remove(review.id) }
+
+        claudePaneState[review.id] = .preparingWorktree
+        claudePrepLog[review.id] = []
+        appendPrepLog("Locating claude…", for: review.id)
         guard let executable = await claudeExecutable() else {
             claudePaneState[review.id] = .claudeUnavailable(Self.claudeNotFoundMessage)
+            claudePrepLog[review.id] = nil
             return
         }
-        claudePaneState[review.id] = .preparingWorktree
+        let reviewID = review.id
+        let progress: PrepProgress = { [weak self] message in
+            await self?.appendPrepLog(message, for: reviewID)
+        }
         let ready: WorktreeReady
         do {
             ready = try await worktreeProvider.ensureWorktree(
                 for: review,
-                registeredClonePath: registeredClonePath(for: review)
+                registeredClonePath: registeredClonePath(for: review),
+                progress: progress
             )
         } catch {
             claudePaneState[review.id] = .worktreeFailed(String(describing: error))
@@ -350,12 +364,15 @@ public final class AppModel {
         if let existing = updated.claudeSessionID {
             sessionID = existing
             resume = true
+            appendPrepLog("Resuming session \(existing)", for: review.id)
         } else if let latest = ClaudeTranscriptPath.latestSessionID(forWorktreePath: ready.worktreePath) {
             sessionID = latest
             resume = true
+            appendPrepLog("Resuming session \(latest)", for: review.id)
         } else {
             sessionID = UUID().uuidString.lowercased()
             resume = false
+            appendPrepLog("Starting fresh /review", for: review.id)
         }
         updated.claudeSessionID = sessionID
 
@@ -374,6 +391,7 @@ public final class AppModel {
         let session = ClaudeSession(spec: spec)
         claudeSessions[review.id] = session
         claudePaneState[review.id] = .sessionLive
+        claudePrepLog[review.id] = nil
         session.start()
         attachTranscriptWatcher(reviewID: review.id, worktreePath: ready.worktreePath)
         recomputeStatus(for: review.id, now: Date())
