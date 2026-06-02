@@ -47,7 +47,7 @@ struct ContentView: View {
                     } label: {
                         Label("Group", systemImage: "rectangle.3.group")
                     }
-                    .help("Group sidebar by date, author, status, or none")
+                    .help("Group sidebar by category, date, author, status, or none")
                 }
                 ToolbarItem {
                     Button {
@@ -158,6 +158,8 @@ struct ContentView: View {
 
     private func groupedReviews() -> [ReviewGroup] {
         switch model.settings.sidebarGrouping {
+        case .byCategory:
+            return groupByCategory()
         case .none:
             return [ReviewGroup(title: "", reviews: model.reviews.sorted { $0.addedAt > $1.addedAt })]
         case .byDate:
@@ -167,6 +169,28 @@ struct ContentView: View {
         case .byStatus:
             return groupByStatus()
         }
+    }
+
+    private func groupByCategory() -> [ReviewGroup] {
+        let myLogin = model.currentLogin
+        var myWork: [WorkItem] = []
+        var reviewRequests: [WorkItem] = []
+        for review in model.reviews {
+            switch review.category(myLogin: myLogin) {
+            case .task, .myPR:
+                myWork.append(review)
+            case .reviewRequest:
+                reviewRequests.append(review)
+            }
+        }
+        var groups: [ReviewGroup] = []
+        if !myWork.isEmpty {
+            groups.append(ReviewGroup(title: "My Work", reviews: myWork.sorted { $0.addedAt > $1.addedAt }))
+        }
+        if !reviewRequests.isEmpty {
+            groups.append(ReviewGroup(title: "Review Requests", reviews: reviewRequests.sorted { $0.addedAt > $1.addedAt }))
+        }
+        return groups
     }
 
     private func groupByDate() -> [ReviewGroup] {
