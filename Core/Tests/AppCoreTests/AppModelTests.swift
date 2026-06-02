@@ -1817,6 +1817,31 @@ private func editableItem(worktreePath: String = "/tmp/wt", headBranch: String =
     #expect(model.pushability[item.id]?.canPush == false)
 }
 
+@Test @MainActor func ensureClaudeSessionPopulatesPushabilityForEditableItem() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let item = editableItem()
+    try await store.upsertItem(item)
+    let stub = StubWorktreeOps()
+    await stub.set(currentBranchResult: "feat/x")
+    await stub.set(aheadBehindByUpstream: ["origin/feat/x": (ahead: 1, behind: 0)])
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: stub,
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.ensureClaudeSession(for: item)
+
+    #expect(model.pushability[item.id]?.canPush == true)
+    #expect(model.pushability[item.id]?.needsForce == false)
+}
+
 @Test @MainActor func pushabilityFallsBackForNeverPushedBranch() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let item = editableItem()

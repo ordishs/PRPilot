@@ -498,6 +498,9 @@ public final class AppModel {
         session.start()
         attachTranscriptWatcher(reviewID: review.id, worktreePath: ready.worktreePath)
         recomputeStatus(for: review.id, now: Date())
+        if editable {
+            await refreshPushability(for: review.id)
+        }
     }
 
     private func attachTranscriptWatcher(reviewID: String, worktreePath: String) {
