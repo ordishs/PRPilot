@@ -118,6 +118,30 @@ public struct GitHubClient: Sendable {
             prState: GitHubClient.mapState(state: payload.state, isDraft: payload.isDraft)
         )
     }
+
+    public func fetchPRStatus(for ref: PRLocator) async throws -> PRStatus {
+        let result = try await runner.run(
+            executable: ghPath,
+            arguments: prViewArguments(ref: ref, fields: "statusCheckRollup,mergeStateStatus,isDraft,reviewDecision")
+        )
+        guard result.exitCode == 0 else {
+            throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
+        }
+        let payload: GHStatusPayload
+        do {
+            payload = try JSONDecoder().decode(GHStatusPayload.self, from: Data(result.standardOutput.utf8))
+        } catch {
+            throw GitHubError.decodingFailed(String(describing: error))
+        }
+        let checks = (payload.statusCheckRollup ?? []).map {
+            CICheck(status: $0.status, conclusion: $0.conclusion, state: $0.state)
+        }
+        return PRStatus(
+            ci: PRStatus.aggregateCI(checks),
+            isBehind: payload.mergeStateStatus == "BEHIND",
+            readiness: PRStatus.readiness(isDraft: payload.isDraft, reviewDecision: payload.reviewDecision)
+        )
+    }
 }
 
 public struct DiscoveryHit: Sendable, Equatable {
@@ -193,6 +217,18 @@ extension GitHubClient {
     public static func mapDiscoveryState(state: String, isDraft: Bool) -> PRState {
         mapState(state: state.uppercased(), isDraft: isDraft)
     }
+}
+
+struct GHStatusPayload: Decodable {
+    struct Check: Decodable {
+        let status: String?
+        let conclusion: String?
+        let state: String?
+    }
+    let statusCheckRollup: [Check]?
+    let mergeStateStatus: String?
+    let isDraft: Bool
+    let reviewDecision: String?
 }
 
 struct GHReviewStatePayload: Decodable {
