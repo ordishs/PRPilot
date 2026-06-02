@@ -5,7 +5,7 @@ import PRPilotModels
 
 struct WebPane: View {
     let cache: WebViewCache
-    let review: Review
+    let review: WorkItem
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,7 +17,7 @@ struct WebPane: View {
                 .keyboardShortcut("r", modifiers: [.command])
                 .help("Refresh (\u{2318}R)")
 
-                Text(review.url.absoluteString)
+                Text(review.url?.absoluteString ?? "")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -42,14 +42,16 @@ struct WebPane: View {
     }
 
     private func copyURL() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(review.url.absoluteString, forType: .string)
+        if let url = review.url {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(url.absoluteString, forType: .string)
+        }
     }
 }
 
 private struct WebViewHost: NSViewRepresentable {
     let cache: WebViewCache
-    let review: Review
+    let review: WorkItem
 
     func makeNSView(context: Context) -> NSView {
         let container = NSView()

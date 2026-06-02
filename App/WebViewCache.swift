@@ -41,19 +41,26 @@ final class WebViewCache {
         return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true)
     }()
 
-    func ensure(for review: Review) -> WKWebView {
+    func ensure(for review: WorkItem) -> WKWebView {
+        guard let url = review.url else {
+            return webViews[review.id] ?? {
+                let webView = WKWebView(frame: .zero, configuration: configuration)
+                webViews[review.id] = webView
+                return webView
+            }()
+        }
         if let existing = webViews[review.id] {
             // All webviews share the persistent .default() cookie store, so a
             // session established in one tab is visible to the rest. A tab that
             // loaded while signed out stays on the login page until reloaded —
             // refresh it on revisit so it picks up the now-present session.
             if Self.isGitHubAuthPage(existing.url) {
-                existing.load(URLRequest(url: review.url))
+                existing.load(URLRequest(url: url))
             }
             return existing
         }
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.load(URLRequest(url: review.url))
+        webView.load(URLRequest(url: url))
         webViews[review.id] = webView
         return webView
     }
@@ -63,7 +70,7 @@ final class WebViewCache {
         return url.path.hasPrefix("/login") || url.path.hasPrefix("/session")
     }
 
-    func reload(for review: Review) {
+    func reload(for review: WorkItem) {
         webViews[review.id]?.reload()
     }
 

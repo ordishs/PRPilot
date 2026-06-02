@@ -1,6 +1,6 @@
 import Foundation
 
-public struct PRRef: Sendable, Equatable {
+public struct PRLocator: Sendable, Equatable {
     public var owner: String
     public var repo: String
     public var number: Int
@@ -11,7 +11,7 @@ public struct PRRef: Sendable, Equatable {
         self.number = number
     }
 
-    public static func parse(_ urlString: String) throws -> PRRef {
+    public static func parse(_ urlString: String) throws -> PRLocator {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let components = URLComponents(string: trimmed),
               let host = components.host?.lowercased(),
@@ -22,6 +22,6 @@ public struct PRRef: Sendable, Equatable {
         guard parts.count >= 4, parts[2] == "pull", let number = Int(parts[3]), number > 0 else {
             throw GitHubError.invalidURL(urlString)
         }
-        return PRRef(owner: parts[0], repo: parts[1], number: number)
+        return PRLocator(owner: parts[0], repo: parts[1], number: number)
     }
 }

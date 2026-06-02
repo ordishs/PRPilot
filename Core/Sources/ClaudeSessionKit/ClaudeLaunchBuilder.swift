@@ -20,7 +20,7 @@ public struct ClaudeLaunchSpec: Sendable, Equatable {
 public enum ClaudeLaunchBuilder {
     public static func build(
         settings: Settings,
-        review: Review,
+        review: WorkItem,
         worktreePath: String,
         resolvedClaudePath: String,
         sessionID: String,
@@ -34,7 +34,9 @@ public enum ClaudeLaunchBuilder {
         } else {
             args.append("--session-id")
             args.append(sessionID)
-            args.append("/review \(review.url.absoluteString)")
+            if let url = review.url {
+                args.append("/review \(url.absoluteString)")
+            }
         }
         return ClaudeLaunchSpec(
             executable: resolvedClaudePath,

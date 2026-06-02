@@ -10,24 +10,24 @@ public actor ReviewStore {
         self.state = try ReviewStore.loadOrCreate(at: fileURL)
     }
 
-    public func allReviews() -> [Review] {
+    public func allItems() -> [WorkItem] {
         state.reviews
     }
 
-    public func review(id: String) -> Review? {
+    public func item(id: String) -> WorkItem? {
         state.reviews.first { $0.id == id }
     }
 
-    public func upsert(_ review: Review) throws {
-        if let index = state.reviews.firstIndex(where: { $0.id == review.id }) {
-            state.reviews[index] = review
+    public func upsertItem(_ item: WorkItem) throws {
+        if let index = state.reviews.firstIndex(where: { $0.id == item.id }) {
+            state.reviews[index] = item
         } else {
-            state.reviews.append(review)
+            state.reviews.append(item)
         }
         try persist()
     }
 
-    public func removeReview(id: String) throws {
+    public func removeItem(id: String) throws {
         state.reviews.removeAll { $0.id == id }
         try persist()
     }
@@ -72,7 +72,13 @@ public actor ReviewStore {
         let fileManager = FileManager.default
         if fileManager.fileExists(atPath: url.path) {
             let data = try Data(contentsOf: url)
-            return try makeDecoder().decode(StoreState.self, from: data)
+            var loaded = try makeDecoder().decode(StoreState.self, from: data)
+            if loaded.schemaVersion < PRPilotModels.schemaVersion {
+                loaded.schemaVersion = PRPilotModels.schemaVersion
+                let migrated = try makeEncoder().encode(loaded)
+                try migrated.write(to: url, options: [.atomic])
+            }
+            return loaded
         }
         try fileManager.createDirectory(
             at: url.deletingLastPathComponent(),

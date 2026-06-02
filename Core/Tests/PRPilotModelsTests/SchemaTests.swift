@@ -2,8 +2,8 @@ import Testing
 import Foundation
 @testable import PRPilotModels
 
-@Test func schemaVersionIsOne() {
-    #expect(PRPilotModels.schemaVersion == 1)
+@Test func schemaVersionIsTwo() {
+    #expect(PRPilotModels.schemaVersion == 2)
 }
 
 @Test func reviewDefaultsDisabledToFalse() throws {
@@ -23,7 +23,7 @@ import Foundation
       "addedAt": 700000000.0
     }
     """
-    let decoded = try JSONDecoder().decode(Review.self, from: Data(json.utf8))
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: Data(json.utf8))
     #expect(decoded.disabled == false)
 }
 
@@ -45,7 +45,7 @@ import Foundation
       "disabled": true
     }
     """
-    let decoded = try JSONDecoder().decode(Review.self, from: Data(json.utf8))
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: Data(json.utf8))
     #expect(decoded.disabled == true)
 }
 
@@ -87,7 +87,7 @@ import Foundation
       "addedAt": 700000000.0
     }
     """
-    let decoded = try JSONDecoder().decode(Review.self, from: Data(json.utf8))
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: Data(json.utf8))
     #expect(decoded.viewedFiles.isEmpty)
 }
 
@@ -109,6 +109,6 @@ import Foundation
       "viewedFiles": ["src/a.swift", "src/b.swift"]
     }
     """
-    let decoded = try JSONDecoder().decode(Review.self, from: Data(json.utf8))
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: Data(json.utf8))
     #expect(decoded.viewedFiles == ["src/a.swift", "src/b.swift"])
 }
