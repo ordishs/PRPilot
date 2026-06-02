@@ -745,11 +745,16 @@ private let prFetchJSON = """
 """
 
 @Test @MainActor func discoverNowPopulatesNewReviews() async throws {
-    let store = try ReviewStore(fileURL: tempStoreURL())
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "review-requested:@me is:open")]
+    seed.myPRsEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
     let runner = StubRunner(results: [
         CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: sampleSearchHitJSON, standardError: ""),
-        CommandResult(exitCode: 0, standardOutput: emptySearchJSON, standardError: ""),
         CommandResult(exitCode: 0, standardOutput: prFetchJSON, standardError: "")
     ])
     let client = GitHubClient(runner: runner, ghPath: "gh")
@@ -772,12 +777,17 @@ private let prFetchJSON = """
 }
 
 @Test @MainActor func discoverNowPromotesAddedToBoth() async throws {
-    let store = try ReviewStore(fileURL: tempStoreURL())
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "review-requested:@me is:open")]
+    seed.myPRsEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
     try await store.upsertItem(sampleReview())
     let runner = StubRunner(results: [
         CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
-        CommandResult(exitCode: 0, standardOutput: sampleSearchHitJSON, standardError: ""),
-        CommandResult(exitCode: 0, standardOutput: emptySearchJSON, standardError: "")
+        CommandResult(exitCode: 0, standardOutput: sampleSearchHitJSON, standardError: "")
     ])
     let client = GitHubClient(runner: runner, ghPath: "gh")
     let model = AppModel(
@@ -798,7 +808,13 @@ private let prFetchJSON = """
 }
 
 @Test @MainActor func discoverNowKeepsPRsFallingOutOfQuery() async throws {
-    let store = try ReviewStore(fileURL: tempStoreURL())
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "review-requested:@me is:open")]
+    seed.myPRsEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
     var existing = sampleReview()
     existing.origin = .discovered
     try await store.upsertItem(existing)
@@ -825,15 +841,20 @@ private let prFetchJSON = """
 }
 
 @Test @MainActor func discoverNowUpdatesPRState() async throws {
-    let store = try ReviewStore(fileURL: tempStoreURL())
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "review-requested:@me is:open")]
+    seed.myPRsEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
     var existing = sampleReview()
     existing.prState = .open
     existing.origin = .discovered
     try await store.upsertItem(existing)
     let runner = StubRunner(results: [
         CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
-        CommandResult(exitCode: 0, standardOutput: sampleMergedSearchHitJSON, standardError: ""),
-        CommandResult(exitCode: 0, standardOutput: emptySearchJSON, standardError: "")
+        CommandResult(exitCode: 0, standardOutput: sampleMergedSearchHitJSON, standardError: "")
     ])
     let client = GitHubClient(runner: runner, ghPath: "gh")
     let model = AppModel(
@@ -853,7 +874,16 @@ private let prFetchJSON = """
 }
 
 @Test @MainActor func discoverNowDeduplicatesAcrossQueries() async throws {
-    let store = try ReviewStore(fileURL: tempStoreURL())
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestQueries = [
+        DiscoveryQuery(text: "review-requested:@me is:open"),
+        DiscoveryQuery(text: "assignee:@me is:open"),
+    ]
+    seed.myPRsEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
     let runner = StubRunner(results: [
         CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: sampleSearchHitJSON, standardError: ""),
@@ -926,7 +956,8 @@ private let prFetchJSON = """
     let url = tempStoreURL()
     let seedStore = try ReviewStore(fileURL: url)
     var seed = Settings.default
-    seed.discoveryQueries = ["author:@me"]
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "author:@me")]
+    seed.myPRsEnabled = false
     seed.pollIntervalSeconds = 240
     seed.claudeLaunchArgs = "--model opus"
     seed.notificationsEnabled = false
@@ -944,7 +975,8 @@ private let prFetchJSON = """
 
     await model.load()
 
-    #expect(model.settings.discoveryQueries == ["author:@me"])
+    #expect(model.settings.reviewRequestQueries == [DiscoveryQuery(text: "author:@me")])
+    #expect(model.settings.myPRsEnabled == false)
     #expect(model.settings.pollIntervalSeconds == 240)
     #expect(model.settings.claudeLaunchArgs == "--model opus")
     #expect(model.settings.notificationsEnabled == false)
@@ -965,16 +997,19 @@ private let prFetchJSON = """
     await model.load()
 
     var newSettings = model.settings
-    newSettings.discoveryQueries = ["assignee:foo is:open"]
+    newSettings.reviewRequestQueries = [DiscoveryQuery(text: "assignee:foo is:open")]
+    newSettings.myPRsEnabled = false
     newSettings.pollIntervalSeconds = 300
     await model.updateSettings(newSettings)
 
-    #expect(model.settings.discoveryQueries == ["assignee:foo is:open"])
+    #expect(model.settings.reviewRequestQueries == [DiscoveryQuery(text: "assignee:foo is:open")])
+    #expect(model.settings.myPRsEnabled == false)
     #expect(model.settings.pollIntervalSeconds == 300)
 
     let reloaded = try ReviewStore(fileURL: url)
     let persisted = await reloaded.settings()
-    #expect(persisted.discoveryQueries == ["assignee:foo is:open"])
+    #expect(persisted.reviewRequestQueries == [DiscoveryQuery(text: "assignee:foo is:open")])
+    #expect(persisted.myPRsEnabled == false)
     #expect(persisted.pollIntervalSeconds == 300)
 }
 
@@ -1030,7 +1065,8 @@ private let prFetchJSON = """
 @Test @MainActor func discoverNowUsesCurrentSettingsQueries() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     var seed = Settings.default
-    seed.discoveryQueries = ["custom:query"]
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "author:@me custom:query")]
+    seed.myPRsEnabled = false
     try await store.updateSettings(seed)
     let runner = StubRunner(results: [
         CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
@@ -1074,7 +1110,8 @@ private let prFetchJSON = """
     await model.load()
 
     var updated = model.settings
-    updated.discoveryQueries = ["custom:newquery is:open"]
+    updated.reviewRequestQueries = [DiscoveryQuery(text: "author:@me custom:newquery")]
+    updated.myPRsEnabled = false
     await model.updateSettings(updated)
 
     try await Task.sleep(nanoseconds: 250_000_000)
@@ -1349,4 +1386,104 @@ private let prFetchJSON = """
 
     #expect(model.reviews.first?.approvedByMe == false)
     #expect(model.reviews.first?.prState == .merged)
+}
+
+@Test @MainActor func discoverSkipsUnscopedQueryAndWarns() async throws {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "is:open")]
+    seed.myPRsEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
+    ])
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let model = AppModel(
+        store: store,
+        client: client,
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.discoverNow()
+
+    #expect(model.reviews.isEmpty)
+    #expect(!model.discoveryWarnings.isEmpty)
+    #expect(model.discoveryWarnings.first?.contains("is:open") == true)
+}
+
+@Test @MainActor func discoverRunsUnscopedQueryWhenAllowed() async throws {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "is:open", allowUnscoped: true)]
+    seed.myPRsEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: sampleSearchHitJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: prFetchJSON, standardError: "")
+    ])
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let model = AppModel(
+        store: store,
+        client: client,
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.discoverNow()
+
+    #expect(model.reviews.count == 1)
+    #expect(model.discoveryWarnings.isEmpty)
+}
+
+@Test @MainActor func discoverSkipsCappedResultsAndWarns() async throws {
+    let hundredHitsJSON: String = {
+        let items = (0..<100).map { i in
+            """
+            {"number":\(i),"title":"t\(i)","url":"https://github.com/o/r/pull/\(i)","state":"open","isDraft":false,"author":{"login":"a"},"repository":{"nameWithOwner":"o/r"}}
+            """
+        }
+        return "[" + items.joined(separator: ",") + "]"
+    }()
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "author:@me is:open")]
+    seed.myPRsEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: hundredHitsJSON, standardError: "")
+    ])
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let model = AppModel(
+        store: store,
+        client: client,
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.discoverNow()
+
+    #expect(model.reviews.isEmpty)
+    #expect(!model.discoveryWarnings.isEmpty)
+    #expect(model.discoveryWarnings.first?.contains("100+") == true)
 }
