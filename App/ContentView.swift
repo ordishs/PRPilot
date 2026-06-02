@@ -88,15 +88,15 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func sidebarRow(for review: Review) -> some View {
+    private func sidebarRow(for review: WorkItem) -> some View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text("#\(review.number) · \(review.title)")
+                    Text(review.number.map { "#\($0) · \(review.title)" } ?? review.title)
                         .lineLimit(1)
                     statusBadge(for: review)
                 }
-                Text("\(review.owner)/\(review.repo) · \(review.author)")
+                Text("\(review.owner)/\(review.repo) · \(review.author ?? "")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(relativeDateLabel(for: review.addedAt))
@@ -141,7 +141,7 @@ struct ContentView: View {
 
     private struct ReviewGroup: Identifiable {
         let title: String
-        let reviews: [Review]
+        let reviews: [WorkItem]
         var id: String { title }
     }
 
@@ -170,7 +170,7 @@ struct ContentView: View {
     }
 
     private func groupByDate() -> [ReviewGroup] {
-        let buckets: [(String, (Review) -> Bool)] = [
+        let buckets: [(String, (WorkItem) -> Bool)] = [
             ("Today", { Calendar.current.isDateInToday($0.addedAt) }),
             ("Yesterday", { Calendar.current.isDateInYesterday($0.addedAt) }),
             ("This Week", { daysAgo($0.addedAt) < 7 }),
@@ -190,7 +190,7 @@ struct ContentView: View {
     }
 
     private func groupByAuthor() -> [ReviewGroup] {
-        let byAuthor = Dictionary(grouping: model.reviews) { $0.author }
+        let byAuthor = Dictionary(grouping: model.reviews) { $0.author ?? "unknown" }
         return byAuthor.keys.sorted().map { author in
             ReviewGroup(title: author, reviews: byAuthor[author]!.sorted { $0.addedAt > $1.addedAt })
         }
@@ -210,7 +210,7 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func statusBadge(for review: Review) -> some View {
+    private func statusBadge(for review: WorkItem) -> some View {
         switch review.sidebarStatus {
         case .merged:
             StateBadge(text: "Merged", color: .purple)

@@ -5,7 +5,7 @@ import AppCore
 
 struct DiffPaneView: View {
     let model: AppModel
-    let review: Review
+    let review: WorkItem
 
     var body: some View {
         Group {
@@ -117,7 +117,7 @@ private struct NodeRow: View {
 
 private struct DiffContentView: View {
     let model: AppModel
-    let review: Review
+    let review: WorkItem
     let files: [DiffFile]
     let mode: DiffMode
 

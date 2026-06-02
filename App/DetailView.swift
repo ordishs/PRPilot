@@ -5,7 +5,7 @@ import AppCore
 struct DetailView: View {
     let model: AppModel
     let webViewCache: WebViewCache
-    let review: Review
+    let review: WorkItem
     @State private var pane: Pane = .github
 
     enum Pane: String, CaseIterable, Identifiable {
@@ -37,7 +37,7 @@ struct DetailView: View {
                     .id(review.id)
             }
         }
-        .navigationTitle("#\(review.number) \(review.title)")
+        .navigationTitle(review.number.map { "#\($0) \(review.title)" } ?? review.title)
         .onChange(of: review.disabled) { _, disabled in
             if disabled && pane == .claude {
                 pane = .github

@@ -5,7 +5,7 @@ import DiffKit
 
 struct DiffToolbarView: View {
     let model: AppModel
-    let review: Review
+    let review: WorkItem
     let fileCount: Int
     let addedCount: Int
     let removedCount: Int

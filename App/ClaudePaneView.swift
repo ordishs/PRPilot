@@ -13,7 +13,7 @@ private let prepLogTimeFormatter: DateFormatter = {
 
 struct ClaudePaneView: View {
     let model: AppModel
-    let review: Review
+    let review: WorkItem
     @State private var showPrepDetails = false
     @State private var showPrepLog = false
 
