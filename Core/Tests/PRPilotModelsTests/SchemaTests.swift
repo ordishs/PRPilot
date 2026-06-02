@@ -2,8 +2,26 @@ import Testing
 import Foundation
 @testable import PRPilotModels
 
-@Test func schemaVersionIsTwo() {
-    #expect(PRPilotModels.schemaVersion == 2)
+@Test func schemaVersionIsThree() {
+    #expect(PRPilotModels.schemaVersion == 3)
+}
+
+@Test func settingsMigratesLegacyDiscoveryQueries() throws {
+    let json = """
+    {
+      "managedRoot": "/tmp",
+      "discoveryQueries": ["review-requested:@me is:open", "assignee:@me is:open"],
+      "pollIntervalSeconds": 120,
+      "claudeLaunchArgs": "", "claudeEnv": "",
+      "notificationsEnabled": true, "diffMode": "unified",
+      "diffIgnoreWhitespace": false, "sidebarGrouping": "byCategory"
+    }
+    """
+    let s = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
+    #expect(s.reviewRequestQueries.map(\.text) == ["review-requested:@me is:open", "assignee:@me is:open"])
+    #expect(s.reviewRequestQueries.allSatisfy { !$0.allowUnscoped })
+    #expect(s.myPRQueries.map(\.text) == ["author:@me is:open"])
+    #expect(s.reviewRequestsEnabled == true && s.myPRsEnabled == true)
 }
 
 @Test func reviewDefaultsDisabledToFalse() throws {

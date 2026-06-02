@@ -29,6 +29,7 @@ public final class AppModel {
     public private(set) var claudeStatuses: [String: ClaudeStatus] = [:]
     public private(set) var currentLogin: String?
     public private(set) var settings: Settings = .default
+    public private(set) var discoveryWarnings: [String] = []
     public var diffMode: DiffMode { settings.diffMode }
 
     public var webPreloadHandler: ((WorkItem) -> Void)?
@@ -124,16 +125,34 @@ public final class AppModel {
     }
 
     func discoverNow() async {
-        let queries = settings.discoveryQueries
         var hitsByID: [String: DiscoveryHit] = [:]
         var anyQuerySucceeded = false
-        for query in queries {
-            guard let results = try? await client.searchPRs(query: query) else { continue }
-            anyQuerySucceeded = true
-            for hit in results {
-                hitsByID[hit.id] = hit
+        var warnings: [String] = []
+
+        let groups: [(enabled: Bool, queries: [DiscoveryQuery])] = [
+            (settings.reviewRequestsEnabled, settings.reviewRequestQueries),
+            (settings.myPRsEnabled, settings.myPRQueries),
+        ]
+        for group in groups where group.enabled {
+            for query in group.queries {
+                let text = query.text.trimmingCharacters(in: .whitespaces)
+                guard !text.isEmpty else { continue }
+                guard query.isScoped || query.allowUnscoped else {
+                    warnings.append("Skipped \"\(text)\" — not scoped to you, an org, or a repo. Add a qualifier (author:/org:/repo:/…) or enable \"run anyway\".")
+                    continue
+                }
+                guard let results = try? await client.searchPRs(query: text) else { continue }
+                anyQuerySucceeded = true
+                if results.count >= 100 {
+                    warnings.append("\"\(text)\" returned 100+ results (too broad) — refine it. Those results were not added.")
+                    continue
+                }
+                for hit in results {
+                    hitsByID[hit.id] = hit
+                }
             }
         }
+        discoveryWarnings = warnings
         await mergeDiscoveryHits(Array(hitsByID.values))
         if anyQuerySucceeded {
             await pruneStaleDiscoveredReviews(currentHitIDs: Set(hitsByID.keys))
@@ -665,7 +684,10 @@ public final class AppModel {
     }
 
     public func updateSettings(_ newSettings: Settings) async {
-        let queriesChanged = settings.discoveryQueries != newSettings.discoveryQueries
+        let queriesChanged = settings.reviewRequestQueries != newSettings.reviewRequestQueries
+            || settings.myPRQueries != newSettings.myPRQueries
+            || settings.reviewRequestsEnabled != newSettings.reviewRequestsEnabled
+            || settings.myPRsEnabled != newSettings.myPRsEnabled
         do {
             try await store.updateSettings(newSettings)
             settings = newSettings

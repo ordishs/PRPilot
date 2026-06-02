@@ -2,7 +2,10 @@ import Foundation
 
 public struct Settings: Codable, Sendable, Equatable {
     public var managedRoot: String
-    public var discoveryQueries: [String]
+    public var reviewRequestQueries: [DiscoveryQuery]
+    public var myPRQueries: [DiscoveryQuery]
+    public var reviewRequestsEnabled: Bool
+    public var myPRsEnabled: Bool
     public var pollIntervalSeconds: Int
     public var ghPath: String?
     public var gitPath: String?
@@ -15,9 +18,16 @@ public struct Settings: Codable, Sendable, Equatable {
     public var diffIgnoreWhitespace: Bool
     public var sidebarGrouping: SidebarGrouping
 
+    private enum LegacyKeys: String, CodingKey {
+        case discoveryQueries
+    }
+
     public init(
         managedRoot: String,
-        discoveryQueries: [String],
+        reviewRequestQueries: [DiscoveryQuery],
+        myPRQueries: [DiscoveryQuery],
+        reviewRequestsEnabled: Bool = true,
+        myPRsEnabled: Bool = true,
         pollIntervalSeconds: Int,
         ghPath: String? = nil,
         gitPath: String? = nil,
@@ -28,10 +38,13 @@ public struct Settings: Codable, Sendable, Equatable {
         notificationsEnabled: Bool,
         diffMode: DiffMode,
         diffIgnoreWhitespace: Bool,
-        sidebarGrouping: SidebarGrouping = .none
+        sidebarGrouping: SidebarGrouping = .byCategory
     ) {
         self.managedRoot = managedRoot
-        self.discoveryQueries = discoveryQueries
+        self.reviewRequestQueries = reviewRequestQueries
+        self.myPRQueries = myPRQueries
+        self.reviewRequestsEnabled = reviewRequestsEnabled
+        self.myPRsEnabled = myPRsEnabled
         self.pollIntervalSeconds = pollIntervalSeconds
         self.ghPath = ghPath
         self.gitPath = gitPath
@@ -48,7 +61,6 @@ public struct Settings: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         managedRoot = try c.decode(String.self, forKey: .managedRoot)
-        discoveryQueries = try c.decode([String].self, forKey: .discoveryQueries)
         pollIntervalSeconds = try c.decode(Int.self, forKey: .pollIntervalSeconds)
         ghPath = try c.decodeIfPresent(String.self, forKey: .ghPath)
         gitPath = try c.decodeIfPresent(String.self, forKey: .gitPath)
@@ -70,11 +82,34 @@ public struct Settings: Codable, Sendable, Equatable {
         diffMode = try c.decode(DiffMode.self, forKey: .diffMode)
         diffIgnoreWhitespace = try c.decode(Bool.self, forKey: .diffIgnoreWhitespace)
         sidebarGrouping = try c.decodeIfPresent(SidebarGrouping.self, forKey: .sidebarGrouping) ?? .none
+
+        if let rrq = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .reviewRequestQueries) {
+            reviewRequestQueries = rrq
+            myPRQueries = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .myPRQueries) ?? Settings.defaultMyPRQueries
+            reviewRequestsEnabled = try c.decodeIfPresent(Bool.self, forKey: .reviewRequestsEnabled) ?? true
+            myPRsEnabled = try c.decodeIfPresent(Bool.self, forKey: .myPRsEnabled) ?? true
+        } else {
+            let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+            let old = try legacy.decodeIfPresent([String].self, forKey: .discoveryQueries) ?? []
+            reviewRequestQueries = old.map { DiscoveryQuery(text: $0, allowUnscoped: false) }
+            myPRQueries = Settings.defaultMyPRQueries
+            reviewRequestsEnabled = true
+            myPRsEnabled = true
+        }
     }
+
+    public static let defaultReviewRequestQueries: [DiscoveryQuery] = [
+        DiscoveryQuery(text: "review-requested:@me is:open"),
+        DiscoveryQuery(text: "assignee:@me is:open"),
+    ]
+    public static let defaultMyPRQueries: [DiscoveryQuery] = [
+        DiscoveryQuery(text: "author:@me is:open"),
+    ]
 
     public static let `default` = Settings(
         managedRoot: Settings.defaultManagedRoot(),
-        discoveryQueries: ["review-requested:@me is:open", "assignee:@me is:open"],
+        reviewRequestQueries: Settings.defaultReviewRequestQueries,
+        myPRQueries: Settings.defaultMyPRQueries,
         pollIntervalSeconds: 120,
         notificationsEnabled: true,
         diffMode: .unified,

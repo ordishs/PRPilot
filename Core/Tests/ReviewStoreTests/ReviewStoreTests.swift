@@ -142,9 +142,9 @@ private func sampleItem(number: Int = 944, title: String = "centrifuge fix") -> 
     #expect(UUID(uuidString: item.id) != nil)   // minted UUID, not the old PR string
     #expect(item.id != "bsv-blockchain/teranode#944")
 
-    // The file must have been rewritten at schemaVersion 2 …
+    // The file must have been rewritten at the current schema version …
     let rewritten = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
-    #expect(rewritten?["schemaVersion"] as? Int == 2)
+    #expect(rewritten?["schemaVersion"] as? Int == PRPilotModels.schemaVersion)
 
     // … and a second load must yield the SAME id (UUID frozen by the rewrite).
     let reloaded = try ReviewStore(fileURL: url)

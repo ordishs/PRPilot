@@ -23,27 +23,37 @@ struct SettingsView: View {
 private struct DiscoverySettingsTab: View {
     let model: AppModel
 
-    @State private var queriesText: String = ""
-    @State private var pollIntervalSeconds: Int = 120
-    @State private var autoLoad: Bool = false
+    @State private var reviewRows: [QueryRow] = []
+    @State private var myPRRows: [QueryRow] = []
+    @State private var reviewEnabled = true
+    @State private var myPRsEnabled = true
+    @State private var pollIntervalSeconds = 120
+    @State private var autoLoad = false
+
+    private struct QueryRow: Identifiable, Equatable {
+        let id = UUID()
+        var text: String
+        var allowUnscoped: Bool
+    }
 
     var body: some View {
         Form {
             Section("Auto load") {
                 Toggle("Automatically start a Claude review for every PR", isOn: $autoLoad)
                 Text("Reviews each PR at least once: resumes its session, or starts a fresh review for a new one. Runs at launch and when a PR is added (manually or via discovery). Repos without a local clone are reviewed when first opened.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("Search queries (one per line)") {
-                TextEditor(text: $queriesText)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(minHeight: 90)
-                    .border(Color.secondary.opacity(0.3))
-                Text("Each line is a separate `gh search prs` query. Include `is:open` to filter out closed PRs.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            querySection(title: "Review requests", rows: $reviewRows, enabled: $reviewEnabled)
+            querySection(title: "My PRs", rows: $myPRRows, enabled: $myPRsEnabled)
+
+            if !model.discoveryWarnings.isEmpty {
+                Section("Discovery warnings") {
+                    ForEach(model.discoveryWarnings, id: \.self) { w in
+                        Label(w, systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                }
             }
 
             Section("Poll interval") {
@@ -54,22 +64,64 @@ private struct DiscoverySettingsTab: View {
         }
         .formStyle(.grouped)
         .onAppear {
-            queriesText = model.settings.discoveryQueries.joined(separator: "\n")
+            reviewRows = model.settings.reviewRequestQueries.map { QueryRow(text: $0.text, allowUnscoped: $0.allowUnscoped) }
+            myPRRows = model.settings.myPRQueries.map { QueryRow(text: $0.text, allowUnscoped: $0.allowUnscoped) }
+            reviewEnabled = model.settings.reviewRequestsEnabled
+            myPRsEnabled = model.settings.myPRsEnabled
             pollIntervalSeconds = model.settings.pollIntervalSeconds
             autoLoad = model.settings.autoLoad
         }
-        .onChange(of: queriesText) { _, newValue in commit() }
+        .onChange(of: reviewRows) { _, _ in commit() }
+        .onChange(of: myPRRows) { _, _ in commit() }
+        .onChange(of: reviewEnabled) { _, _ in commit() }
+        .onChange(of: myPRsEnabled) { _, _ in commit() }
         .onChange(of: pollIntervalSeconds) { _, _ in commit() }
         .onChange(of: autoLoad) { _, _ in commit() }
     }
 
+    @ViewBuilder
+    private func querySection(title: String, rows: Binding<[QueryRow]>, enabled: Binding<Bool>) -> some View {
+        Section {
+            Toggle("Enabled", isOn: enabled)
+            ForEach(rows) { $row in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        TextField("gh search prs query", text: $row.text)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                        Button(role: .destructive) {
+                            rows.wrappedValue.removeAll { $0.id == row.id }
+                        } label: { Image(systemName: "minus.circle") }
+                        .buttonStyle(.borderless)
+                    }
+                    if !DiscoveryQuery.isScoped(row.text) && !row.text.trimmingCharacters(in: .whitespaces).isEmpty {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            Text("Not scoped to you, an org, or a repo — matches PRs across all of GitHub.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Toggle("Run anyway", isOn: $row.allowUnscoped).toggleStyle(.checkbox)
+                        }
+                    }
+                }
+            }
+            Button {
+                rows.wrappedValue.append(QueryRow(text: "", allowUnscoped: false))
+            } label: { Label("Add query", systemImage: "plus") }
+        } header: {
+            Text(title)
+        }
+    }
+
     private func commit() {
-        let lines = queriesText
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
         var updated = model.settings
-        updated.discoveryQueries = lines
+        updated.reviewRequestQueries = reviewRows
+            .map { DiscoveryQuery(text: $0.text.trimmingCharacters(in: .whitespaces), allowUnscoped: $0.allowUnscoped) }
+            .filter { !$0.text.isEmpty }
+        updated.myPRQueries = myPRRows
+            .map { DiscoveryQuery(text: $0.text.trimmingCharacters(in: .whitespaces), allowUnscoped: $0.allowUnscoped) }
+            .filter { !$0.text.isEmpty }
+        updated.reviewRequestsEnabled = reviewEnabled
+        updated.myPRsEnabled = myPRsEnabled
         updated.pollIntervalSeconds = pollIntervalSeconds
         updated.autoLoad = autoLoad
         Task { await model.updateSettings(updated) }

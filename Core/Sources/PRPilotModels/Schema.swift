@@ -1,3 +1,3 @@
 public enum PRPilotModels {
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
 }
