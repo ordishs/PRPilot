@@ -409,10 +409,12 @@ public final class AppModel {
         let progress: PrepProgress = { [weak self] message in
             await self?.appendPrepLog(message, for: reviewID)
         }
+        let editable = review.category(myLogin: currentLogin) != .reviewRequest
         let ready: WorktreeReady
         do {
             ready = try await worktreeProvider.ensureWorktree(
                 for: review,
+                editable: editable,
                 registeredClonePath: registeredClonePath(for: review),
                 progress: progress
             )
@@ -606,7 +608,7 @@ public final class AppModel {
                 if self.settings.autoLoad {
                     await self.ensureClaudeSession(for: review)
                 } else {
-                    _ = try? await self.worktreeProvider.ensureWorktree(for: review, registeredClonePath: clonePath)
+                    _ = try? await self.worktreeProvider.ensureWorktree(for: review, editable: false, registeredClonePath: clonePath)
                 }
             }
         }

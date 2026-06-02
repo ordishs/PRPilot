@@ -103,7 +103,7 @@ private struct StubWorktreeProvider: WorktreeProviding {
     var result: WorktreeReady = WorktreeReady(clonePath: "/tmp/clone", worktreePath: "/tmp/wt", remoteName: "origin")
     var shouldThrow = false
     var progressLines: [String] = []
-    func ensureWorktree(for review: WorkItem, registeredClonePath: String?, progress: @escaping PrepProgress) async throws -> WorktreeReady {
+    func ensureWorktree(for review: WorkItem, editable: Bool, registeredClonePath: String?, progress: @escaping PrepProgress) async throws -> WorktreeReady {
         for line in progressLines {
             await progress(line)
         }
@@ -590,14 +590,14 @@ private func stubClient() -> GitHubClient {
     final class Box: @unchecked Sendable { var called = false }
     struct Recorder: WorktreeProviding {
         let box: Box
-        func ensureWorktree(for review: WorkItem, registeredClonePath: String?, progress: @escaping PrepProgress) async throws -> WorktreeReady {
+        func ensureWorktree(for review: WorkItem, editable: Bool, registeredClonePath: String?, progress: @escaping PrepProgress) async throws -> WorktreeReady {
             box.called = true
             return WorktreeReady(clonePath: "/c", worktreePath: "/w", remoteName: "origin")
         }
     }
     let box = Box()
     let recorder = Recorder(box: box)
-    _ = try await recorder.ensureWorktree(for: sampleReview(), registeredClonePath: nil)
+    _ = try await recorder.ensureWorktree(for: sampleReview(), editable: false, registeredClonePath: nil)
     #expect(box.called == true)
 }
 
