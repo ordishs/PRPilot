@@ -16,6 +16,29 @@ struct DetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if case .conflicted(let files) = model.rebaseStates[review.id] {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text("Rebase paused — \(files.count) conflict\(files.count == 1 ? "" : "s")")
+                        .font(.callout)
+                    Spacer()
+                    Button("Resolve in Claude") { if !review.disabled { pane = .claude } }
+                    Button("Continue") { Task { await model.continueRebase(id: review.id) } }
+                    Button("Abort") { Task { await model.abortRebase(id: review.id) } }
+                }
+                .padding(8)
+                .background(Color.orange.opacity(0.12))
+            }
+            if case .failed(let message) = model.rebaseStates[review.id] {
+                HStack(spacing: 8) {
+                    Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+                    Text("Rebase failed: \(message)").font(.callout).lineLimit(2)
+                    Spacer()
+                    Button("Dismiss") { Task { await model.abortRebase(id: review.id) } }
+                }
+                .padding(8)
+                .background(Color.red.opacity(0.12))
+            }
             Picker("", selection: $pane) {
                 ForEach(Pane.allCases) { pane in
                     Text(pane.rawValue)
