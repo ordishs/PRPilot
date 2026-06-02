@@ -127,6 +127,51 @@ public struct WorktreeManager: Sendable {
         return true
     }
 
+    public static func branchSlug(_ branch: String) -> String {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-")
+        return String(branch.map { allowed.contains($0) ? $0 : "-" })
+    }
+
+    public func createBranchWorktree(
+        clonePath: String,
+        owner: String,
+        repo: String,
+        branch: String,
+        base: String,
+        remoteName: String = "origin",
+        progress: @escaping @Sendable (String) async -> Void = { _ in }
+    ) async throws -> String {
+        let worktreesDir = managedRoot + "/worktrees"
+        let worktreePath = worktreesDir + "/" + owner + "-" + repo + "-" + WorktreeManager.branchSlug(branch)
+        if FileManager.default.fileExists(atPath: worktreePath) {
+            let listing = try await runGit(["-C", clonePath, "worktree", "list", "--porcelain"])
+            if listing.contains("worktree \(worktreePath)") {
+                await progress("Found existing worktree")
+                return worktreePath
+            }
+            throw WorktreeError.gitFailed(
+                arguments: ["worktree", "validate", worktreePath],
+                exitCode: 1,
+                message: "directory exists but is not a registered git worktree: \(worktreePath). Remove it with: rm -rf '\(worktreePath)'"
+            )
+        }
+        await progress("Pruning stale worktrees…")
+        try await runGit(["-C", clonePath, "worktree", "prune"])
+        await progress("Fetching \(base)…")
+        let baseSha: String
+        if (try? await runGit(["-C", clonePath, "fetch", remoteName, base])) != nil,
+           let fetched = try? await runGit(["-C", clonePath, "rev-parse", "FETCH_HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines),
+           !fetched.isEmpty {
+            baseSha = fetched
+        } else {
+            baseSha = try await runGit(["-C", clonePath, "rev-parse", base]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        try FileManager.default.createDirectory(atPath: worktreesDir, withIntermediateDirectories: true)
+        await progress("Creating branch \(branch)…")
+        try await runGit(["-C", clonePath, "worktree", "add", "-b", branch, worktreePath, baseSha])
+        return worktreePath
+    }
+
     @discardableResult
     private func runGit(_ arguments: [String]) async throws -> String {
         let result = try await runner.run(executable: gitPath, arguments: arguments)
