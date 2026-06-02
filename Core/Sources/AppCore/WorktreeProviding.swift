@@ -42,7 +42,6 @@ public struct WorktreeProvider: WorktreeProviding {
         registeredClonePath: String?,
         progress: @escaping PrepProgress
     ) async throws -> WorktreeReady {
-        guard let number = review.number else { throw WorktreeError.notAPullRequest }
         let remoteURL = "https://github.com/\(review.owner)/\(review.repo).git"
         let clonePath = try await worktreeManager.resolveClone(
             owner: review.owner,
@@ -58,25 +57,30 @@ public struct WorktreeProvider: WorktreeProviding {
             guard let (owner, repo) = GitOriginParser.parse(entry.url) else { return false }
             return "\(owner)/\(repo)".lowercased() == target
         }?.name ?? "origin"
-        let worktreePath: String
+
         if let existing = review.worktreePath, FileManager.default.fileExists(atPath: existing) {
-            worktreePath = existing
-            await progress("Refreshing existing worktree…")
-            _ = try await worktreeManager.refreshWorktree(
-                clonePath: clonePath,
-                worktreePath: existing,
-                number: number,
-                remoteName: remoteName
+            if let number = review.number {
+                await progress("Refreshing existing worktree…")
+                _ = try await worktreeManager.refreshWorktree(
+                    clonePath: clonePath, worktreePath: existing, number: number, remoteName: remoteName
+                )
+            }
+            return WorktreeReady(clonePath: clonePath, worktreePath: existing, remoteName: remoteName)
+        }
+
+        let worktreePath: String
+        if let number = review.number {
+            worktreePath = try await worktreeManager.createWorktree(
+                clonePath: clonePath, owner: review.owner, repo: review.repo,
+                number: number, remoteName: remoteName, progress: progress
+            )
+        } else if let branch = review.headBranch {
+            worktreePath = try await worktreeManager.createBranchWorktree(
+                clonePath: clonePath, owner: review.owner, repo: review.repo,
+                branch: branch, base: review.baseBranch, remoteName: remoteName, progress: progress
             )
         } else {
-            worktreePath = try await worktreeManager.createWorktree(
-                clonePath: clonePath,
-                owner: review.owner,
-                repo: review.repo,
-                number: number,
-                remoteName: remoteName,
-                progress: progress
-            )
+            throw WorktreeError.notAPullRequest
         }
         return WorktreeReady(clonePath: clonePath, worktreePath: worktreePath, remoteName: remoteName)
     }
