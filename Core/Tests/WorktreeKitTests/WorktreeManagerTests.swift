@@ -325,6 +325,43 @@ private actor LineCollector {
     #expect(lines.contains("Found existing clone"))
 }
 
+@Test func branchSlugReplacesNonAlphanumerics() {
+    #expect(WorktreeManager.branchSlug("feat/parallel_v2.1") == "feat-parallel-v2-1")
+}
+
+@Test func createBranchWorktreeCreatesNewBranchOffBase() async throws {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent("bwt-\(UUID().uuidString)", isDirectory: true).path
+    try fileManager.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(atPath: root) }
+
+    let clonePath = root + "/work"
+    try await git(["init", "-b", "main", clonePath])
+    try await git(["-C", clonePath, "config", "user.email", "test@example.com"])
+    try await git(["-C", clonePath, "config", "user.name", "Test User"])
+    try await git(["-C", clonePath, "config", "commit.gpgsign", "false"])
+    try "base\n".write(toFile: clonePath + "/README.md", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "base"])
+
+    let managedRoot = root + "/managed"
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: managedRoot)
+
+    let wt = try await manager.createBranchWorktree(
+        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/spike", base: "main"
+    )
+
+    #expect(FileManager.default.fileExists(atPath: wt))
+    #expect(wt.hasSuffix("/o-r-feat-spike"))
+
+    let listing = try await git(["-C", clonePath, "worktree", "list", "--porcelain"])
+    #expect(listing.contains(wt))
+
+    let head = try await git(["-C", wt, "rev-parse", "--abbrev-ref", "HEAD"])
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    #expect(head == "feat/spike")
+}
+
 @Test func createWorktreeEmitsFetchAndAddProgress() async throws {
     let tempRoot = NSTemporaryDirectory() + "wt-prog-\(UUID().uuidString)"
     defer { try? FileManager.default.removeItem(atPath: tempRoot) }

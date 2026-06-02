@@ -193,8 +193,23 @@ public final class AppModel {
                 try? await store.upsertItem(updated)
             } else {
                 guard let fresh = try? await client.fetchReview(for: hit.ref, origin: .discovered) else { continue }
-                try? await store.upsertItem(fresh)
-                autoLoadIfEnabled(fresh)
+                if let task = reviews.first(where: {
+                    $0.prRef == nil
+                    && $0.repoKey == fresh.repoKey
+                    && $0.headBranch != nil
+                    && $0.headBranch == fresh.headBranch
+                }) {
+                    var graduated = task
+                    graduated.prRef = fresh.prRef
+                    graduated.prState = fresh.prState
+                    graduated.title = fresh.title
+                    graduated.baseBranch = fresh.baseBranch
+                    graduated.origin = .both
+                    try? await store.upsertItem(graduated)
+                } else {
+                    try? await store.upsertItem(fresh)
+                    autoLoadIfEnabled(fresh)
+                }
             }
         }
         reviews = await store.allItems()
@@ -220,6 +235,42 @@ public final class AppModel {
     public func registeredClonePath(for review: WorkItem) -> String? {
         let identity = "github.com/\(review.owner)/\(review.repo)"
         return registeredRepos.first { $0.remoteIdentity == identity }?.localClonePath
+    }
+
+    public func registeredDefaultBase(for repoKey: String) -> String? {
+        registeredRepos.first { $0.remoteIdentity == repoKey }?.defaultBase
+    }
+
+    public func createTask(repoKey: String, branch: String) async {
+        let trimmedBranch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBranch.isEmpty else {
+            errorMessage = "Branch name is required."
+            return
+        }
+        guard registeredRepos.contains(where: { $0.remoteIdentity == repoKey }) else {
+            errorMessage = "Pick a registered repository."
+            return
+        }
+        let base = registeredDefaultBase(for: repoKey) ?? "main"
+        let task = WorkItem(
+            title: trimmedBranch,
+            repoKey: repoKey,
+            baseBranch: base,
+            headBranch: trimmedBranch,
+            prRef: nil,
+            prState: nil,
+            origin: .added,
+            addedAt: Date()
+        )
+        do {
+            try await store.upsertItem(task)
+            reviews = await store.allItems()
+            selection = task.id
+            errorMessage = nil
+            await ensureClaudeSession(for: task)
+        } catch {
+            errorMessage = String(describing: error)
+        }
     }
 
     public func registerClone(for review: WorkItem, localPath: String) async {
