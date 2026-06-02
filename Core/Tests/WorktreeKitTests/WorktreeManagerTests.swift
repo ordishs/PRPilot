@@ -382,3 +382,252 @@ private actor LineCollector {
     #expect(lines.contains("Fetching PR #999…"))
     #expect(lines.contains("Adding worktree…"))
 }
+
+private func makeLocalRepo(root: String, name: String) async throws -> String {
+    let path = root + "/" + name
+    try await git(["init", "-b", "main", path])
+    try await git(["-C", path, "config", "user.email", "test@example.com"])
+    try await git(["-C", path, "config", "user.name", "Test User"])
+    try await git(["-C", path, "config", "commit.gpgsign", "false"])
+    return path
+}
+
+@Test func currentBranchReportsBranchAndNilWhenDetached() async throws {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent("cb-\(UUID().uuidString)", isDirectory: true).path
+    try fileManager.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(atPath: root) }
+
+    let clonePath = try await makeLocalRepo(root: root, name: "clone")
+    try "base\n".write(toFile: clonePath + "/a.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "C0"])
+
+    let managedRoot = root + "/managed"
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: managedRoot)
+
+    let wtA = try await manager.createBranchWorktree(
+        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/x", base: "main"
+    )
+    let branchA = try await manager.currentBranch(worktreePath: wtA)
+    #expect(branchA == "feat/x")
+
+    let pathB = root + "/detached-wt"
+    try await git(["-C", clonePath, "worktree", "add", "--detach", pathB, "HEAD"])
+    let branchB = try await manager.currentBranch(worktreePath: pathB)
+    #expect(branchB == nil)
+}
+
+@Test func rebaseOntoCleanReplaysCommits() async throws {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent("rb-clean-\(UUID().uuidString)", isDirectory: true).path
+    try fileManager.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(atPath: root) }
+
+    let clonePath = try await makeLocalRepo(root: root, name: "clone")
+    try "base\n".write(toFile: clonePath + "/a.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "C0"])
+
+    let managedRoot = root + "/managed"
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: managedRoot)
+
+    let wtFeat = try await manager.createBranchWorktree(
+        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/x", base: "main"
+    )
+
+    try await git(["-C", clonePath, "config", "user.email", "test@example.com"])
+    try await git(["-C", clonePath, "config", "user.name", "Test User"])
+    try await git(["-C", clonePath, "config", "commit.gpgsign", "false"])
+    try "main-advance\n".write(toFile: clonePath + "/b.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "C1"])
+
+    try await git(["-C", wtFeat, "config", "user.email", "test@example.com"])
+    try await git(["-C", wtFeat, "config", "user.name", "Test User"])
+    try await git(["-C", wtFeat, "config", "commit.gpgsign", "false"])
+    try "feat-work\n".write(toFile: wtFeat + "/c.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", wtFeat, "add", "."])
+    try await git(["-C", wtFeat, "commit", "-m", "feat-commit"])
+
+    let outcome = try await manager.rebaseOnto(worktreePath: wtFeat, upstream: "main")
+    #expect(outcome == .clean)
+    #expect(fileManager.fileExists(atPath: wtFeat + "/b.txt"))
+    #expect(fileManager.fileExists(atPath: wtFeat + "/c.txt"))
+}
+
+@Test func rebaseOntoReportsConflictsThenAbortRestores() async throws {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent("rb-conflict-\(UUID().uuidString)", isDirectory: true).path
+    try fileManager.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(atPath: root) }
+
+    let clonePath = try await makeLocalRepo(root: root, name: "clone")
+    try "parent\n".write(toFile: clonePath + "/conflict.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "parent"])
+
+    let managedRoot = root + "/managed"
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: managedRoot)
+
+    let wtFeat = try await manager.createBranchWorktree(
+        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/x", base: "main"
+    )
+
+    try await git(["-C", wtFeat, "config", "user.email", "test@example.com"])
+    try await git(["-C", wtFeat, "config", "user.name", "Test User"])
+    try await git(["-C", wtFeat, "config", "commit.gpgsign", "false"])
+    try "branch\n".write(toFile: wtFeat + "/conflict.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", wtFeat, "add", "."])
+    try await git(["-C", wtFeat, "commit", "-m", "branch-commit"])
+
+    try await git(["-C", clonePath, "config", "user.email", "test@example.com"])
+    try await git(["-C", clonePath, "config", "user.name", "Test User"])
+    try await git(["-C", clonePath, "config", "commit.gpgsign", "false"])
+    try "main\n".write(toFile: clonePath + "/conflict.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "main-commit"])
+
+    let outcome = try await manager.rebaseOnto(worktreePath: wtFeat, upstream: "main")
+    if case .conflicts(let files) = outcome {
+        #expect(files.contains("conflict.txt"))
+    } else {
+        Issue.record("expected .conflicts, got \(outcome)")
+    }
+
+    try await manager.rebaseAbort(worktreePath: wtFeat)
+    let branch = try await manager.currentBranch(worktreePath: wtFeat)
+    #expect(branch == "feat/x")
+    let clean = try await manager.isClean(worktreePath: wtFeat)
+    #expect(clean == true)
+}
+
+@Test func pushToLocalBareRemoteSucceeds() async throws {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent("push-\(UUID().uuidString)", isDirectory: true).path
+    try fileManager.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(atPath: root) }
+
+    let bareDir = root + "/bare.git"
+    try await git(["init", "--bare", "-b", "main", bareDir])
+
+    let clonePath = root + "/clone"
+    try await git(["clone", bareDir, clonePath])
+    try await git(["-C", clonePath, "config", "user.email", "test@example.com"])
+    try await git(["-C", clonePath, "config", "user.name", "Test User"])
+    try await git(["-C", clonePath, "config", "commit.gpgsign", "false"])
+    try "base\n".write(toFile: clonePath + "/a.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "base"])
+    try await git(["-C", clonePath, "push", "origin", "main"])
+
+    let managedRoot = root + "/managed"
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: managedRoot)
+
+    let wtFeat = try await manager.createBranchWorktree(
+        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/x", base: "main"
+    )
+    try await git(["-C", wtFeat, "config", "user.email", "test@example.com"])
+    try await git(["-C", wtFeat, "config", "user.name", "Test User"])
+    try await git(["-C", wtFeat, "config", "commit.gpgsign", "false"])
+    try "feat\n".write(toFile: wtFeat + "/feat.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", wtFeat, "add", "."])
+    try await git(["-C", wtFeat, "commit", "-m", "feat-commit"])
+
+    try await manager.push(worktreePath: wtFeat, remoteName: "origin", branch: "feat/x", force: false)
+
+    let result = try await git(["-C", bareDir, "rev-parse", "feat/x"])
+    #expect(!result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+}
+
+@Test func aheadBehindCountsDivergence() async throws {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent("ab-\(UUID().uuidString)", isDirectory: true).path
+    try fileManager.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(atPath: root) }
+
+    let bareDir = root + "/bare.git"
+    try await git(["init", "--bare", "-b", "main", bareDir])
+
+    let clonePath = root + "/clone"
+    try await git(["clone", bareDir, clonePath])
+    try await git(["-C", clonePath, "config", "user.email", "test@example.com"])
+    try await git(["-C", clonePath, "config", "user.name", "Test User"])
+    try await git(["-C", clonePath, "config", "commit.gpgsign", "false"])
+    try "base\n".write(toFile: clonePath + "/a.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "base"])
+    try await git(["-C", clonePath, "push", "origin", "main"])
+
+    let managedRoot = root + "/managed"
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: managedRoot)
+
+    let wtFeat = try await manager.createBranchWorktree(
+        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/x", base: "main"
+    )
+    try await git(["-C", wtFeat, "config", "user.email", "test@example.com"])
+    try await git(["-C", wtFeat, "config", "user.name", "Test User"])
+    try await git(["-C", wtFeat, "config", "commit.gpgsign", "false"])
+
+    try "feat1\n".write(toFile: wtFeat + "/f1.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", wtFeat, "add", "."])
+    try await git(["-C", wtFeat, "commit", "-m", "feat1"])
+    try "feat2\n".write(toFile: wtFeat + "/f2.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", wtFeat, "add", "."])
+    try await git(["-C", wtFeat, "commit", "-m", "feat2"])
+
+    try await manager.push(worktreePath: wtFeat, remoteName: "origin", branch: "feat/x", force: false)
+
+    let clone2 = root + "/clone2"
+    try await git(["clone", bareDir, clone2])
+    try await git(["-C", clone2, "config", "user.email", "test@example.com"])
+    try await git(["-C", clone2, "config", "user.name", "Test User"])
+    try await git(["-C", clone2, "config", "commit.gpgsign", "false"])
+    try await git(["-C", clone2, "checkout", "feat/x"])
+    try "behind1\n".write(toFile: clone2 + "/behind.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", clone2, "add", "."])
+    try await git(["-C", clone2, "commit", "-m", "behind1"])
+    try await git(["-C", clone2, "push", "origin", "feat/x"])
+
+    try "local3\n".write(toFile: wtFeat + "/f3.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", wtFeat, "add", "."])
+    try await git(["-C", wtFeat, "commit", "-m", "feat3"])
+    try "local4\n".write(toFile: wtFeat + "/f4.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", wtFeat, "add", "."])
+    try await git(["-C", wtFeat, "commit", "-m", "feat4"])
+
+    try await git(["-C", wtFeat, "fetch", "origin", "feat/x"])
+
+    let (ahead, behind) = try await manager.aheadBehind(worktreePath: wtFeat, upstream: "origin/feat/x")
+    #expect(ahead == 2)
+    #expect(behind == 1)
+}
+
+@Test func isCleanReflectsWorktreeState() async throws {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent("clean-\(UUID().uuidString)", isDirectory: true).path
+    try fileManager.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(atPath: root) }
+
+    let clonePath = try await makeLocalRepo(root: root, name: "clone")
+    try "base\n".write(toFile: clonePath + "/a.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "C0"])
+
+    let managedRoot = root + "/managed"
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: managedRoot)
+
+    let wtFeat = try await manager.createBranchWorktree(
+        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/x", base: "main"
+    )
+    try await git(["-C", wtFeat, "config", "user.email", "test@example.com"])
+    try await git(["-C", wtFeat, "config", "user.name", "Test User"])
+    try await git(["-C", wtFeat, "config", "commit.gpgsign", "false"])
+
+    let cleanBefore = try await manager.isClean(worktreePath: wtFeat)
+    #expect(cleanBefore == true)
+
+    try "dirty\n".write(toFile: wtFeat + "/dirty.txt", atomically: true, encoding: .utf8)
+    let cleanAfter = try await manager.isClean(worktreePath: wtFeat)
+    #expect(cleanAfter == false)
+}

@@ -127,6 +127,92 @@ public struct WorktreeManager: Sendable {
         return true
     }
 
+    public func currentBranch(worktreePath: String) async throws -> String? {
+        let result = try await runner.run(
+            executable: gitPath,
+            arguments: ["-C", worktreePath, "symbolic-ref", "--quiet", "--short", "HEAD"]
+        )
+        guard result.exitCode == 0 else { return nil }
+        let name = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    public func isClean(worktreePath: String) async throws -> Bool {
+        let out = try await runGit(["-C", worktreePath, "status", "--porcelain"])
+        return out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    public func checkoutBranchWorktree(
+        clonePath: String, owner: String, repo: String, branch: String,
+        remoteName: String = "origin", progress: @escaping @Sendable (String) async -> Void = { _ in }
+    ) async throws -> String {
+        let worktreesDir = managedRoot + "/worktrees"
+        let worktreePath = worktreesDir + "/" + owner + "-" + repo + "-" + WorktreeManager.branchSlug(branch)
+        if FileManager.default.fileExists(atPath: worktreePath) {
+            let listing = try await runGit(["-C", clonePath, "worktree", "list", "--porcelain"])
+            if listing.contains("worktree \(worktreePath)") {
+                await progress("Found existing worktree")
+                return worktreePath
+            }
+            throw WorktreeError.gitFailed(arguments: ["worktree", "validate", worktreePath], exitCode: 1,
+                message: "directory exists but is not a registered git worktree: \(worktreePath)")
+        }
+        try await runGit(["-C", clonePath, "worktree", "prune"])
+        await progress("Fetching \(branch)…")
+        try await runGit(["-C", clonePath, "fetch", remoteName, branch])
+        try FileManager.default.createDirectory(atPath: worktreesDir, withIntermediateDirectories: true)
+        await progress("Checking out \(branch)…")
+        let exists = (try? await runGit(["-C", clonePath, "rev-parse", "--verify", "--quiet", branch])) != nil
+        if exists {
+            try await runGit(["-C", clonePath, "worktree", "add", worktreePath, branch])
+        } else {
+            try await runGit(["-C", clonePath, "worktree", "add", "--track", "-b", branch, worktreePath, "\(remoteName)/\(branch)"])
+        }
+        return worktreePath
+    }
+
+    public func removeWorktreeForcing(clonePath: String, worktreePath: String) async throws {
+        try await runGit(["-C", clonePath, "worktree", "remove", "--force", worktreePath])
+    }
+
+    public func rebaseOnto(worktreePath: String, upstream: String) async throws -> RebaseOutcome {
+        let result = try await runner.run(executable: gitPath, arguments: ["-C", worktreePath, "-c", "core.editor=true", "rebase", upstream])
+        if result.exitCode == 0 { return .clean }
+        let conflicted = try await conflictedFiles(worktreePath)
+        if !conflicted.isEmpty { return .conflicts(conflicted) }
+        throw WorktreeError.gitFailed(arguments: ["rebase", upstream], exitCode: result.exitCode, message: result.standardError)
+    }
+
+    public func rebaseContinue(worktreePath: String) async throws -> RebaseOutcome {
+        let result = try await runner.run(executable: gitPath, arguments: ["-C", worktreePath, "-c", "core.editor=true", "rebase", "--continue"])
+        if result.exitCode == 0 { return .clean }
+        let conflicted = try await conflictedFiles(worktreePath)
+        if !conflicted.isEmpty { return .conflicts(conflicted) }
+        throw WorktreeError.gitFailed(arguments: ["rebase", "--continue"], exitCode: result.exitCode, message: result.standardError)
+    }
+
+    public func rebaseAbort(worktreePath: String) async throws {
+        try await runGit(["-C", worktreePath, "rebase", "--abort"])
+    }
+
+    private func conflictedFiles(_ worktreePath: String) async throws -> [String] {
+        let out = try await runGit(["-C", worktreePath, "diff", "--name-only", "--diff-filter=U"])
+        return out.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+    }
+
+    public func push(worktreePath: String, remoteName: String, branch: String, force: Bool) async throws {
+        var args = ["-C", worktreePath, "push"]
+        if force { args.append("--force-with-lease") }
+        args += [remoteName, branch]
+        try await runGit(args)
+    }
+
+    public func aheadBehind(worktreePath: String, upstream: String) async throws -> (ahead: Int, behind: Int) {
+        let ahead = try await runGit(["-C", worktreePath, "rev-list", "--count", "\(upstream)..HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let behind = try await runGit(["-C", worktreePath, "rev-list", "--count", "HEAD..\(upstream)"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return (Int(ahead) ?? 0, Int(behind) ?? 0)
+    }
+
     public static func branchSlug(_ branch: String) -> String {
         let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-")
         return String(branch.map { allowed.contains($0) ? $0 : "-" })
