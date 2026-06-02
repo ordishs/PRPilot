@@ -2,28 +2,24 @@ import Testing
 import Foundation
 @testable import PRPilotModels
 
-@Test func reviewIDIsOwnerRepoNumber() {
-    #expect(Review.makeID(owner: "bsv-blockchain", repo: "teranode", number: 944) == "bsv-blockchain/teranode#944")
-}
-
 @Test func reviewRoundTripsThroughCodable() throws {
-    let review = Review(
-        owner: "bsv-blockchain",
-        repo: "teranode",
-        number: 944,
-        url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/944")!,
+    let workItem = WorkItem(
         title: "centrifuge fix",
-        author: "icellan",
-        headBranch: "fix/centrifuge",
+        repoKey: "github.com/bsv-blockchain/teranode",
         baseBranch: "main",
-        origin: .added,
+        headBranch: "fix/centrifuge",
+        prRef: PRRef(
+            owner: "bsv-blockchain", repo: "teranode", number: 944,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/944")!,
+            authorLogin: "icellan"
+        ),
         prState: .open,
+        origin: .added,
         addedAt: Date(timeIntervalSince1970: 1_700_000_000)
     )
-    let data = try JSONEncoder().encode(review)
-    let decoded = try JSONDecoder().decode(Review.self, from: data)
-    #expect(decoded == review)
-    #expect(decoded.id == "bsv-blockchain/teranode#944")
+    let data = try JSONEncoder().encode(workItem)
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: data)
+    #expect(decoded == workItem)
 }
 
 @Test func settingsDefaultHasExpectedValues() {
@@ -41,19 +37,25 @@ import Foundation
 }
 
 @Test func reviewEncodesAndDecodesNewStatusFields() throws {
-    let review = Review(
-        owner: "bsv-blockchain", repo: "teranode", number: 944,
-        url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/944")!,
-        title: "centrifuge fix", author: "icellan",
-        headBranch: "fix/centrifuge", baseBranch: "main",
-        origin: .added, prState: .open,
+    let workItem = WorkItem(
+        title: "centrifuge fix",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        headBranch: "fix/centrifuge",
+        prRef: PRRef(
+            owner: "bsv-blockchain", repo: "teranode", number: 944,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/944")!,
+            authorLogin: "icellan"
+        ),
+        prState: .open,
+        origin: .added,
         addedAt: Date(timeIntervalSince1970: 1_700_000_000),
         claudeReviewedAt: Date(timeIntervalSince1970: 1_700_000_500),
         approvedByMe: true
     )
-    let data = try JSONEncoder().encode(review)
-    let decoded = try JSONDecoder().decode(Review.self, from: data)
-    #expect(decoded == review)
+    let data = try JSONEncoder().encode(workItem)
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: data)
+    #expect(decoded == workItem)
     #expect(decoded.claudeReviewedAt == Date(timeIntervalSince1970: 1_700_000_500))
     #expect(decoded.approvedByMe == true)
 }
@@ -70,7 +72,7 @@ import Foundation
       "addedAt": 631152000, "disabled": false, "viewedFiles": []
     }
     """
-    let decoded = try JSONDecoder().decode(Review.self, from: Data(legacy.utf8))
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: Data(legacy.utf8))
     #expect(decoded.claudeReviewedAt == nil)
     #expect(decoded.approvedByMe == false)
 }

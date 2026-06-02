@@ -7,12 +7,19 @@ private func review(
     lastOpenedAt: Date? = nil,
     claudeReviewedAt: Date? = nil,
     approvedByMe: Bool = false
-) -> Review {
-    Review(
-        owner: "o", repo: "r", number: 1,
-        url: URL(string: "https://github.com/o/r/pull/1")!,
-        title: "t", author: "a", headBranch: "h", baseBranch: "main",
-        origin: .added, prState: prState,
+) -> WorkItem {
+    WorkItem(
+        title: "t",
+        repoKey: "github.com/o/r",
+        baseBranch: "main",
+        headBranch: "h",
+        prRef: PRRef(
+            owner: "o", repo: "r", number: 1,
+            url: URL(string: "https://github.com/o/r/pull/1")!,
+            authorLogin: "a"
+        ),
+        prState: prState,
+        origin: .added,
         addedAt: Date(timeIntervalSince1970: 0),
         lastOpenedAt: lastOpenedAt,
         claudeReviewedAt: claudeReviewedAt,
