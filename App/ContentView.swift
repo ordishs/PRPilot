@@ -104,6 +104,18 @@ struct ContentView: View {
                 Text("\(review.owner)/\(review.repo) · \(review.author ?? "")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let status = model.prStatuses[review.id] {
+                    HStack(spacing: 4) {
+                        switch status.ci {
+                        case .passing: StateBadge(text: "✓ CI", color: .green)
+                        case .failing: StateBadge(text: "✗ CI", color: .red)
+                        case .pending: StateBadge(text: "◷ CI", color: .orange)
+                        case .none: EmptyView()
+                        }
+                        if status.isBehind { StateBadge(text: "behind", color: .orange) }
+                        if status.readiness == .changesRequested { StateBadge(text: "changes", color: .red) }
+                    }
+                }
                 Text(relativeDateLabel(for: review.addedAt))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)

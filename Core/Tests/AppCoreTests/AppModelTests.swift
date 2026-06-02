@@ -1354,9 +1354,13 @@ private let prFetchJSON = """
     let reviewsJSON = """
     {"state":"OPEN","isDraft":false,"reviews":[{"author":{"login":"ordishs"},"state":"APPROVED"}]}
     """
+    let prStatusJSON = """
+    {"statusCheckRollup":[],"mergeStateStatus":"CLEAN","isDraft":false,"reviewDecision":"APPROVED"}
+    """
     let client = GitHubClient(runner: StubRunner(results: [
         CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
-        CommandResult(exitCode: 0, standardOutput: reviewsJSON, standardError: "")
+        CommandResult(exitCode: 0, standardOutput: reviewsJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: prStatusJSON, standardError: "")
     ]), ghPath: "gh")
     let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
     await model.load()
@@ -1577,6 +1581,30 @@ private let taskFetchJSON = """
     #expect(g.prRef?.number == 5)
     #expect(g.origin == .both)
     #expect(g.headBranch == "feat/x")
+}
+
+@Test @MainActor func refreshPopulatesPRStatus() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    try await store.upsertItem(sampleReview())
+    let reviewStateJSON = """
+    {"state":"OPEN","isDraft":false,"reviews":[]}
+    """
+    let prStatusJSON = """
+    {"statusCheckRollup":[{"status":"COMPLETED","conclusion":"FAILURE"}],"mergeStateStatus":"BEHIND","isDraft":false,"reviewDecision":null}
+    """
+    let client = GitHubClient(runner: StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: reviewStateJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: prStatusJSON, standardError: "")
+    ]), ghPath: "gh")
+    let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.refreshReviewState(for: sampleReviewID)
+
+    #expect(model.prStatuses[sampleReviewID]?.ci == .failing)
+    #expect(model.prStatuses[sampleReviewID]?.isBehind == true)
 }
 
 @Test @MainActor func discoverSkipsCappedResultsAndWarns() async throws {

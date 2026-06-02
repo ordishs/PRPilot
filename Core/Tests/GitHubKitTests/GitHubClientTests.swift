@@ -356,3 +356,35 @@ private let sampleSearchJSONWithMalformedRepo = """
         try await client.fetchReviewState(for: ref, login: "ordishs")
     }
 }
+
+@Test func fetchPRStatusParsesChecksBehindAndDecision() async throws {
+    let json = """
+    {
+      "statusCheckRollup": [
+        {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},
+        {"__typename":"StatusContext","state":"PENDING"}
+      ],
+      "mergeStateStatus": "BEHIND",
+      "isDraft": false,
+      "reviewDecision": "CHANGES_REQUESTED"
+    }
+    """
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "/usr/bin/gh")
+    let status = try await client.fetchPRStatus(for: PRLocator(owner: "o", repo: "r", number: 1))
+    #expect(status.ci == .pending)
+    #expect(status.isBehind == true)
+    #expect(status.readiness == .changesRequested)
+}
+
+@Test func fetchPRStatusHandlesNullRollupAndCleanMerge() async throws {
+    let json = """
+    { "statusCheckRollup": null, "mergeStateStatus": "CLEAN", "isDraft": true, "reviewDecision": null }
+    """
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "/usr/bin/gh")
+    let status = try await client.fetchPRStatus(for: PRLocator(owner: "o", repo: "r", number: 1))
+    #expect(status.ci == .none)
+    #expect(status.isBehind == false)
+    #expect(status.readiness == .draft)
+}

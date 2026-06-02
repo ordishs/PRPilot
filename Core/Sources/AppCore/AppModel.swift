@@ -27,6 +27,7 @@ public final class AppModel {
     public private(set) var claudePaneState: [String: ClaudePaneState] = [:]
     public private(set) var claudePrepLog: [String: [PrepLogEntry]] = [:]
     public private(set) var claudeStatuses: [String: ClaudeStatus] = [:]
+    public private(set) var prStatuses: [String: PRStatus] = [:]
     public private(set) var currentLogin: String?
     public private(set) var settings: Settings = .default
     public private(set) var discoveryWarnings: [String] = []
@@ -554,6 +555,7 @@ public final class AppModel {
         transcriptWatchers[id]?.stop()
         transcriptWatchers.removeValue(forKey: id)
         claudeStatuses.removeValue(forKey: id)
+        prStatuses.removeValue(forKey: id)
         lastEventAt.removeValue(forKey: id)
         lastVerdictSnippet.removeValue(forKey: id)
         notifiedIdleForSession.remove(id)
@@ -570,6 +572,7 @@ public final class AppModel {
         claudePaneState.removeAll()
         transcriptWatchers.removeAll()
         claudeStatuses.removeAll()
+        prStatuses.removeAll()
         lastEventAt.removeAll()
         lastVerdictSnippet.removeAll()
         notifiedIdleForSession.removeAll()
@@ -672,19 +675,25 @@ public final class AppModel {
     func refreshReviewState(for id: String) async {
         guard let login = currentLogin,
               let review = reviews.first(where: { $0.id == id }),
-              review.prState != .merged, review.prState != .closed else { return }
-        guard let r = review.prRef else { return }
+              review.prState != .merged, review.prState != .closed,
+              let r = review.prRef else { return }
         let ref = PRLocator(owner: r.owner, repo: r.repo, number: r.number)
-        guard let state = try? await client.fetchReviewState(for: ref, login: login) else { return }
-        guard var current = reviews.first(where: { $0.id == id }),
-              current.approvedByMe != state.approvedByMe || current.prState != state.prState else { return }
-        current.approvedByMe = state.approvedByMe
-        current.prState = state.prState
-        do {
-            try await store.upsertItem(current)
-            reviews = await store.allItems()
-        } catch {
-            errorMessage = String(describing: error)
+
+        if let state = try? await client.fetchReviewState(for: ref, login: login),
+           var current = reviews.first(where: { $0.id == id }),
+           current.approvedByMe != state.approvedByMe || current.prState != state.prState {
+            current.approvedByMe = state.approvedByMe
+            current.prState = state.prState
+            do {
+                try await store.upsertItem(current)
+                reviews = await store.allItems()
+            } catch {
+                errorMessage = String(describing: error)
+            }
+        }
+
+        if let status = try? await client.fetchPRStatus(for: ref) {
+            prStatuses[id] = status
         }
     }
 
