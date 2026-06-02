@@ -53,6 +53,7 @@ else; a "task" is one with no PR yet.
 | 7 | PR linking | **Automatic by `repoKey` + `headBranch`**, manual fallback | Zero-friction graduation; repo-scoped to avoid collisions |
 | 8 | Rebase vs push | **Separate actions**; rebase is local-only | Avoid kicking off long CI on every rebase |
 | 9 | Type rename | `Review` → `WorkItem` across packages | A pre-PR task is not a "review"; name should not lie |
+| 10 | Discovery hardening | **Warn + skip unscoped queries, explicit per-line override**; structured queries; 100-cap circuit-breaker | An unscoped line silently firehosed 100 global PRs; guard at input *and* execution |
 
 ## Data model
 
@@ -144,6 +145,60 @@ Independently enable/disable-able, each polled on its own:
 
 All results merge into one set **deduped by `prRef`**, then categorised by author. Query-
 set provenance is *not* stored — author alone decides the category.
+
+Each query is a structured value rather than a bare string, so a line can carry the
+override flag the hardening needs:
+
+```
+DiscoveryQuery
+  text         String   the gh search prs query line
+  allowUnscoped Bool     user override: run even if it has no scope qualifier (default false)
+```
+
+Settings holds two ordered lists of these (`reviewRequestQueries`, `myPRQueries`),
+each with its own enabled flag. Migration: the existing `[String] discoveryQueries`
+becomes `reviewRequestQueries`; `myPRQueries` starts with the single default
+`author:@me is:open`.
+
+## Discovery hardening
+
+**Problem this fixes:** the app runs any query verbatim, so an *unscoped* line — one with
+no qualifier tying results to the user, an org, or a repo (e.g. bare `is:open` or
+`is:pr`) — silently returns the 100 most recent open PRs across all of GitHub. This is
+what flooded the sidebar with ~75 strangers' PRs during discovery experimentation.
+
+**Scope check (pure, shared, testable):**
+
+```
+queryIsScoped(text) -> Bool
+  scoped if text contains at least one relevance-bounding qualifier:
+    author: | review-requested: | assignee: | mentions: | involves: | commenter:
+      (any @me or login)
+    user: | org: | repo:
+  unscoped otherwise (only is: / archived: / draft: / labels / dates / language / free text)
+```
+
+(The check tests for the *presence* of a bound, not identity — `author:someone-else` is
+still scoped, just to that person, so it can't firehose.)
+
+**Two enforcement layers + a circuit-breaker** (per decision #10, "warn + skip with
+explicit override"):
+
+1. **Settings (input):** an unscoped line is flagged inline with a warning ("not scoped
+   to you, an org, or a repo — would match PRs across all of GitHub") and a per-line
+   **"run anyway"** toggle (sets `allowUnscoped`). Until toggled, the line is marked
+   won't-run.
+2. **Execution (defense-in-depth):** `discoverNow` re-checks every query with
+   `queryIsScoped` before running it (because `store.json` can be hand-edited). An
+   unscoped line without `allowUnscoped` is **skipped, not run**, and a non-fatal
+   warning is surfaced (banner / discovery status), naming the offending line.
+3. **Circuit-breaker (scoped-but-huge):** if a single query returns at/near the 100
+   result cap, the flood is **not** auto-merged. Discovery surfaces "query returned
+   100+ results — likely too broad" and requires confirmation before adding, catching
+   technically-scoped-but-enormous queries (e.g. a whole busy org).
+
+The check is intentionally conservative: it only blocks lines that *cannot* be
+relevance-bounded. A user who genuinely wants a broad query flips "run anyway."
 
 ### Linking (task → My PR), automatic
 
@@ -245,7 +300,7 @@ Front-loads the risky model change; each step is independently usable.
 | Step | Delivers | Usable at end? |
 |---|---|---|
 | **B1 · Model unify + migration** | `Review`→`WorkItem`, UUID identity, `prRef`, derived category, two-section nav | Existing items keep working under the new model |
-| **B2 · My PRs discovery** | Second query group, author categorisation, My-PR worktree-on-branch, auto-linking | My PRs appear and are managed |
+| **B2 · My PRs discovery + hardening** | Structured two-group queries, author categorisation, My-PR worktree-on-branch, auto-linking, **scope check + warn/skip/override + 100-cap circuit-breaker** | My PRs appear and are managed; unscoped queries can't firehose |
 | **B3 · New task** | Minimal eager-Claude creation flow | Start work before a PR exists |
 | **B4 · Status enrichment** | CI / behind / ready chips; local status for tasks | PR health at a glance |
 | **B5 · Rebase + Push** | Context actions + conflict flow | Keep owned branches current on demand |
@@ -266,6 +321,10 @@ Following the existing package-centric approach:
   "nothing to push" disabled state.
 - **`GitHubKit`** — injected runner with canned `--json` for `statusCheckRollup`,
   `mergeStateStatus`, `isDraft`/`reviewDecision`; two query groups; dedup by `prRef`.
+- **`queryIsScoped`** — pure function, table-driven: scoped vs unscoped lines (each
+  qualifier variant with `@me` and with a login; bare `is:open`/`is:pr`/labels/dates →
+  unscoped). Execution-layer test: an unscoped line without `allowUnscoped` is skipped
+  and warned, with `allowUnscoped` it runs; circuit-breaker fires at the 100-cap.
 - **UI** stays thin → minimal; real `gh`/`git` covered by the manual E2E checklist.
 
 ## Open questions / risks
@@ -282,10 +341,12 @@ Following the existing package-centric approach:
 - **Auto-link mis-match** — mitigated by matching within `repoKey` only; manual "Link
   PR…" is the escape hatch.
 
-## Related follow-up (out of scope here)
+## Firehose incident — root cause (now addressed in-scope)
 
-The earlier `author:ordishs` discovery query returned a global firehose of *other
-people's* PRs rather than the user's own — the stored data showed 75 discovered items,
-only 2 actually authored by the user. This is a genuine bug in how the query string is
-tokenised/passed to `gh search prs`, separate from this design, and warrants its own
-root-cause investigation.
+The discovery firehose that pulled ~75 strangers' PRs was **not** the `author:ordishs`
+line (verified against the live `gh`: that line returns exactly the user's 2 PRs). The
+cause was a *different*, under-constrained experimental line — a bare `is:open`/`is:pr`
+with no scope qualifier — which `gh search prs` answers with the 100 most recent open
+PRs across all of GitHub. The query syntax and the app's tokenisation are both fine; the
+defect was the **absence of any guardrail** around an unscoped query. This is fixed by
+the Discovery hardening section above (decision #10), landed in build step B2.
