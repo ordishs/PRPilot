@@ -3,13 +3,20 @@ import Foundation
 import PRPilotModels
 @testable import ClaudeSessionKit
 
-private func sampleReview() -> Review {
-    Review(
-        owner: "bsv-blockchain", repo: "teranode", number: 944,
-        url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/944")!,
-        title: "fix", author: "icellan",
-        headBranch: "fix", baseBranch: "main",
-        origin: .added, prState: .open, addedAt: Date()
+private func sampleReview() -> WorkItem {
+    WorkItem(
+        title: "fix",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        headBranch: "fix",
+        prRef: PRRef(
+            owner: "bsv-blockchain", repo: "teranode", number: 944,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/944")!,
+            authorLogin: "icellan"
+        ),
+        prState: .open,
+        origin: .added,
+        addedAt: Date()
     )
 }
 
@@ -49,4 +56,19 @@ private func sampleReview() -> Review {
     }
     #expect(!spec.arguments.contains("--session-id"))
     #expect(!spec.arguments.contains { $0.hasPrefix("/review ") })
+}
+
+@Test func buildOmitsReviewCommandWhenNoPR() {
+    let item = WorkItem(
+        title: "spike", repoKey: "github.com/o/r", baseBranch: "main",
+        headBranch: "feat/spike", prRef: nil, prState: nil,
+        origin: .added, addedAt: Date(timeIntervalSince1970: 0)
+    )
+    let spec = ClaudeLaunchBuilder.build(
+        settings: .default, review: item, worktreePath: "/tmp/wt",
+        resolvedClaudePath: "/usr/bin/claude", sessionID: "sid", resume: false
+    )
+    #expect(!spec.arguments.contains { $0.hasPrefix("/review ") })
+    #expect(spec.arguments.contains("--session-id"))
+    #expect(spec.arguments.contains("sid"))
 }
