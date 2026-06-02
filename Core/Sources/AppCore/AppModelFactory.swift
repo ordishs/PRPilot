@@ -31,6 +31,7 @@ public enum AppModelFactory {
             diffLoader: diffLoader,
             worktreeProvider: worktreeProvider,
             cloneRegistrar: cloneRegistrar,
+            worktreeOps: worktreeManager,
             claudePath: claudePath,
             notificationPoster: notificationPoster
         )
