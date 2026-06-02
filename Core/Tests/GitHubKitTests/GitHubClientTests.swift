@@ -78,22 +78,22 @@ private let samplePRJSONWithClosingIssue = """
 @Test func fetchReviewMapsJSONToReview() async throws {
     let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: samplePRJSON, standardError: ""))
     let client = GitHubClient(runner: runner, ghPath: "/opt/homebrew/bin/gh")
-    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 944)
+    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 944)
     let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
 
     let review = try await client.fetchReview(for: ref, origin: .added, now: fixedDate)
 
-    #expect(review.id == "bsv-blockchain/teranode#944")
-    #expect(review.owner == "bsv-blockchain")
-    #expect(review.repo == "teranode")
-    #expect(review.number == 944)
-    #expect(review.title == "fix(asset/centrifuge): speak bidirectional Centrifuge protocol")
-    #expect(review.author == "icellan")
+    #expect(review.repoKey == "github.com/bsv-blockchain/teranode")
+    #expect(review.prRef?.owner == "bsv-blockchain")
+    #expect(review.prRef?.repo == "teranode")
+    #expect(review.prRef?.number == 944)
+    #expect(review.prRef?.authorLogin == "icellan")
     #expect(review.headBranch == "fix/centrifuge-bidirectional")
     #expect(review.baseBranch == "main")
-    #expect(review.url.absoluteString == "https://github.com/bsv-blockchain/teranode/pull/944")
-    #expect(review.prState == .open)
+    #expect(review.prRef?.url.absoluteString == "https://github.com/bsv-blockchain/teranode/pull/944")
     #expect(review.origin == .added)
+    #expect(review.title == "fix(asset/centrifuge): speak bidirectional Centrifuge protocol")
+    #expect(review.prState == .open)
     #expect(review.addedAt == fixedDate)
     #expect(review.closingIssueNumber == nil)
 
@@ -106,7 +106,7 @@ private let samplePRJSONWithClosingIssue = """
 @Test func fetchReviewThrowsOnNonZeroExit() async {
     let runner = RecordingRunner(result: CommandResult(exitCode: 1, standardOutput: "", standardError: "no pull requests found"))
     let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 999)
+    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 999)
 
     await #expect(throws: GitHubError.self) {
         try await client.fetchReview(for: ref)
@@ -125,7 +125,7 @@ private let samplePRJSONWithClosingIssue = """
 @Test func fetchReviewThrowsOnBadJSON() async {
     let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: "{}", standardError: ""))
     let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 944)
+    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 944)
 
     await #expect(throws: GitHubError.self) {
         try await client.fetchReview(for: ref)
@@ -135,7 +135,7 @@ private let samplePRJSONWithClosingIssue = """
 @Test func fetchReviewPopulatesClosingIssueNumber() async throws {
     let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: samplePRJSONWithClosingIssue, standardError: ""))
     let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 944)
+    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 944)
 
     let review = try await client.fetchReview(for: ref)
 
@@ -148,11 +148,11 @@ private let samplePRJSONWithClosingIssue = """
         CommandResult(exitCode: 0, standardOutput: samplePRJSON, standardError: ""),
     ])
     let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 944)
+    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 944)
 
     let review = try await client.fetchReview(for: ref)
 
-    #expect(review.number == 944)
+    #expect(review.prRef?.number == 944)
     #expect(review.closingIssueNumber == nil)
 
     let calls = await runner.allArguments
@@ -166,7 +166,7 @@ private let samplePRJSONWithClosingIssue = """
         CommandResult(exitCode: 1, standardOutput: "", standardError: "no pull requests found"),
     ])
     let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 944)
+    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 944)
 
     await #expect(throws: GitHubError.self) {
         try await client.fetchReview(for: ref)
@@ -314,7 +314,7 @@ private let sampleSearchJSONWithMalformedRepo = """
     """
     let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
     let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 944)
+    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 944)
     let state = try await client.fetchReviewState(for: ref, login: "ordishs")
     #expect(state.approvedByMe == true)
     #expect(state.prState == .open)
@@ -329,7 +329,7 @@ private let sampleSearchJSONWithMalformedRepo = """
     """
     let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
     let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 944)
+    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 944)
     let state = try await client.fetchReviewState(for: ref, login: "ordishs")
     #expect(state.approvedByMe == false)
 }
@@ -342,7 +342,7 @@ private let sampleSearchJSONWithMalformedRepo = """
     """
     let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
     let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 944)
+    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 944)
     let state = try await client.fetchReviewState(for: ref, login: "ordishs")
     #expect(state.approvedByMe == false)
     #expect(state.prState == .merged)
@@ -351,7 +351,7 @@ private let sampleSearchJSONWithMalformedRepo = """
 @Test func fetchReviewStateThrowsOnNonZeroExit() async {
     let runner = RecordingRunner(result: CommandResult(exitCode: 1, standardOutput: "", standardError: "no pull requests found"))
     let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRRef(owner: "bsv-blockchain", repo: "teranode", number: 999)
+    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 999)
     await #expect(throws: GitHubError.self) {
         try await client.fetchReviewState(for: ref, login: "ordishs")
     }

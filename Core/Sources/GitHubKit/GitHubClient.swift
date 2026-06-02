@@ -11,7 +11,7 @@ public struct GitHubClient: Sendable {
         self.ghPath = ghPath
     }
 
-    public func fetchReview(for ref: PRRef, origin: ReviewOrigin = .added, now: Date = Date()) async throws -> Review {
+    public func fetchReview(for ref: PRLocator, origin: ReviewOrigin = .added, now: Date = Date()) async throws -> WorkItem {
         let coreFields = "number,title,url,state,isDraft,author,headRefName,baseRefName"
         var result = try await runner.run(
             executable: ghPath,
@@ -38,23 +38,26 @@ public struct GitHubClient: Sendable {
             throw GitHubError.decodingFailed("invalid url: \(pullRequest.url)")
         }
         let closingIssueNumber = pullRequest.closingIssuesReferences.first?.number
-        return Review(
-            owner: ref.owner,
-            repo: ref.repo,
-            number: pullRequest.number,
-            url: url,
+        return WorkItem(
             title: pullRequest.title,
-            author: pullRequest.author.login,
-            headBranch: pullRequest.headRefName,
+            repoKey: "github.com/\(ref.owner)/\(ref.repo)",
             baseBranch: pullRequest.baseRefName,
-            origin: origin,
+            headBranch: pullRequest.headRefName,
+            prRef: PRRef(
+                owner: ref.owner,
+                repo: ref.repo,
+                number: pullRequest.number,
+                url: url,
+                authorLogin: pullRequest.author.login
+            ),
             prState: GitHubClient.mapState(state: pullRequest.state, isDraft: pullRequest.isDraft),
-            addedAt: now,
-            closingIssueNumber: closingIssueNumber
+            origin: origin,
+            closingIssueNumber: closingIssueNumber,
+            addedAt: now
         )
     }
 
-    private func prViewArguments(ref: PRRef, fields: String) -> [String] {
+    private func prViewArguments(ref: PRLocator, fields: String) -> [String] {
         ["pr", "view", String(ref.number), "--repo", "\(ref.owner)/\(ref.repo)", "--json", fields]
     }
 
@@ -92,7 +95,7 @@ public struct GitHubClient: Sendable {
         return login
     }
 
-    public func fetchReviewState(for ref: PRRef, login: String) async throws -> ReviewState {
+    public func fetchReviewState(for ref: PRLocator, login: String) async throws -> ReviewState {
         let result = try await runner.run(
             executable: ghPath,
             arguments: prViewArguments(ref: ref, fields: "state,isDraft,reviews")
@@ -128,7 +131,7 @@ public struct DiscoveryHit: Sendable, Equatable {
     public let isDraft: Bool
 
     public var id: String { "\(owner)/\(repo)#\(number)" }
-    public var ref: PRRef { PRRef(owner: owner, repo: repo, number: number) }
+    public var ref: PRLocator { PRLocator(owner: owner, repo: repo, number: number) }
 
     public init(owner: String, repo: String, number: Int, title: String, url: String, authorLogin: String, state: String, isDraft: Bool) {
         self.owner = owner
