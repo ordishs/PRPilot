@@ -107,6 +107,10 @@ public struct WorktreeManager: Sendable {
         number: Int,
         remoteName: String = "origin"
     ) async throws -> Bool {
+        // Editable (branch-based) worktrees may hold unpushed local commits — never hard-reset them.
+        if (try? await currentBranch(worktreePath: worktreePath)) ?? nil != nil {
+            return false
+        }
         try await runGit(["-C", clonePath, "fetch", remoteName, "refs/pull/\(number)/head"])
         let fetchHead = try await runGit(["-C", clonePath, "rev-parse", "FETCH_HEAD"])
             .trimmingCharacters(in: .whitespacesAndNewlines)

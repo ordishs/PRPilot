@@ -201,6 +201,7 @@ private func makeFixture(prNumber: Int) async throws -> GitFixture {
 
 @Test func refreshWorktreeReturnsFalseWhenHeadsMatch() async throws {
     let runner = QueuedStubRunner(scriptedResponses: [
+        CommandResult(exitCode: 1, standardOutput: "", standardError: ""),   // symbolic-ref → detached
         CommandResult(exitCode: 0, standardOutput: "", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: "abc123\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: "", standardError: ""),
@@ -220,6 +221,7 @@ private func makeFixture(prNumber: Int) async throws -> GitFixture {
 
 @Test func refreshWorktreeResetsHeadWhenChanged() async throws {
     let runner = QueuedStubRunner(scriptedResponses: [
+        CommandResult(exitCode: 1, standardOutput: "", standardError: ""),   // symbolic-ref → detached
         CommandResult(exitCode: 0, standardOutput: "", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: "new789\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: "", standardError: ""),
@@ -242,6 +244,7 @@ private func makeFixture(prNumber: Int) async throws -> GitFixture {
 
 @Test func refreshWorktreeRefusesToClobberDirtyWorktree() async throws {
     let runner = QueuedStubRunner(scriptedResponses: [
+        CommandResult(exitCode: 1, standardOutput: "", standardError: ""),   // symbolic-ref → detached
         CommandResult(exitCode: 0, standardOutput: "", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: "new789\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: " M file.txt\n", standardError: ""),
@@ -601,6 +604,81 @@ private func makeLocalRepo(root: String, name: String) async throws -> String {
     let (ahead, behind) = try await manager.aheadBehind(worktreePath: wtFeat, upstream: "origin/feat/x")
     #expect(ahead == 2)
     #expect(behind == 1)
+}
+
+@Test func refreshWorktreeSkipsBranchWorktrees() async throws {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent("rw-skip-\(UUID().uuidString)", isDirectory: true).path
+    try fileManager.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(atPath: root) }
+
+    let clonePath = try await makeLocalRepo(root: root, name: "clone")
+    try "base\n".write(toFile: clonePath + "/a.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "C0"])
+
+    let managedRoot = root + "/managed"
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: managedRoot)
+
+    let wt = try await manager.createBranchWorktree(
+        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/x", base: "main"
+    )
+    try await git(["-C", wt, "config", "user.email", "test@example.com"])
+    try await git(["-C", wt, "config", "user.name", "Test User"])
+    try await git(["-C", wt, "config", "commit.gpgsign", "false"])
+    try "local\n".write(toFile: wt + "/local.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", wt, "add", "."])
+    try await git(["-C", wt, "commit", "-m", "local-only"])
+
+    let beforeSha = try await git(["-C", wt, "rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+    let result = try await manager.refreshWorktree(
+        clonePath: clonePath, worktreePath: wt, number: 9999, remoteName: "origin"
+    )
+
+    let afterSha = try await git(["-C", wt, "rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+    #expect(result == false)
+    #expect(afterSha == beforeSha)
+}
+
+@Test func checkoutBranchWorktreeChecksOutExistingRemoteBranch() async throws {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent("cbw-\(UUID().uuidString)", isDirectory: true).path
+    try fileManager.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(atPath: root) }
+
+    let bareDir = root + "/bare.git"
+    try await git(["init", "--bare", "-b", "main", bareDir])
+
+    let clonePath = root + "/clone"
+    try await git(["clone", bareDir, clonePath])
+    try await git(["-C", clonePath, "config", "user.email", "test@example.com"])
+    try await git(["-C", clonePath, "config", "user.name", "Test User"])
+    try await git(["-C", clonePath, "config", "commit.gpgsign", "false"])
+    try "base\n".write(toFile: clonePath + "/README.md", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "base"])
+    try await git(["-C", clonePath, "push", "origin", "main"])
+
+    try await git(["-C", clonePath, "checkout", "-b", "feat/y"])
+    try "feat-y\n".write(toFile: clonePath + "/feat-y.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "feat-y-commit"])
+    try await git(["-C", clonePath, "push", "origin", "feat/y"])
+    try await git(["-C", clonePath, "checkout", "main"])
+    try await git(["-C", clonePath, "branch", "-D", "feat/y"])
+
+    let managedRoot = root + "/managed"
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: managedRoot)
+
+    let wt = try await manager.checkoutBranchWorktree(
+        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/y", remoteName: "origin"
+    )
+
+    #expect(wt.hasSuffix("/o-r-feat-y"))
+    let branch = try await manager.currentBranch(worktreePath: wt)
+    #expect(branch == "feat/y")
+    #expect(fileManager.fileExists(atPath: wt + "/feat-y.txt"))
 }
 
 @Test func isCleanReflectsWorktreeState() async throws {
