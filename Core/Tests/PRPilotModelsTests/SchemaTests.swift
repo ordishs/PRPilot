@@ -49,9 +49,9 @@ import Foundation
     #expect(decoded.disabled == true)
 }
 
-@Test func settingsDefaultsSidebarGroupingToByDate() throws {
+@Test func settingsDefaultsSidebarGroupingToByCategory() throws {
     let s = Settings.default
-    #expect(s.sidebarGrouping == .byDate)
+    #expect(s.sidebarGrouping == .byCategory)
 }
 
 @Test func settingsDecodesPersistedSettingsWithoutSidebarGrouping() throws {

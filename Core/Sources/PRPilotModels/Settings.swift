@@ -79,7 +79,7 @@ public struct Settings: Codable, Sendable, Equatable {
         notificationsEnabled: true,
         diffMode: .unified,
         diffIgnoreWhitespace: false,
-        sidebarGrouping: .byDate
+        sidebarGrouping: .byCategory
     )
 
     public static func defaultManagedRoot() -> String {
