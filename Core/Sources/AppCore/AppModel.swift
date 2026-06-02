@@ -17,7 +17,7 @@ public enum ClaudePaneState: Sendable, Equatable {
 @MainActor
 @Observable
 public final class AppModel {
-    public private(set) var reviews: [Review] = []
+    public private(set) var reviews: [WorkItem] = []
     public var selection: String?
     public private(set) var errorMessage: String?
     public private(set) var isAdding = false
@@ -31,7 +31,7 @@ public final class AppModel {
     public private(set) var settings: Settings = .default
     public var diffMode: DiffMode { settings.diffMode }
 
-    public var webPreloadHandler: ((Review) -> Void)?
+    public var webPreloadHandler: ((WorkItem) -> Void)?
 
     private var transcriptWatchers: [String: TranscriptWatcher] = [:]
     private var claudePreparing: Set<String> = []
@@ -76,7 +76,7 @@ public final class AppModel {
     }
 
     public func load() async {
-        reviews = await store.allReviews()
+        reviews = await store.allItems()
         registeredRepos = await store.allRepos()
         settings = await store.settings()
         if currentLogin == nil {
@@ -141,56 +141,54 @@ public final class AppModel {
     }
 
     private func pruneStaleDiscoveredReviews(currentHitIDs: Set<String>) async {
-        let staleIDs = reviews.compactMap { review -> String? in
-            guard review.origin == .discovered else { return nil }
-            guard review.prState == .closed || review.prState == .merged else { return nil }
-            guard !currentHitIDs.contains(review.id) else { return nil }
-            return review.id
+        let staleIDs = reviews.compactMap { item -> String? in
+            guard item.origin == .discovered else { return nil }
+            guard item.prState == .closed || item.prState == .merged else { return nil }
+            guard let key = prKey(item), !currentHitIDs.contains(key) else { return nil }
+            return item.id
         }
         for id in staleIDs {
-            do {
-                try await store.removeReview(id: id)
-            } catch {
-                continue
-            }
+            do { try await store.removeItem(id: id) } catch { continue }
         }
         if !staleIDs.isEmpty {
-            reviews = await store.allReviews()
+            reviews = await store.allItems()
         }
     }
 
+    private func prKey(_ item: WorkItem) -> String? {
+        guard let r = item.prRef else { return nil }
+        return "\(r.owner)/\(r.repo)#\(r.number)"
+    }
+
     private func mergeDiscoveryHits(_ hits: [DiscoveryHit]) async {
-        let existingByID = Dictionary(reviews.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let existingByPRKey = Dictionary(
+            reviews.compactMap { item in prKey(item).map { ($0, item) } },
+            uniquingKeysWith: { a, _ in a }
+        )
         for hit in hits {
-            if let existing = existingByID[hit.id] {
+            if let existing = existingByPRKey[hit.id] {
                 var updated = existing
                 updated.title = hit.title
                 updated.prState = GitHubClient.mapDiscoveryState(state: hit.state, isDraft: hit.isDraft)
                 if existing.origin == .added { updated.origin = .both }
-                try? await store.upsert(updated)
-            } else if let lateAdded = reviews.first(where: { $0.id == hit.id }) {
-                var updated = lateAdded
-                updated.title = hit.title
-                updated.prState = GitHubClient.mapDiscoveryState(state: hit.state, isDraft: hit.isDraft)
-                updated.origin = .both
-                try? await store.upsert(updated)
+                try? await store.upsertItem(updated)
             } else {
                 guard let fresh = try? await client.fetchReview(for: hit.ref, origin: .discovered) else { continue }
-                try? await store.upsert(fresh)
+                try? await store.upsertItem(fresh)
                 autoLoadIfEnabled(fresh)
             }
         }
-        reviews = await store.allReviews()
+        reviews = await store.allItems()
     }
 
     public func addPR(urlString: String) async {
         isAdding = true
         defer { isAdding = false }
         do {
-            let ref = try PRRef.parse(urlString)
+            let ref = try PRLocator.parse(urlString)
             let review = try await client.fetchReview(for: ref)
-            try await store.upsert(review)
-            reviews = await store.allReviews()
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
             selection = review.id
             errorMessage = nil
             prefetch(for: review)
@@ -200,12 +198,12 @@ public final class AppModel {
         }
     }
 
-    public func registeredClonePath(for review: Review) -> String? {
+    public func registeredClonePath(for review: WorkItem) -> String? {
         let identity = "github.com/\(review.owner)/\(review.repo)"
         return registeredRepos.first { $0.remoteIdentity == identity }?.localClonePath
     }
 
-    public func registerClone(for review: Review, localPath: String) async {
+    public func registerClone(for review: WorkItem, localPath: String) async {
         do {
             try await cloneRegistrar.validate(localPath: localPath, expectedOwner: review.owner, expectedRepo: review.repo)
             let identity = "github.com/\(review.owner)/\(review.repo)"
@@ -254,8 +252,8 @@ public final class AppModel {
             try? FileManager.default.removeItem(atPath: worktreePath)
         }
         do {
-            try await store.removeReview(id: id)
-            reviews = await store.allReviews()
+            try await store.removeItem(id: id)
+            reviews = await store.allItems()
             if selection == id {
                 selection = nil
             }
@@ -265,7 +263,7 @@ public final class AppModel {
         }
     }
 
-    public func loadDiff(for review: Review, force: Bool = false) async {
+    public func loadDiff(for review: WorkItem, force: Bool = false) async {
         if !force, case .loaded = diffStates[review.id] {
             return
         }
@@ -279,8 +277,8 @@ public final class AppModel {
                 }
                 var updated = review
                 updated.worktreePath = result.worktreePath
-                try await store.upsert(updated)
-                reviews = await store.allReviews()
+                try await store.upsertItem(updated)
+                reviews = await store.allItems()
             }
             diffStates[review.id] = .loaded(result.files)
         } catch {
@@ -318,7 +316,7 @@ public final class AppModel {
         claudePrepLog[id, default: []].append(PrepLogEntry(date: Date(), message: message))
     }
 
-    public func ensureClaudeSession(for review: Review, forceFresh: Bool = false) async {
+    public func ensureClaudeSession(for review: WorkItem, forceFresh: Bool = false) async {
         guard !review.disabled else { return }
         if claudeSessions[review.id] != nil {
             claudePaneState[review.id] = .sessionLive
@@ -395,8 +393,8 @@ public final class AppModel {
         updated.claudeSessionID = sessionID
 
         if updated != review {
-            try? await store.upsert(updated)
-            reviews = await store.allReviews()
+            try? await store.upsertItem(updated)
+            reviews = await store.allItems()
         }
         let spec = ClaudeLaunchBuilder.build(
             settings: settings,
@@ -470,8 +468,8 @@ public final class AppModel {
         guard let review = reviews.first(where: { $0.id == reviewID }) else { return }
         var snippet: String? = nil
         if case .idle(_, let s) = status { snippet = s }
-        let title = "Review ready · #\(review.number)"
-        let body = snippet ?? "\(review.owner)/\(review.repo) · \(review.author)"
+        let title = "Review ready · #\(review.number.map(String.init) ?? "?")"
+        let body = snippet ?? "\(review.owner)/\(review.repo) · \(review.author ?? "")"
         let poster = notificationPoster
         Task {
             await poster.postReviewReady(reviewID: reviewID, title: title, body: body)
@@ -507,12 +505,12 @@ public final class AppModel {
         notifiedIdleForSession.removeAll()
     }
 
-    public func prefetch(for review: Review) {
+    public func prefetch(for review: WorkItem) {
         guard !review.disabled else { return }
         Task { await ensureClaudeSession(for: review) }
     }
 
-    private func autoLoadIfEnabled(_ review: Review) {
+    private func autoLoadIfEnabled(_ review: WorkItem) {
         guard settings.autoLoad, !review.disabled else { return }
         Task { await ensureClaudeSession(for: review) }
         webPreloadHandler?(review)
@@ -541,7 +539,7 @@ public final class AppModel {
         }
     }
 
-    public func selectedReview() -> Review? {
+    public func selectedReview() -> WorkItem? {
         guard let selection else { return nil }
         return reviews.first { $0.id == selection }
     }
@@ -554,8 +552,8 @@ public final class AppModel {
         guard var review = reviews.first(where: { $0.id == id }) else { return }
         review.lastOpenedAt = Date()
         do {
-            try await store.upsert(review)
-            reviews = await store.allReviews()
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
             await refreshReviewState(for: id)
         } catch {
             errorMessage = String(describing: error)
@@ -580,8 +578,8 @@ public final class AppModel {
         review.claudeSessionID = nil
         review.claudeReviewedAt = nil
         do {
-            try await store.upsert(review)
-            reviews = await store.allReviews()
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
         } catch {
             errorMessage = String(describing: error)
             return
@@ -594,8 +592,8 @@ public final class AppModel {
         guard var review = reviews.first(where: { $0.id == id }), review.claudeReviewedAt == nil else { return }
         review.claudeReviewedAt = Date()
         do {
-            try await store.upsert(review)
-            reviews = await store.allReviews()
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
         } catch {
             errorMessage = String(describing: error)
         }
@@ -605,15 +603,16 @@ public final class AppModel {
         guard let login = currentLogin,
               let review = reviews.first(where: { $0.id == id }),
               review.prState != .merged, review.prState != .closed else { return }
-        let ref = PRRef(owner: review.owner, repo: review.repo, number: review.number)
+        guard let r = review.prRef else { return }
+        let ref = PRLocator(owner: r.owner, repo: r.repo, number: r.number)
         guard let state = try? await client.fetchReviewState(for: ref, login: login) else { return }
         guard var current = reviews.first(where: { $0.id == id }),
               current.approvedByMe != state.approvedByMe || current.prState != state.prState else { return }
         current.approvedByMe = state.approvedByMe
         current.prState = state.prState
         do {
-            try await store.upsert(current)
-            reviews = await store.allReviews()
+            try await store.upsertItem(current)
+            reviews = await store.allItems()
         } catch {
             errorMessage = String(describing: error)
         }
@@ -635,8 +634,8 @@ public final class AppModel {
         guard var review = reviews.first(where: { $0.id == id }) else { return }
         review.disabled = disabled
         do {
-            try await store.upsert(review)
-            reviews = await store.allReviews()
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
         } catch {
             errorMessage = String(describing: error)
         }
@@ -652,8 +651,8 @@ public final class AppModel {
             review.viewedFiles.removeAll { $0 == filePath }
         }
         do {
-            try await store.upsert(review)
-            reviews = await store.allReviews()
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
         } catch {
             errorMessage = String(describing: error)
         }

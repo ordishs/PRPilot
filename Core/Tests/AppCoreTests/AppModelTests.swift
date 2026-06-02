@@ -58,7 +58,7 @@ private let prJSON = """
 private struct StubDiffLoader: DiffLoading {
     var files: [DiffFile] = []
     var shouldThrow = false
-    func loadDiff(for review: Review, registeredClonePath: String?) async throws -> DiffResult {
+    func loadDiff(for review: WorkItem, registeredClonePath: String?) async throws -> DiffResult {
         if shouldThrow {
             throw DiffError.gitFailed(exitCode: 1, message: "stub failure")
         }
@@ -85,7 +85,7 @@ private struct StubRegistrar: CloneRegistering {
 private actor RecordingDiffLoader: DiffLoading {
     private(set) var lastRegisteredClonePath: String?
     private(set) var callCount: Int = 0
-    func loadDiff(for review: Review, registeredClonePath: String?) async throws -> DiffResult {
+    func loadDiff(for review: WorkItem, registeredClonePath: String?) async throws -> DiffResult {
         callCount += 1
         lastRegisteredClonePath = registeredClonePath
         return DiffResult(worktreePath: "/tmp/wt", files: [])
@@ -103,7 +103,7 @@ private struct StubWorktreeProvider: WorktreeProviding {
     var result: WorktreeReady = WorktreeReady(clonePath: "/tmp/clone", worktreePath: "/tmp/wt", remoteName: "origin")
     var shouldThrow = false
     var progressLines: [String] = []
-    func ensureWorktree(for review: Review, registeredClonePath: String?, progress: @escaping PrepProgress) async throws -> WorktreeReady {
+    func ensureWorktree(for review: WorkItem, registeredClonePath: String?, progress: @escaping PrepProgress) async throws -> WorktreeReady {
         for line in progressLines {
             await progress(line)
         }
@@ -114,13 +114,23 @@ private struct StubWorktreeProvider: WorktreeProviding {
     }
 }
 
-private func sampleReview() -> Review {
-    Review(
-        owner: "bsv-blockchain", repo: "teranode", number: 944,
-        url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/944")!,
-        title: "centrifuge fix", author: "icellan",
-        headBranch: "fix/centrifuge", baseBranch: "main",
-        origin: .added, prState: .open, addedAt: Date(timeIntervalSince1970: 1_700_000_000)
+private let sampleReviewID = "AAAAAAAA-0000-0000-0000-000000000944"
+
+private func sampleReview() -> WorkItem {
+    WorkItem(
+        id: sampleReviewID,
+        title: "centrifuge fix",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        headBranch: "fix/centrifuge",
+        prRef: PRRef(
+            owner: "bsv-blockchain", repo: "teranode", number: 944,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/944")!,
+            authorLogin: "icellan"
+        ),
+        prState: .open,
+        origin: .added,
+        addedAt: Date(timeIntervalSince1970: 1_700_000_000)
     )
 }
 
@@ -136,8 +146,8 @@ private func stubClient() -> GitHubClient {
     await model.addPR(urlString: "https://github.com/bsv-blockchain/teranode/pull/944")
 
     #expect(model.reviews.count == 1)
-    #expect(model.reviews.first?.id == "bsv-blockchain/teranode#944")
-    #expect(model.selection == "bsv-blockchain/teranode#944")
+    #expect(model.reviews.first?.prRef?.number == 944)
+    #expect(model.selection == model.reviews.first?.id)
     #expect(model.errorMessage == nil)
 }
 
@@ -169,11 +179,19 @@ private func stubClient() -> GitHubClient {
 @Test @MainActor func loadReadsExistingReviews() async throws {
     let url = tempStoreURL()
     let seedStore = try ReviewStore(fileURL: url)
-    try await seedStore.upsert(Review(
-        owner: "bsv-blockchain", repo: "teranode", number: 901,
-        url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/901")!,
-        title: "prune", author: "jad", headBranch: "prune", baseBranch: "main",
-        origin: .added, prState: .open, addedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    try await seedStore.upsertItem(WorkItem(
+        title: "prune",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        headBranch: "prune",
+        prRef: PRRef(
+            owner: "bsv-blockchain", repo: "teranode", number: 901,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/901")!,
+            authorLogin: "jad"
+        ),
+        prState: .open,
+        origin: .added,
+        addedAt: Date(timeIntervalSince1970: 1_700_000_000)
     ))
     let client = GitHubClient(runner: StubRunner(result: CommandResult(exitCode: 0, standardOutput: "", standardError: "")), ghPath: "gh")
     let model = AppModel(store: try ReviewStore(fileURL: url), client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
@@ -210,21 +228,21 @@ private func stubClient() -> GitHubClient {
     let url = tempStoreURL()
     let store = try ReviewStore(fileURL: url)
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(files: []), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
     await model.load()
 
     await model.loadDiff(for: review)
 
     let reloaded = try ReviewStore(fileURL: url)
-    #expect(await reloaded.allReviews().first?.worktreePath == "/tmp/wt")
+    #expect(await reloaded.allItems().first?.worktreePath == "/tmp/wt")
 }
 
 @Test @MainActor func registerCloneSucceedsAndPersists() async throws {
     let url = tempStoreURL()
     let store = try ReviewStore(fileURL: url)
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
     await model.load()
 
@@ -250,7 +268,7 @@ private func stubClient() -> GitHubClient {
 @Test @MainActor func loadDiffPassesRegisteredClonePathToLoader() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     try await store.upsert(RegisteredRepo(
         remoteIdentity: "github.com/bsv-blockchain/teranode",
         localClonePath: "/Users/me/dev/teranode",
@@ -269,7 +287,7 @@ private func stubClient() -> GitHubClient {
 @Test @MainActor func loadDiffPassesNilWhenNoRegisteredClone() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let recorder = RecordingDiffLoader()
     let model = AppModel(store: store, client: stubClient(), diffLoader: recorder, worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
     await model.load()
@@ -325,7 +343,7 @@ private func stubClient() -> GitHubClient {
     let url = tempStoreURL()
     let store = try ReviewStore(fileURL: url)
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
     await model.load()
     model.selection = review.id
@@ -335,7 +353,7 @@ private func stubClient() -> GitHubClient {
     #expect(model.reviews.isEmpty)
     #expect(model.selection == nil)
     let reloaded = try ReviewStore(fileURL: url)
-    #expect(await reloaded.allReviews().isEmpty)
+    #expect(await reloaded.allItems().isEmpty)
 }
 
 @Test @MainActor func removeReviewBestEffortRemovesWorktreeDir() async throws {
@@ -346,7 +364,7 @@ private func stubClient() -> GitHubClient {
     try FileManager.default.createDirectory(atPath: tempWorktree, withIntermediateDirectories: true)
     var review = sampleReview()
     review.worktreePath = tempWorktree
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
     await model.load()
 
@@ -359,7 +377,7 @@ private func stubClient() -> GitHubClient {
 @Test @MainActor func prepLogRetainedOnWorktreeFailure() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -389,7 +407,7 @@ private func stubClient() -> GitHubClient {
     let store = try ReviewStore(fileURL: tempStoreURL())
     var review = sampleReview()
     review.claudeSessionID = "ghost-session-\(UUID().uuidString.lowercased())"
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -411,7 +429,7 @@ private func stubClient() -> GitHubClient {
 @Test @MainActor func prepLogRetainedOnSessionLive() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -460,7 +478,7 @@ private func stubClient() -> GitHubClient {
 @Test @MainActor func ensureClaudeSessionInitializesStatus() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -481,7 +499,7 @@ private func stubClient() -> GitHubClient {
 @Test @MainActor func recomputeStatusFlipsToIdle() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -518,7 +536,7 @@ private func stubClient() -> GitHubClient {
     var review = sampleReview()
     review.claudeSessionID = "existing-session"
     review.claudeReviewedAt = Date(timeIntervalSince1970: 1_700_000_000)
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -547,7 +565,7 @@ private func stubClient() -> GitHubClient {
     let store = try ReviewStore(fileURL: tempStoreURL())
     var review = sampleReview()
     review.claudeSessionID = "existing-session"
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -572,7 +590,7 @@ private func stubClient() -> GitHubClient {
     final class Box: @unchecked Sendable { var called = false }
     struct Recorder: WorktreeProviding {
         let box: Box
-        func ensureWorktree(for review: Review, registeredClonePath: String?, progress: @escaping PrepProgress) async throws -> WorktreeReady {
+        func ensureWorktree(for review: WorkItem, registeredClonePath: String?, progress: @escaping PrepProgress) async throws -> WorktreeReady {
             box.called = true
             return WorktreeReady(clonePath: "/c", worktreePath: "/w", remoteName: "origin")
         }
@@ -588,7 +606,7 @@ private func stubClient() -> GitHubClient {
     // (no end_turn). It must NOT be marked reviewed just for being idle.
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -619,7 +637,7 @@ private func stubClient() -> GitHubClient {
     // even without a live working->idle edge (e.g. replayed on resume).
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let poster = StubNotificationPoster()
     let model = AppModel(
         store: store,
@@ -647,7 +665,7 @@ private func stubClient() -> GitHubClient {
 @Test @MainActor func firstIdleTransitionFiresNotificationOnce() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let poster = StubNotificationPoster()
     let model = AppModel(
         store: store,
@@ -749,13 +767,13 @@ private let prFetchJSON = """
     await model.discoverNow()
 
     #expect(model.reviews.count == 1)
-    #expect(model.reviews.first?.id == "bsv-blockchain/teranode#944")
+    #expect(model.reviews.first?.prRef?.number == 944)
     #expect(model.reviews.first?.origin == .discovered)
 }
 
 @Test @MainActor func discoverNowPromotesAddedToBoth() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
-    try await store.upsert(sampleReview())
+    try await store.upsertItem(sampleReview())
     let runner = StubRunner(results: [
         CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: sampleSearchHitJSON, standardError: ""),
@@ -783,7 +801,7 @@ private let prFetchJSON = """
     let store = try ReviewStore(fileURL: tempStoreURL())
     var existing = sampleReview()
     existing.origin = .discovered
-    try await store.upsert(existing)
+    try await store.upsertItem(existing)
     let runner = StubRunner(results: [
         CommandResult(exitCode: 0, standardOutput: emptySearchJSON, standardError: ""),
         CommandResult(exitCode: 0, standardOutput: emptySearchJSON, standardError: "")
@@ -803,7 +821,7 @@ private let prFetchJSON = """
     await model.discoverNow()
 
     #expect(model.reviews.count == 1)
-    #expect(model.reviews.first?.id == "bsv-blockchain/teranode#944")
+    #expect(model.reviews.first?.prRef?.number == 944)
 }
 
 @Test @MainActor func discoverNowUpdatesPRState() async throws {
@@ -811,7 +829,7 @@ private let prFetchJSON = """
     var existing = sampleReview()
     existing.prState = .open
     existing.origin = .discovered
-    try await store.upsert(existing)
+    try await store.upsertItem(existing)
     let runner = StubRunner(results: [
         CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: sampleMergedSearchHitJSON, standardError: ""),
@@ -964,7 +982,7 @@ private let prFetchJSON = """
     let url = tempStoreURL()
     let store = try ReviewStore(fileURL: url)
     let review = sampleReview()
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -981,7 +999,7 @@ private let prFetchJSON = """
 
     #expect(model.reviews.first?.disabled == true)
     let reloaded = try ReviewStore(fileURL: url)
-    let persisted = await reloaded.allReviews().first
+    let persisted = await reloaded.allItems().first
     #expect(persisted?.disabled == true)
 }
 
@@ -989,7 +1007,7 @@ private let prFetchJSON = """
     let store = try ReviewStore(fileURL: tempStoreURL())
     var review = sampleReview()
     review.disabled = true
-    try await store.upsert(review)
+    try await store.upsertItem(review)
     let recorder = RecordingDiffLoader()
     let model = AppModel(
         store: store,
@@ -1071,7 +1089,7 @@ private let prFetchJSON = """
 @Test @MainActor func markReviewOpenedPersistsTimestamp() async throws {
     let url = tempStoreURL()
     let store = try ReviewStore(fileURL: url)
-    try await store.upsert(sampleReview())
+    try await store.upsertItem(sampleReview())
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -1087,7 +1105,7 @@ private let prFetchJSON = """
     await model.markReviewOpened(id)
 
     let reloaded = try ReviewStore(fileURL: url)
-    let persisted = await reloaded.allReviews().first
+    let persisted = await reloaded.allItems().first
     #expect(persisted?.lastOpenedAt != nil)
 }
 
@@ -1095,16 +1113,23 @@ private let prFetchJSON = """
     let store = try ReviewStore(fileURL: tempStoreURL())
     var first = sampleReview()
     first.lastOpenedAt = Date(timeIntervalSince1970: 1_000_000)
-    var second = Review(
-        owner: "other", repo: "repo", number: 1,
-        url: URL(string: "https://github.com/other/repo/pull/1")!,
-        title: "second", author: "bob",
-        headBranch: "f", baseBranch: "main",
-        origin: .added, prState: .open, addedAt: Date()
+    var second = WorkItem(
+        title: "second",
+        repoKey: "github.com/other/repo",
+        baseBranch: "main",
+        headBranch: "f",
+        prRef: PRRef(
+            owner: "other", repo: "repo", number: 1,
+            url: URL(string: "https://github.com/other/repo/pull/1")!,
+            authorLogin: "bob"
+        ),
+        prState: .open,
+        origin: .added,
+        addedAt: Date()
     )
     second.lastOpenedAt = Date(timeIntervalSince1970: 2_000_000)
-    try await store.upsert(first)
-    try await store.upsert(second)
+    try await store.upsertItem(first)
+    try await store.upsertItem(second)
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -1196,7 +1221,7 @@ private let prFetchJSON = """
 @Test @MainActor func setFileViewedPersists() async throws {
     let url = tempStoreURL()
     let store = try ReviewStore(fileURL: url)
-    try await store.upsert(sampleReview())
+    try await store.upsertItem(sampleReview())
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -1212,7 +1237,7 @@ private let prFetchJSON = """
 
     #expect(model.reviews.first?.viewedFiles.contains("src/foo.swift") == true)
     let reloaded = try ReviewStore(fileURL: url)
-    let persisted = await reloaded.allReviews().first
+    let persisted = await reloaded.allItems().first
     #expect(persisted?.viewedFiles.contains("src/foo.swift") == true)
 }
 
@@ -1220,7 +1245,7 @@ private let prFetchJSON = """
     let store = try ReviewStore(fileURL: tempStoreURL())
     var seeded = sampleReview()
     seeded.viewedFiles = ["a.swift", "b.swift"]
-    try await store.upsert(seeded)
+    try await store.upsertItem(seeded)
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -1240,7 +1265,7 @@ private let prFetchJSON = """
 
 @Test @MainActor func setFileViewedNoOpsWhenAlreadyInDesiredState() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
-    try await store.upsert(sampleReview())
+    try await store.upsertItem(sampleReview())
     let model = AppModel(
         store: store,
         client: stubClient(),
@@ -1273,22 +1298,22 @@ private let prFetchJSON = """
 @Test @MainActor func markClaudeReviewedStampsOnce() async throws {
     let url = tempStoreURL()
     let store = try ReviewStore(fileURL: url)
-    try await store.upsert(sampleReview())
+    try await store.upsertItem(sampleReview())
     let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
     await model.load()
 
-    await model.markClaudeReviewed("bsv-blockchain/teranode#944")
+    await model.markClaudeReviewed(sampleReviewID)
     let first = model.reviews.first?.claudeReviewedAt
     #expect(first != nil)
 
-    await model.markClaudeReviewed("bsv-blockchain/teranode#944")
+    await model.markClaudeReviewed(sampleReviewID)
     #expect(model.reviews.first?.claudeReviewedAt == first)
 }
 
 @Test @MainActor func refreshReviewStateSetsApprovedByMe() async throws {
     let url = tempStoreURL()
     let store = try ReviewStore(fileURL: url)
-    try await store.upsert(sampleReview())
+    try await store.upsertItem(sampleReview())
     let reviewsJSON = """
     {"state":"OPEN","isDraft":false,"reviews":[{"author":{"login":"ordishs"},"state":"APPROVED"}]}
     """
@@ -1299,7 +1324,7 @@ private let prFetchJSON = """
     let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
     await model.load()
 
-    await model.refreshReviewState(for: "bsv-blockchain/teranode#944")
+    await model.refreshReviewState(for: sampleReviewID)
 
     #expect(model.reviews.first?.approvedByMe == true)
 }
@@ -1309,7 +1334,7 @@ private let prFetchJSON = """
     let store = try ReviewStore(fileURL: url)
     var merged = sampleReview()
     merged.prState = .merged
-    try await store.upsert(merged)
+    try await store.upsertItem(merged)
     let approvedJSON = """
     {"state":"OPEN","isDraft":false,"reviews":[{"author":{"login":"ordishs"},"state":"APPROVED"}]}
     """

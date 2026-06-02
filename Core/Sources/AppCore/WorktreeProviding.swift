@@ -18,14 +18,14 @@ public typealias PrepProgress = @Sendable (String) async -> Void
 
 public protocol WorktreeProviding: Sendable {
     func ensureWorktree(
-        for review: Review,
+        for review: WorkItem,
         registeredClonePath: String?,
         progress: @escaping PrepProgress
     ) async throws -> WorktreeReady
 }
 
 public extension WorktreeProviding {
-    func ensureWorktree(for review: Review, registeredClonePath: String?) async throws -> WorktreeReady {
+    func ensureWorktree(for review: WorkItem, registeredClonePath: String?) async throws -> WorktreeReady {
         try await ensureWorktree(for: review, registeredClonePath: registeredClonePath, progress: { _ in })
     }
 }
@@ -38,10 +38,11 @@ public struct WorktreeProvider: WorktreeProviding {
     }
 
     public func ensureWorktree(
-        for review: Review,
+        for review: WorkItem,
         registeredClonePath: String?,
         progress: @escaping PrepProgress
     ) async throws -> WorktreeReady {
+        guard let number = review.number else { throw WorktreeError.notAPullRequest }
         let remoteURL = "https://github.com/\(review.owner)/\(review.repo).git"
         let clonePath = try await worktreeManager.resolveClone(
             owner: review.owner,
@@ -64,7 +65,7 @@ public struct WorktreeProvider: WorktreeProviding {
             _ = try await worktreeManager.refreshWorktree(
                 clonePath: clonePath,
                 worktreePath: existing,
-                number: review.number,
+                number: number,
                 remoteName: remoteName
             )
         } else {
@@ -72,7 +73,7 @@ public struct WorktreeProvider: WorktreeProviding {
                 clonePath: clonePath,
                 owner: review.owner,
                 repo: review.repo,
-                number: review.number,
+                number: number,
                 remoteName: remoteName,
                 progress: progress
             )
