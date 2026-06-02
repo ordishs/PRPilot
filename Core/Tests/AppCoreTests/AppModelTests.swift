@@ -1449,6 +1449,136 @@ private let prFetchJSON = """
     #expect(model.discoveryWarnings.isEmpty)
 }
 
+@Test @MainActor func createTaskAddsAPRlessTaskSelected() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsert(RegisteredRepo(
+        remoteIdentity: "github.com/o/r",
+        localClonePath: "/tmp/clone",
+        defaultBase: "main"
+    ))
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.createTask(repoKey: "github.com/o/r", branch: "feat/spike")
+
+    #expect(model.reviews.count == 1)
+    let t = try #require(model.reviews.first)
+    #expect(t.prRef == nil)
+    #expect(t.headBranch == "feat/spike")
+    #expect(t.baseBranch == "main")
+    #expect(t.category(myLogin: "anyone") == .task)
+    #expect(model.selection == t.id)
+}
+
+@Test @MainActor func createTaskRejectsEmptyBranch() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsert(RegisteredRepo(
+        remoteIdentity: "github.com/o/r",
+        localClonePath: "/tmp/clone",
+        defaultBase: "main"
+    ))
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.createTask(repoKey: "github.com/o/r", branch: "   ")
+
+    #expect(model.reviews.isEmpty)
+    #expect(model.errorMessage != nil)
+}
+
+private let taskSearchHitJSON = """
+[
+  {
+    "number": 5,
+    "title": "feat/x",
+    "url": "https://github.com/o/r/pull/5",
+    "state": "open",
+    "isDraft": false,
+    "author": { "login": "me" },
+    "repository": { "nameWithOwner": "o/r" }
+  }
+]
+"""
+
+private let taskFetchJSON = """
+{
+  "number": 5,
+  "title": "feat/x",
+  "url": "https://github.com/o/r/pull/5",
+  "state": "OPEN",
+  "isDraft": false,
+  "author": { "login": "me" },
+  "headRefName": "feat/x",
+  "baseRefName": "main",
+  "closingIssuesReferences": []
+}
+"""
+
+@Test @MainActor func discoveryGraduatesMatchingTaskInPlace() async throws {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "author:@me is:open")]
+    seed.myPRsEnabled = false
+    try await seedStore.updateSettings(seed)
+
+    let store = try ReviewStore(fileURL: url)
+    let task = WorkItem(
+        title: "feat/x",
+        repoKey: "github.com/o/r",
+        baseBranch: "main",
+        headBranch: "feat/x",
+        prRef: nil,
+        prState: nil,
+        origin: .added,
+        addedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    try await store.upsertItem(task)
+    let taskID = task.id
+
+    let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "me\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: taskSearchHitJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: taskFetchJSON, standardError: "")
+    ])
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let model = AppModel(
+        store: store,
+        client: client,
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.discoverNow()
+
+    #expect(model.reviews.count == 1)
+    let g = try #require(model.reviews.first)
+    #expect(g.id == taskID)
+    #expect(g.prRef?.number == 5)
+    #expect(g.origin == .both)
+    #expect(g.headBranch == "feat/x")
+}
+
 @Test @MainActor func discoverSkipsCappedResultsAndWarns() async throws {
     let hundredHitsJSON: String = {
         let items = (0..<100).map { i in
