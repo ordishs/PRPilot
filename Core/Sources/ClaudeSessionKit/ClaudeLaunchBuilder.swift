@@ -28,6 +28,8 @@ public enum ClaudeLaunchBuilder {
     ) -> ClaudeLaunchSpec {
         var args: [String] = []
         args.append(contentsOf: review.claudeFlags ?? [])
+        args.append("--name")
+        args.append(sessionName(for: review))
         if resume {
             args.append("--resume")
             args.append(sessionID)
@@ -45,5 +47,14 @@ public enum ClaudeLaunchBuilder {
             environment: settings.claudeEnv,
             extraArgs: settings.claudeLaunchArgs
         )
+    }
+
+    /// Display name for the Claude session (shown in Claude Desktop "Recents").
+    /// PR-backed items use "#<number> <title>"; tasks use their title (the branch).
+    static func sessionName(for review: WorkItem) -> String {
+        if let number = review.number {
+            return "#\(number) \(review.title)"
+        }
+        return review.title
     }
 }
