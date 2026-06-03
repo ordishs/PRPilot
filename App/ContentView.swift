@@ -21,12 +21,12 @@ struct ContentView: View {
                 Section(isExpanded: myWorkExpandedBinding()) {
                     sectionBody(sections.myWork)
                 } header: {
-                    sectionHeader(title: "My Work", count: sections.myWork.count, style: .myWork)
+                    SidebarSectionHeader(title: "My Work", count: sections.myWork.count, kind: .myWork)
                 }
                 Section(isExpanded: reviewsExpandedBinding()) {
                     sectionBody(sections.reviewRequests)
                 } header: {
-                    sectionHeader(title: "Review Requests", count: sections.reviewRequests.count, style: .reviewRequests)
+                    SidebarSectionHeader(title: "Review Requests", count: sections.reviewRequests.count, kind: .reviewRequests)
                 }
             }
             .onDeleteCommand {
@@ -138,48 +138,6 @@ struct ContentView: View {
         }
     }
 
-    private struct SectionStyle {
-        let band: Color
-        let border: Color
-        let text: Color
-
-        static let myWork = SectionStyle(
-            band: Color(red: 0.165, green: 0.208, blue: 0.314),
-            border: Color(red: 0.424, green: 0.549, blue: 1.0),
-            text: Color(red: 0.616, green: 0.706, blue: 1.0)
-        )
-        static let reviewRequests = SectionStyle(
-            band: Color(red: 0.227, green: 0.165, blue: 0.314),
-            border: Color(red: 0.690, green: 0.424, blue: 1.0),
-            text: Color(red: 0.831, green: 0.627, blue: 1.0)
-        )
-    }
-
-    private func sectionHeader(title: String, count: Int, style: SectionStyle) -> some View {
-        HStack(spacing: 8) {
-            Text(title.uppercased())
-                .font(.system(size: 13, weight: .bold))
-                .tracking(0.8)
-                .foregroundStyle(style.text)
-            Spacer()
-            Text("\(count)")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(style.text.opacity(0.75))
-        }
-        .padding(.vertical, 7)
-        .padding(.horizontal, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(style.band)
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(style.border)
-                .frame(width: 3)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 5))
-        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 2, trailing: 8))
-        .textCase(nil)
-    }
-
     @ViewBuilder
     private func sidebarRow(for review: WorkItem) -> some View {
         HStack(alignment: .center, spacing: 8) {
@@ -273,6 +231,84 @@ struct ContentView: View {
         case .open:
             EmptyView()
         }
+    }
+}
+
+private enum SidebarSectionKind {
+    case myWork
+    case reviewRequests
+}
+
+private struct SectionStyle {
+    let band: Color
+    let border: Color
+    let text: Color
+
+    static func myWork(_ scheme: ColorScheme) -> SectionStyle {
+        scheme == .dark
+            ? SectionStyle(
+                band: Color(red: 0.165, green: 0.208, blue: 0.314),
+                border: Color(red: 0.424, green: 0.549, blue: 1.0),
+                text: Color(red: 0.616, green: 0.706, blue: 1.0)
+            )
+            : SectionStyle(
+                band: Color(red: 0.910, green: 0.933, blue: 1.0),
+                border: Color(red: 0.275, green: 0.431, blue: 0.941),
+                text: Color(red: 0.157, green: 0.275, blue: 0.667)
+            )
+    }
+
+    static func reviewRequests(_ scheme: ColorScheme) -> SectionStyle {
+        scheme == .dark
+            ? SectionStyle(
+                band: Color(red: 0.227, green: 0.165, blue: 0.314),
+                border: Color(red: 0.690, green: 0.424, blue: 1.0),
+                text: Color(red: 0.831, green: 0.627, blue: 1.0)
+            )
+            : SectionStyle(
+                band: Color(red: 0.957, green: 0.925, blue: 1.0),
+                border: Color(red: 0.588, green: 0.314, blue: 0.902),
+                text: Color(red: 0.431, green: 0.176, blue: 0.667)
+            )
+    }
+}
+
+private struct SidebarSectionHeader: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let title: String
+    let count: Int
+    let kind: SidebarSectionKind
+
+    private var style: SectionStyle {
+        switch kind {
+        case .myWork: return .myWork(colorScheme)
+        case .reviewRequests: return .reviewRequests(colorScheme)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title.uppercased())
+                .font(.system(size: 13, weight: .bold))
+                .tracking(0.8)
+                .foregroundStyle(style.text)
+            Spacer()
+            Text("\(count)")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(style.text.opacity(0.75))
+        }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(style.band)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(style.border)
+                .frame(width: 3)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 2, trailing: 8))
+        .textCase(nil)
     }
 }
 
