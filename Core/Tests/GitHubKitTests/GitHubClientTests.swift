@@ -113,6 +113,62 @@ private let samplePRJSONWithClosingIssue = """
     }
 }
 
+@Test func fetchDefaultBaseUsesOwnDefaultForNonFork() async throws {
+    let json = """
+    {"isFork": false, "parent": null, "defaultBranchRef": {"name": "develop"}}
+    """
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+
+    let base = try await client.fetchDefaultBase(owner: "acme", repo: "app")
+    #expect(base == "develop")
+    let args = await runner.lastArguments
+    #expect(args == ["repo", "view", "acme/app", "--json", "isFork,parent,defaultBranchRef"])
+}
+
+@Test func fetchDefaultBaseUsesParentDefaultForFork() async throws {
+    let forkJSON = """
+    {"isFork": true, "parent": {"name": "teranode", "owner": {"login": "bsv-blockchain"}}, "defaultBranchRef": {"name": "patch-1"}}
+    """
+    let parentJSON = """
+    {"isFork": false, "parent": null, "defaultBranchRef": {"name": "main"}}
+    """
+    let runner = QueuedRunner([
+        CommandResult(exitCode: 0, standardOutput: forkJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: parentJSON, standardError: ""),
+    ])
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+
+    let base = try await client.fetchDefaultBase(owner: "me", repo: "teranode")
+    #expect(base == "main")
+    let calls = await runner.allArguments
+    #expect(calls.count == 2)
+    #expect(calls[1] == ["repo", "view", "bsv-blockchain/teranode", "--json", "isFork,parent,defaultBranchRef"])
+}
+
+@Test func fetchDefaultBaseFallsBackToOwnWhenParentLookupFails() async throws {
+    let forkJSON = """
+    {"isFork": true, "parent": {"name": "teranode", "owner": {"login": "bsv-blockchain"}}, "defaultBranchRef": {"name": "patch-1"}}
+    """
+    let runner = QueuedRunner([
+        CommandResult(exitCode: 0, standardOutput: forkJSON, standardError: ""),
+        CommandResult(exitCode: 1, standardOutput: "", standardError: "network error"),
+    ])
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+
+    let base = try await client.fetchDefaultBase(owner: "me", repo: "teranode")
+    #expect(base == "patch-1")
+}
+
+@Test func fetchDefaultBaseThrowsWhenPrimaryViewFails() async {
+    let runner = RecordingRunner(result: CommandResult(exitCode: 1, standardOutput: "", standardError: "not found"))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+
+    await #expect(throws: GitHubError.self) {
+        _ = try await client.fetchDefaultBase(owner: "acme", repo: "missing")
+    }
+}
+
 @Test func mapStateCoversAllCases() {
     #expect(GitHubClient.mapState(state: "OPEN", isDraft: false) == .open)
     #expect(GitHubClient.mapState(state: "OPEN", isDraft: true) == .draft)
