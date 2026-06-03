@@ -58,6 +58,40 @@ private func sampleReview() -> WorkItem {
     #expect(!spec.arguments.contains { $0.hasPrefix("/review ") })
 }
 
+private func nameArg(_ args: [String]) -> String? {
+    guard let idx = args.firstIndex(of: "--name") else { return nil }
+    return args[args.index(after: idx)]
+}
+
+@Test func launchBuilderNamesPRSessionWithNumberAndTitle() {
+    let spec = ClaudeLaunchBuilder.build(
+        settings: .default, review: sampleReview(), worktreePath: "/tmp/wt",
+        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
+    )
+    #expect(nameArg(spec.arguments) == "#944 fix")
+}
+
+@Test func launchBuilderNamesSessionOnResumeToo() {
+    let spec = ClaudeLaunchBuilder.build(
+        settings: .default, review: sampleReview(), worktreePath: "/tmp/wt",
+        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: true
+    )
+    #expect(nameArg(spec.arguments) == "#944 fix")
+}
+
+@Test func launchBuilderNamesTaskSessionWithTitle() {
+    let item = WorkItem(
+        title: "feat/parallel-validation", repoKey: "github.com/o/r", baseBranch: "main",
+        headBranch: "feat/parallel-validation", prRef: nil, prState: nil,
+        origin: .added, addedAt: Date(timeIntervalSince1970: 0)
+    )
+    let spec = ClaudeLaunchBuilder.build(
+        settings: .default, review: item, worktreePath: "/tmp/wt",
+        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
+    )
+    #expect(nameArg(spec.arguments) == "feat/parallel-validation")
+}
+
 @Test func buildOmitsReviewCommandWhenNoPR() {
     let item = WorkItem(
         title: "spike", repoKey: "github.com/o/r", baseBranch: "main",
