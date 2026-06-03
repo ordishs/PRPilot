@@ -11,6 +11,7 @@ public final class ClaudeSession {
     public let terminalView: LocalProcessTerminalView
 
     private let delegateBridge: DelegateBridge
+    @ObservationIgnored nonisolated(unsafe) private var shiftReturnMonitor: Any?
 
     public init(spec: ClaudeLaunchSpec) {
         self.spec = spec
@@ -23,6 +24,36 @@ public final class ClaudeSession {
             Task { @MainActor [weak self] in
                 self?.state = .exited(code: code)
             }
+        }
+        installShiftReturnMonitor()
+    }
+
+    deinit {
+        if let shiftReturnMonitor {
+            NSEvent.removeMonitor(shiftReturnMonitor)
+        }
+    }
+
+    /// SwiftTerm sends a bare CR for both Return and Shift+Return when the Kitty keyboard
+    /// protocol is inactive, so Claude submits instead of inserting a newline. Intercept
+    /// Shift+Return for this session's terminal and emit ESC+CR — the meta-return sequence
+    /// Option+Return produces — which Claude treats as a newline. Left untouched when the
+    /// Kitty protocol is negotiated, so SwiftTerm's own encoding wins.
+    private func installShiftReturnMonitor() {
+        shiftReturnMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let isShiftReturn = event.modifierFlags.contains(.shift)
+                && (event.keyCode == 36 || event.keyCode == 76)
+            guard isShiftReturn else { return event }
+            let consumed = MainActor.assumeIsolated { () -> Bool in
+                guard let self else { return false }
+                let view = self.terminalView
+                guard view.window?.firstResponder === view,
+                      view.terminal.keyboardEnhancementFlags.isEmpty
+                else { return false }
+                view.send([0x1b, 0x0d])
+                return true
+            }
+            return consumed ? nil : event
         }
     }
 
