@@ -75,7 +75,27 @@ public struct WorktreeManager: Sendable {
     }
 
     public func removeWorktree(clonePath: String, worktreePath: String) async throws {
+        guard isManagedWorktreePath(worktreePath) else {
+            throw WorktreeError.refusedNonManagedWorktree(path: worktreePath)
+        }
         try await runGit(["-C", clonePath, "worktree", "remove", worktreePath])
+    }
+
+    func isManagedWorktreePath(_ path: String) -> Bool {
+        path.hasPrefix(managedRoot + "/worktrees/")
+    }
+
+    private func worktreeForCheckedOutBranch(_ branch: String, clonePath: String) async throws -> String? {
+        let listing = try await runGit(["-C", clonePath, "worktree", "list", "--porcelain"])
+        var path: String?
+        for line in listing.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("worktree ") {
+                path = String(line.dropFirst("worktree ".count))
+            } else if line == "branch refs/heads/\(branch)" {
+                return path
+            }
+        }
+        return nil
     }
 
     public func fetch(clonePath: String, remoteName: String, ref: String) async throws {
@@ -161,6 +181,10 @@ public struct WorktreeManager: Sendable {
             throw WorktreeError.gitFailed(arguments: ["worktree", "validate", worktreePath], exitCode: 1,
                 message: "directory exists but is not a registered git worktree: \(worktreePath)")
         }
+        if let attached = try await worktreeForCheckedOutBranch(branch, clonePath: clonePath) {
+            await progress("Branch already checked out — using \(attached)")
+            return attached
+        }
         try await runGit(["-C", clonePath, "worktree", "prune"])
         // Fetch the PR head via refs/pull/N/head — always present on the base repo, even for
         // fork heads, unlike the branch name which may live on a remote we don't have.
@@ -179,6 +203,9 @@ public struct WorktreeManager: Sendable {
     }
 
     public func removeWorktreeForcing(clonePath: String, worktreePath: String) async throws {
+        guard isManagedWorktreePath(worktreePath) else {
+            throw WorktreeError.refusedNonManagedWorktree(path: worktreePath)
+        }
         try await runGit(["-C", clonePath, "worktree", "remove", "--force", worktreePath])
     }
 
