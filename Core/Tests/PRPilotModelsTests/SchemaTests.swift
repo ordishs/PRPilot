@@ -67,12 +67,14 @@ import Foundation
     #expect(decoded.disabled == true)
 }
 
-@Test func settingsDefaultsSidebarGroupingToByCategory() throws {
+@Test func settingsDefaultSidebarSortIsRecent() throws {
     let s = Settings.default
-    #expect(s.sidebarGrouping == .byCategory)
+    #expect(s.sidebarSort == .recent)
+    #expect(s.myWorkCollapsed == false)
+    #expect(s.reviewsCollapsed == false)
 }
 
-@Test func settingsDecodesPersistedSettingsWithoutSidebarGrouping() throws {
+@Test func settingsDecodesWithoutSidebarSortDefaultsRecent() throws {
     let json = """
     {
       "managedRoot": "/tmp",
@@ -85,7 +87,52 @@ import Foundation
     }
     """
     let decoded = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
-    #expect(decoded.sidebarGrouping == .none)
+    #expect(decoded.sidebarSort == .recent)
+    #expect(decoded.myWorkCollapsed == false)
+    #expect(decoded.reviewsCollapsed == false)
+}
+
+@Test func settingsMigratesLegacySidebarGroupingByStatus() throws {
+    let json = """
+    {
+      "managedRoot": "/tmp",
+      "reviewRequestQueries": [],
+      "myPRQueries": [],
+      "pollIntervalSeconds": 120,
+      "claudeLaunchArgs": "", "claudeEnv": "",
+      "notificationsEnabled": true, "diffMode": "unified",
+      "diffIgnoreWhitespace": false, "sidebarGrouping": "byStatus"
+    }
+    """
+    let s = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
+    #expect(s.sidebarSort == .byStatus)
+}
+
+@Test func settingsMigratesLegacyByCategoryToRecent() throws {
+    let json = """
+    {
+      "managedRoot": "/tmp",
+      "reviewRequestQueries": [],
+      "myPRQueries": [],
+      "pollIntervalSeconds": 120,
+      "claudeLaunchArgs": "", "claudeEnv": "",
+      "notificationsEnabled": true, "diffMode": "unified",
+      "diffIgnoreWhitespace": false, "sidebarGrouping": "byCategory"
+    }
+    """
+    let s = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
+    #expect(s.sidebarSort == .recent)
+}
+
+@Test func settingsCollapseFlagsRoundTrip() throws {
+    var s = Settings.default
+    s.myWorkCollapsed = true
+    s.reviewsCollapsed = false
+    let data = try JSONEncoder().encode(s)
+    let decoded = try JSONDecoder().decode(Settings.self, from: data)
+    #expect(decoded.myWorkCollapsed == true)
+    #expect(decoded.reviewsCollapsed == false)
+    #expect(decoded.sidebarSort == s.sidebarSort)
 }
 
 @Test func reviewDefaultsViewedFilesToEmpty() throws {
