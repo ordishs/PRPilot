@@ -7,6 +7,9 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
+            AppearanceSettingsTab(model: model)
+                .tabItem { Label("Appearance", systemImage: "paintbrush") }
+
             DiscoverySettingsTab(model: model)
                 .tabItem { Label("Discovery", systemImage: "magnifyingglass") }
 
@@ -17,6 +20,39 @@ struct SettingsView: View {
                 .tabItem { Label("Claude", systemImage: "terminal") }
         }
         .frame(width: 560, height: 520)
+    }
+}
+
+private struct AppearanceSettingsTab: View {
+    let model: AppModel
+
+    @State private var appearance: Appearance = .system
+
+    var body: some View {
+        Form {
+            Section("Appearance") {
+                Picker("Theme", selection: $appearance) {
+                    ForEach(Appearance.allCases, id: \.self) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text("\"System\" follows your macOS appearance setting.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear {
+            appearance = model.settings.appearance
+        }
+        .onChange(of: appearance) { _, _ in commit() }
+    }
+
+    private func commit() {
+        var updated = model.settings
+        updated.appearance = appearance
+        Task { await model.updateSettings(updated) }
     }
 }
 
