@@ -263,6 +263,10 @@ public final class AppModel {
             errorMessage = "Branch name is required."
             return
         }
+        guard BranchName.isValid(trimmedBranch) else {
+            errorMessage = "“\(trimmedBranch)” is not a valid branch name (no spaces or ~^:?*[\\, no .. or leading/trailing / or .)."
+            return
+        }
         guard registeredRepos.contains(where: { $0.remoteIdentity == repoKey }) else {
             errorMessage = "Pick a registered repository."
             return

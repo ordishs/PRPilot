@@ -9,6 +9,7 @@ struct NewTaskSheet: View {
     @State private var branch: String = ""
 
     private var repos: [RegisteredRepo] { model.registeredRepos }
+    private var trimmedBranch: String { branch.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -29,7 +30,10 @@ struct NewTaskSheet: View {
                 TextField("new branch name (e.g. feat/parallel-validation)", text: $branch)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 440)
-                if let base = model.registeredDefaultBase(for: repoKey) {
+                if !trimmedBranch.isEmpty && !BranchName.isValid(trimmedBranch) {
+                    Text("Not a valid branch name — no spaces or ~^:?*[\\, no “..” or leading/trailing / or .")
+                        .font(.caption).foregroundStyle(.orange).frame(width: 440, alignment: .leading)
+                } else if let base = model.registeredDefaultBase(for: repoKey) {
                     Text("Branches off \(base).").font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -43,7 +47,7 @@ struct NewTaskSheet: View {
                     }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(repoKey.isEmpty || branch.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(repoKey.isEmpty || !BranchName.isValid(trimmedBranch))
             }
         }
         .padding(20)
