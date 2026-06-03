@@ -1,7 +1,7 @@
 # Work-Item Reframe — My PRs, Tasks & PR Status
 
 - **Date:** 2026-06-02
-- **Status:** Approved (brainstorm) — ready for implementation planning
+- **Status:** Shipped — v0.2.0, 2026-06-03 (milestone record: `docs/superpowers/milestones/2026-06-03-work-item-reframe.md`)
 - **Builds on:** `2026-05-27-pr-review-app-design.md`
 - **Working title:** Work-item reframe (PR Pilot)
 
