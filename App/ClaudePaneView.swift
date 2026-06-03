@@ -128,7 +128,7 @@ struct ClaudePaneView: View {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(prepEntries) { entry in
                     Text("\(prepLogTimeFormatter.string(from: entry.date))  \(entry.message)")
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.system(.callout, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -149,7 +149,7 @@ struct ClaudePaneView: View {
             }
             ScrollView {
                 Text(message)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.system(.callout, design: .monospaced))
                     .foregroundStyle(.red)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)

@@ -94,10 +94,10 @@ public struct WorktreeProvider: WorktreeProviding {
     }
 
     private func editableWorktree(review: WorkItem, branch: String, clonePath: String, remoteName: String, progress: @escaping PrepProgress) async throws -> String {
-        if review.number == nil {
-            return try await worktreeManager.createBranchWorktree(clonePath: clonePath, owner: review.owner, repo: review.repo, branch: branch, base: review.baseBranch, remoteName: remoteName, progress: progress)
+        if let number = review.number {
+            return try await worktreeManager.checkoutBranchWorktree(clonePath: clonePath, owner: review.owner, repo: review.repo, branch: branch, number: number, remoteName: remoteName, progress: progress)
         } else {
-            return try await worktreeManager.checkoutBranchWorktree(clonePath: clonePath, owner: review.owner, repo: review.repo, branch: branch, remoteName: remoteName, progress: progress)
+            return try await worktreeManager.createBranchWorktree(clonePath: clonePath, owner: review.owner, repo: review.repo, branch: branch, base: review.baseBranch, remoteName: remoteName, progress: progress)
         }
     }
 }

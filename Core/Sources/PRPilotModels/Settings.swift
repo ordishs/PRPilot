@@ -16,10 +16,13 @@ public struct Settings: Codable, Sendable, Equatable {
     public var notificationsEnabled: Bool
     public var diffMode: DiffMode
     public var diffIgnoreWhitespace: Bool
-    public var sidebarGrouping: SidebarGrouping
+    public var sidebarSort: SidebarSort
+    public var myWorkCollapsed: Bool
+    public var reviewsCollapsed: Bool
 
     private enum LegacyKeys: String, CodingKey {
         case discoveryQueries
+        case sidebarGrouping
     }
 
     public init(
@@ -38,7 +41,9 @@ public struct Settings: Codable, Sendable, Equatable {
         notificationsEnabled: Bool,
         diffMode: DiffMode,
         diffIgnoreWhitespace: Bool,
-        sidebarGrouping: SidebarGrouping = .byCategory
+        sidebarSort: SidebarSort = .recent,
+        myWorkCollapsed: Bool = false,
+        reviewsCollapsed: Bool = false
     ) {
         self.managedRoot = managedRoot
         self.reviewRequestQueries = reviewRequestQueries
@@ -55,7 +60,9 @@ public struct Settings: Codable, Sendable, Equatable {
         self.notificationsEnabled = notificationsEnabled
         self.diffMode = diffMode
         self.diffIgnoreWhitespace = diffIgnoreWhitespace
-        self.sidebarGrouping = sidebarGrouping
+        self.sidebarSort = sidebarSort
+        self.myWorkCollapsed = myWorkCollapsed
+        self.reviewsCollapsed = reviewsCollapsed
     }
 
     public init(from decoder: Decoder) throws {
@@ -81,7 +88,16 @@ public struct Settings: Codable, Sendable, Equatable {
         notificationsEnabled = try c.decode(Bool.self, forKey: .notificationsEnabled)
         diffMode = try c.decode(DiffMode.self, forKey: .diffMode)
         diffIgnoreWhitespace = try c.decode(Bool.self, forKey: .diffIgnoreWhitespace)
-        sidebarGrouping = try c.decodeIfPresent(SidebarGrouping.self, forKey: .sidebarGrouping) ?? .none
+        if let sort = try c.decodeIfPresent(SidebarSort.self, forKey: .sidebarSort) {
+            sidebarSort = sort
+        } else if let legacy = try? decoder.container(keyedBy: LegacyKeys.self),
+                  let legacyGrouping = (try? legacy.decodeIfPresent(String.self, forKey: .sidebarGrouping)) ?? nil {
+            sidebarSort = SidebarSort(legacyGrouping: legacyGrouping)
+        } else {
+            sidebarSort = .recent
+        }
+        myWorkCollapsed = try c.decodeIfPresent(Bool.self, forKey: .myWorkCollapsed) ?? false
+        reviewsCollapsed = try c.decodeIfPresent(Bool.self, forKey: .reviewsCollapsed) ?? false
 
         if let rrq = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .reviewRequestQueries) {
             reviewRequestQueries = rrq
@@ -114,7 +130,7 @@ public struct Settings: Codable, Sendable, Equatable {
         notificationsEnabled: true,
         diffMode: .unified,
         diffIgnoreWhitespace: false,
-        sidebarGrouping: .byCategory
+        sidebarSort: .recent
     )
 
     public static func defaultManagedRoot() -> String {

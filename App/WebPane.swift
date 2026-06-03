@@ -18,7 +18,7 @@ struct WebPane: View {
                 .help("Refresh (\u{2318}R)")
 
                 Text(review.url?.absoluteString ?? "")
-                    .font(.caption)
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)

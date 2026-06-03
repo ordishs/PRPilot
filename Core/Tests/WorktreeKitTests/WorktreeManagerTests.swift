@@ -641,7 +641,7 @@ private func makeLocalRepo(root: String, name: String) async throws -> String {
     #expect(afterSha == beforeSha)
 }
 
-@Test func checkoutBranchWorktreeChecksOutExistingRemoteBranch() async throws {
+@Test func checkoutBranchWorktreeUsesPRHeadRefNotBranchName() async throws {
     let fileManager = FileManager.default
     let root = fileManager.temporaryDirectory.appendingPathComponent("cbw-\(UUID().uuidString)", isDirectory: true).path
     try fileManager.createDirectory(atPath: root, withIntermediateDirectories: true)
@@ -660,19 +660,25 @@ private func makeLocalRepo(root: String, name: String) async throws -> String {
     try await git(["-C", clonePath, "commit", "-m", "base"])
     try await git(["-C", clonePath, "push", "origin", "main"])
 
+    // Build the PR head commit, push its object, then expose it ONLY via refs/pull/7/head and
+    // remove the named branch — so `fetch origin feat/y` would fail. Mirrors a fork-head PR.
     try await git(["-C", clonePath, "checkout", "-b", "feat/y"])
     try "feat-y\n".write(toFile: clonePath + "/feat-y.txt", atomically: true, encoding: .utf8)
     try await git(["-C", clonePath, "add", "."])
     try await git(["-C", clonePath, "commit", "-m", "feat-y-commit"])
+    let sha = (try await git(["-C", clonePath, "rev-parse", "HEAD"])).trimmingCharacters(in: .whitespacesAndNewlines)
     try await git(["-C", clonePath, "push", "origin", "feat/y"])
+    try await git(["-C", bareDir, "update-ref", "refs/pull/7/head", sha])
+    try await git(["-C", bareDir, "update-ref", "-d", "refs/heads/feat/y"])
     try await git(["-C", clonePath, "checkout", "main"])
     try await git(["-C", clonePath, "branch", "-D", "feat/y"])
+    try await git(["-C", clonePath, "fetch", "--prune", "origin"])
 
     let managedRoot = root + "/managed"
     let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: managedRoot)
 
     let wt = try await manager.checkoutBranchWorktree(
-        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/y", remoteName: "origin"
+        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/y", number: 7, remoteName: "origin"
     )
 
     #expect(wt.hasSuffix("/o-r-feat-y"))
