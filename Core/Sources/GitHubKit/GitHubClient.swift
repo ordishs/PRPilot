@@ -95,6 +95,31 @@ public struct GitHubClient: Sendable {
         return login
     }
 
+    public func fetchDefaultBase(owner: String, repo: String) async throws -> String {
+        let view = try await fetchRepoView(owner: owner, repo: repo)
+        if view.isFork, let parent = view.parent,
+           let parentView = try? await fetchRepoView(owner: parent.owner.login, repo: parent.name),
+           let parentBranch = parentView.defaultBranchRef?.name {
+            return parentBranch
+        }
+        return view.defaultBranchRef?.name ?? "main"
+    }
+
+    private func fetchRepoView(owner: String, repo: String) async throws -> GHRepoView {
+        let result = try await runner.run(
+            executable: ghPath,
+            arguments: ["repo", "view", "\(owner)/\(repo)", "--json", "isFork,parent,defaultBranchRef"]
+        )
+        guard result.exitCode == 0 else {
+            throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
+        }
+        do {
+            return try JSONDecoder().decode(GHRepoView.self, from: Data(result.standardOutput.utf8))
+        } catch {
+            throw GitHubError.decodingFailed(String(describing: error))
+        }
+    }
+
     public func fetchReviewState(for ref: PRLocator, login: String) async throws -> ReviewState {
         let result = try await runner.run(
             executable: ghPath,
@@ -217,6 +242,18 @@ extension GitHubClient {
     public static func mapDiscoveryState(state: String, isDraft: Bool) -> PRState {
         mapState(state: state.uppercased(), isDraft: isDraft)
     }
+}
+
+struct GHRepoView: Decodable {
+    struct Ref: Decodable { let name: String }
+    struct Parent: Decodable {
+        struct Owner: Decodable { let login: String }
+        let name: String
+        let owner: Owner
+    }
+    let isFork: Bool
+    let parent: Parent?
+    let defaultBranchRef: Ref?
 }
 
 struct GHStatusPayload: Decodable {

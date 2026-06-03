@@ -297,7 +297,8 @@ public final class AppModel {
         do {
             try await cloneRegistrar.validate(localPath: localPath, expectedOwner: review.owner, expectedRepo: review.repo)
             let identity = "github.com/\(review.owner)/\(review.repo)"
-            let entry = RegisteredRepo(remoteIdentity: identity, localClonePath: localPath, defaultBase: review.baseBranch)
+            let base = (try? await client.fetchDefaultBase(owner: review.owner, repo: review.repo)) ?? review.baseBranch
+            let entry = RegisteredRepo(remoteIdentity: identity, localClonePath: localPath, defaultBase: base)
             try await store.upsert(entry)
             registeredRepos = await store.allRepos()
             errorMessage = nil
@@ -314,7 +315,14 @@ public final class AppModel {
                 return
             }
             for identity in identities {
-                let entry = RegisteredRepo(remoteIdentity: "github.com/\(identity)", localClonePath: localPath, defaultBase: "main")
+                let parts = identity.split(separator: "/").map(String.init)
+                let base: String
+                if parts.count == 2 {
+                    base = (try? await client.fetchDefaultBase(owner: parts[0], repo: parts[1])) ?? "main"
+                } else {
+                    base = "main"
+                }
+                let entry = RegisteredRepo(remoteIdentity: "github.com/\(identity)", localClonePath: localPath, defaultBase: base)
                 try await store.upsert(entry)
             }
             registeredRepos = await store.allRepos()
