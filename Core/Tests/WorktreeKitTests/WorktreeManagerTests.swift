@@ -365,6 +365,38 @@ private actor LineCollector {
     #expect(head == "feat/spike")
 }
 
+@Test func checkoutBranchWorktreeAttachesToExistingCheckout() async throws {
+    let fixture = try await makeFixture(prNumber: 7)
+    defer { try? FileManager.default.removeItem(atPath: fixture.root) }
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: fixture.managedRoot)
+    let work = fixture.root + "/work"
+    // makeFixture leaves the clone checked out on `pr-branch`. Git forbids a second
+    // worktree on a branch that's already checked out, so the manager must attach to
+    // the existing checkout instead of failing `git worktree add`.
+    let path = try await manager.checkoutBranchWorktree(
+        clonePath: work, owner: "acme", repo: "app", branch: "pr-branch", number: 7
+    )
+    // git reports the canonical path (/var -> /private/var on macOS); compare resolved.
+    let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    let expected = URL(fileURLWithPath: work).resolvingSymlinksInPath().path
+    #expect(resolved == expected)
+}
+
+@Test func removeWorktreeForcingRefusesNonManagedPath() async throws {
+    let fixture = try await makeFixture(prNumber: 8)
+    defer { try? FileManager.default.removeItem(atPath: fixture.root) }
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: fixture.managedRoot)
+    let work = fixture.root + "/work"
+    let external = fixture.root + "/external-wt"
+    try await git(["-C", work, "worktree", "add", "--detach", external, fixture.baseSha])
+    #expect(FileManager.default.fileExists(atPath: external))
+
+    await #expect(throws: (any Error).self) {
+        try await manager.removeWorktreeForcing(clonePath: work, worktreePath: external)
+    }
+    #expect(FileManager.default.fileExists(atPath: external))
+}
+
 @Test func createWorktreeEmitsFetchAndAddProgress() async throws {
     let tempRoot = NSTemporaryDirectory() + "wt-prog-\(UUID().uuidString)"
     defer { try? FileManager.default.removeItem(atPath: tempRoot) }
