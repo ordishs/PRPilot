@@ -147,7 +147,7 @@ public struct WorktreeManager: Sendable {
     }
 
     public func checkoutBranchWorktree(
-        clonePath: String, owner: String, repo: String, branch: String,
+        clonePath: String, owner: String, repo: String, branch: String, number: Int,
         remoteName: String = "origin", progress: @escaping @Sendable (String) async -> Void = { _ in }
     ) async throws -> String {
         let worktreesDir = managedRoot + "/worktrees"
@@ -162,15 +162,18 @@ public struct WorktreeManager: Sendable {
                 message: "directory exists but is not a registered git worktree: \(worktreePath)")
         }
         try await runGit(["-C", clonePath, "worktree", "prune"])
-        await progress("Fetching \(branch)…")
-        try await runGit(["-C", clonePath, "fetch", remoteName, branch])
+        // Fetch the PR head via refs/pull/N/head — always present on the base repo, even for
+        // fork heads, unlike the branch name which may live on a remote we don't have.
+        await progress("Fetching PR #\(number)…")
+        try await runGit(["-C", clonePath, "fetch", remoteName, "refs/pull/\(number)/head"])
+        let sha = try await runGit(["-C", clonePath, "rev-parse", "FETCH_HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
         try FileManager.default.createDirectory(atPath: worktreesDir, withIntermediateDirectories: true)
         await progress("Checking out \(branch)…")
         let exists = (try? await runGit(["-C", clonePath, "rev-parse", "--verify", "--quiet", branch])) != nil
         if exists {
             try await runGit(["-C", clonePath, "worktree", "add", worktreePath, branch])
         } else {
-            try await runGit(["-C", clonePath, "worktree", "add", "--track", "-b", branch, worktreePath, "\(remoteName)/\(branch)"])
+            try await runGit(["-C", clonePath, "worktree", "add", "-b", branch, worktreePath, sha])
         }
         return worktreePath
     }

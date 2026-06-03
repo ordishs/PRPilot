@@ -102,7 +102,7 @@ struct ContentView: View {
                     statusBadge(for: review)
                 }
                 Text("\(review.owner)/\(review.repo) · \(review.author ?? "")")
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                 if let status = model.prStatuses[review.id] {
                     HStack(spacing: 4) {
@@ -117,7 +117,7 @@ struct ContentView: View {
                     }
                 }
                 Text(relativeDateLabel(for: review.addedAt))
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
             }
             Spacer()
@@ -287,7 +287,7 @@ private struct StateBadge: View {
 
     var body: some View {
         Text(text.uppercased())
-            .font(.system(size: 9, weight: .semibold))
+            .font(.system(size: 11, weight: .semibold))
             .tracking(0.5)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
