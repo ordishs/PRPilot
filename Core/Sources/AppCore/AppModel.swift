@@ -27,6 +27,9 @@ public final class AppModel {
     public private(set) var claudeSessions: [String: ClaudeSession] = [:]
     public private(set) var claudePaneState: [String: ClaudePaneState] = [:]
     public private(set) var terminalIsDark: Bool = true
+    /// The appearance each live session's `claude` process was launched under, so a
+    /// background session can be relaunched on selection if it no longer matches.
+    private var sessionLaunchedIsDark: [String: Bool] = [:]
     public private(set) var claudePrepLog: [String: [PrepLogEntry]] = [:]
     public private(set) var claudeStatuses: [String: ClaudeStatus] = [:]
     public private(set) var prStatuses: [String: PRStatus] = [:]
@@ -514,6 +517,7 @@ public final class AppModel {
         claudeSessions[review.id] = session
         claudePaneState[review.id] = .sessionLive
         session.applyAppearance(isDark: terminalIsDark)
+        sessionLaunchedIsDark[review.id] = terminalIsDark
         session.start()
         attachTranscriptWatcher(reviewID: review.id, worktreePath: ready.worktreePath)
         recomputeStatus(for: review.id, now: Date())
@@ -594,6 +598,7 @@ public final class AppModel {
         transcriptWatchers[id]?.stop()
         transcriptWatchers.removeValue(forKey: id)
         claudeStatuses.removeValue(forKey: id)
+        sessionLaunchedIsDark.removeValue(forKey: id)
         prStatuses.removeValue(forKey: id)
         rebaseStates.removeValue(forKey: id)
         pushability.removeValue(forKey: id)
@@ -726,6 +731,24 @@ public final class AppModel {
         else { return }
 
         terminateClaudeSession(for: id)
+        await ensureClaudeSession(for: review)
+    }
+
+    /// Called when a review becomes the visible/selected one. If its live session's
+    /// `claude` process was launched under a different appearance than the current one,
+    /// relaunch it (resuming) so Claude re-detects the background — but only when safely
+    /// resumable. This is what makes background sessions catch up on selection without
+    /// relaunching every session on a toggle.
+    public func reconcileTerminalAppearance(for review: WorkItem) async {
+        guard claudeSessions[review.id] != nil,
+              let launchedIsDark = sessionLaunchedIsDark[review.id],
+              launchedIsDark != terminalIsDark,
+              let worktreePath = review.worktreePath,
+              let sessionID = review.claudeSessionID,
+              ClaudeTranscriptPath.transcriptExists(forWorktreePath: worktreePath, sessionID: sessionID)
+        else { return }
+
+        terminateClaudeSession(for: review.id)
         await ensureClaudeSession(for: review)
     }
 

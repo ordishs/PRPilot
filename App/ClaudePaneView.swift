@@ -47,6 +47,7 @@ struct ClaudePaneView: View {
             }
         }
         .task(id: review.id) {
+            await model.reconcileTerminalAppearance(for: review)
             await model.ensureClaudeSession(for: review)
         }
         .onChange(of: review.id) {
