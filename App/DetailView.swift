@@ -61,10 +61,19 @@ struct DetailView: View {
             }
         }
         .navigationTitle(review.number.map { "#\($0) \(review.title)" } ?? review.title)
+        .onAppear { defaultPaneForSelection() }
+        .onChange(of: review.id) { _, _ in defaultPaneForSelection() }
         .onChange(of: review.disabled) { _, disabled in
             if disabled && pane == .claude {
                 pane = .github
             }
+        }
+    }
+
+    // A task has no PR, so the GitHub pane is empty — open it on the Claude pane.
+    private func defaultPaneForSelection() {
+        if review.prRef == nil && !review.disabled {
+            pane = .claude
         }
     }
 
