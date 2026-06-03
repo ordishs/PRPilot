@@ -313,6 +313,7 @@ private struct SidebarSectionHeader: View {
 }
 
 private struct StateBadge: View {
+    @Environment(\.colorScheme) private var colorScheme
     let text: String
     let color: Color
 
@@ -321,10 +322,10 @@ private struct StateBadge: View {
             .font(.system(size: 12, weight: .bold))
             .tracking(0.5)
             .foregroundStyle(color)
-            .brightness(0.12)
+            .brightness(colorScheme == .dark ? 0.12 : 0)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
-            .background(color.opacity(0.30))
+            .background(color.opacity(colorScheme == .dark ? 0.30 : 0.18))
             .clipShape(Capsule())
     }
 }
