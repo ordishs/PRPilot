@@ -15,7 +15,7 @@ public struct WorktreeDiffLoader: DiffLoading {
     }
 
     public func loadDiff(for review: WorkItem, registeredClonePath: String?) async throws -> DiffResult {
-        let ready = try await worktreeProvider.ensureWorktree(for: review, registeredClonePath: registeredClonePath)
+        let ready = try await worktreeProvider.ensureWorktree(for: review, editable: false, registeredClonePath: registeredClonePath)
         try await worktreeManager.fetch(clonePath: ready.clonePath, remoteName: ready.remoteName, ref: review.baseBranch)
         let base = try await worktreeManager.mergeBase(worktreePath: ready.worktreePath, baseRef: "\(ready.remoteName)/\(review.baseBranch)")
         let files = try await diffService.diff(worktreePath: ready.worktreePath, baseRef: base)

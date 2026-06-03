@@ -126,6 +126,16 @@ struct ContentView: View {
         }
         .opacity(review.disabled ? 0.45 : 1.0)
         .contextMenu {
+            if review.category(myLogin: model.currentLogin) != .reviewRequest, review.headBranch != nil {
+                Button {
+                    Task { await model.rebase(id: review.id) }
+                } label: { Label("Rebase on \(review.baseBranch)", systemImage: "arrow.triangle.merge") }
+                Button {
+                    Task { await model.push(id: review.id) }
+                } label: { Label("Push", systemImage: "arrow.up.circle") }
+                .disabled(!(model.pushability[review.id]?.canPush ?? false))
+                Divider()
+            }
             Button {
                 if let sessionID = review.claudeSessionID {
                     NSPasteboard.general.clearContents()

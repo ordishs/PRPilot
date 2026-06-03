@@ -5,6 +5,7 @@ import ReviewStore
 import GitHubKit
 import ClaudeSessionKit
 import CommandSupport
+import WorktreeKit
 
 public enum ClaudePaneState: Sendable, Equatable {
     case idle
@@ -28,6 +29,17 @@ public final class AppModel {
     public private(set) var claudePrepLog: [String: [PrepLogEntry]] = [:]
     public private(set) var claudeStatuses: [String: ClaudeStatus] = [:]
     public private(set) var prStatuses: [String: PRStatus] = [:]
+
+    public enum RebaseState: Sendable, Equatable {
+        case conflicted([String])
+        case failed(String)
+    }
+    public struct Pushability: Sendable, Equatable {
+        public var canPush: Bool
+        public var needsForce: Bool
+    }
+    public private(set) var rebaseStates: [String: RebaseState] = [:]
+    public private(set) var pushability: [String: Pushability] = [:]
     public private(set) var currentLogin: String?
     public private(set) var settings: Settings = .default
     public private(set) var discoveryWarnings: [String] = []
@@ -49,6 +61,7 @@ public final class AppModel {
     private let diffLoader: DiffLoading
     private let worktreeProvider: WorktreeProviding
     private let cloneRegistrar: CloneRegistering
+    private let worktreeOps: WorktreeManaging
     private let claudePath: String
     private let notificationPoster: NotificationPosting
     private let statusReader: ClaudeStatusReader
@@ -61,6 +74,7 @@ public final class AppModel {
         diffLoader: DiffLoading,
         worktreeProvider: WorktreeProviding,
         cloneRegistrar: CloneRegistering,
+        worktreeOps: WorktreeManaging,
         claudePath: String,
         notificationPoster: NotificationPosting,
         statusReader: ClaudeStatusReader = ClaudeStatusReader(),
@@ -71,6 +85,7 @@ public final class AppModel {
         self.diffLoader = diffLoader
         self.worktreeProvider = worktreeProvider
         self.cloneRegistrar = cloneRegistrar
+        self.worktreeOps = worktreeOps
         self.claudePath = claudePath
         self.notificationPoster = notificationPoster
         self.statusReader = statusReader
@@ -409,10 +424,12 @@ public final class AppModel {
         let progress: PrepProgress = { [weak self] message in
             await self?.appendPrepLog(message, for: reviewID)
         }
+        let editable = review.category(myLogin: currentLogin) != .reviewRequest
         let ready: WorktreeReady
         do {
             ready = try await worktreeProvider.ensureWorktree(
                 for: review,
+                editable: editable,
                 registeredClonePath: registeredClonePath(for: review),
                 progress: progress
             )
@@ -481,6 +498,9 @@ public final class AppModel {
         session.start()
         attachTranscriptWatcher(reviewID: review.id, worktreePath: ready.worktreePath)
         recomputeStatus(for: review.id, now: Date())
+        if editable {
+            await refreshPushability(for: review.id)
+        }
     }
 
     private func attachTranscriptWatcher(reviewID: String, worktreePath: String) {
@@ -556,6 +576,8 @@ public final class AppModel {
         transcriptWatchers.removeValue(forKey: id)
         claudeStatuses.removeValue(forKey: id)
         prStatuses.removeValue(forKey: id)
+        rebaseStates.removeValue(forKey: id)
+        pushability.removeValue(forKey: id)
         lastEventAt.removeValue(forKey: id)
         lastVerdictSnippet.removeValue(forKey: id)
         notifiedIdleForSession.remove(id)
@@ -573,6 +595,8 @@ public final class AppModel {
         transcriptWatchers.removeAll()
         claudeStatuses.removeAll()
         prStatuses.removeAll()
+        rebaseStates.removeAll()
+        pushability.removeAll()
         lastEventAt.removeAll()
         lastVerdictSnippet.removeAll()
         notifiedIdleForSession.removeAll()
@@ -606,7 +630,7 @@ public final class AppModel {
                 if self.settings.autoLoad {
                     await self.ensureClaudeSession(for: review)
                 } else {
-                    _ = try? await self.worktreeProvider.ensureWorktree(for: review, registeredClonePath: clonePath)
+                    _ = try? await self.worktreeProvider.ensureWorktree(for: review, editable: false, registeredClonePath: clonePath)
                 }
             }
         }
@@ -706,6 +730,71 @@ public final class AppModel {
             .map(\.id)
         for id in ids {
             await refreshReviewState(for: id)
+        }
+    }
+
+    public func rebase(id: String) async {
+        guard let item = reviews.first(where: { $0.id == id }),
+              let worktreePath = item.worktreePath, item.headBranch != nil else { return }
+        do {
+            try await worktreeOps.fetch(clonePath: registeredClonePath(for: item) ?? worktreePath, remoteName: "origin", ref: item.baseBranch)
+            let outcome = try await worktreeOps.rebaseOnto(worktreePath: worktreePath, upstream: "origin/\(item.baseBranch)")
+            switch outcome {
+            case .clean: rebaseStates[id] = nil
+            case .conflicts(let files): rebaseStates[id] = .conflicted(files)
+            }
+        } catch {
+            rebaseStates[id] = .failed(String(describing: error))
+        }
+        await refreshPushability(for: id)
+    }
+
+    public func continueRebase(id: String) async {
+        guard let item = reviews.first(where: { $0.id == id }), let worktreePath = item.worktreePath else { return }
+        do {
+            switch try await worktreeOps.rebaseContinue(worktreePath: worktreePath) {
+            case .clean: rebaseStates[id] = nil
+            case .conflicts(let files): rebaseStates[id] = .conflicted(files)
+            }
+        } catch {
+            rebaseStates[id] = .failed(String(describing: error))
+        }
+        await refreshPushability(for: id)
+    }
+
+    public func abortRebase(id: String) async {
+        guard let item = reviews.first(where: { $0.id == id }), let worktreePath = item.worktreePath else { return }
+        try? await worktreeOps.rebaseAbort(worktreePath: worktreePath)
+        rebaseStates[id] = nil
+        await refreshPushability(for: id)
+    }
+
+    public func push(id: String) async {
+        guard let item = reviews.first(where: { $0.id == id }),
+              let worktreePath = item.worktreePath, let branch = item.headBranch else { return }
+        let force = pushability[id]?.needsForce ?? false
+        do {
+            try await worktreeOps.push(worktreePath: worktreePath, remoteName: "origin", branch: branch, force: force)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+        await refreshPushability(for: id)
+    }
+
+    public func refreshPushability(for id: String) async {
+        guard let item = reviews.first(where: { $0.id == id }),
+              let worktreePath = item.worktreePath,
+              let branch = item.headBranch,
+              (try? await worktreeOps.currentBranch(worktreePath: worktreePath)) ?? nil == branch else {
+            pushability[id] = nil
+            return
+        }
+        if let counts = try? await worktreeOps.aheadBehind(worktreePath: worktreePath, upstream: "origin/\(branch)") {
+            pushability[id] = Pushability(canPush: counts.ahead > 0, needsForce: counts.behind > 0)
+        } else if let base = try? await worktreeOps.aheadBehind(worktreePath: worktreePath, upstream: "origin/\(item.baseBranch)") {
+            pushability[id] = Pushability(canPush: base.ahead > 0, needsForce: false)
+        } else {
+            pushability[id] = nil
         }
     }
 
