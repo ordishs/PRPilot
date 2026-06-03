@@ -9,6 +9,7 @@ struct ContentView: View {
     let webViewCache: WebViewCache
     @State private var showingAdd = false
     @State private var showingNewTask = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         NavigationSplitView {
@@ -88,6 +89,12 @@ struct ContentView: View {
             model.prefetch(for: review)
             _ = webViewCache.ensure(for: review)
             Task { await model.markReviewOpened(id) }
+        }
+        .onAppear {
+            Task { await model.setTerminalAppearance(isDark: colorScheme == .dark) }
+        }
+        .onChange(of: colorScheme) { _, newValue in
+            Task { await model.setTerminalAppearance(isDark: newValue == .dark) }
         }
     }
 
