@@ -12,22 +12,21 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            Group {
-                if model.settings.sidebarGrouping == .none {
-                    List(model.reviews.sorted { $0.addedAt > $1.addedAt }, selection: $model.selection) { review in
-                        sidebarRow(for: review)
-                    }
-                } else {
-                    List(selection: $model.selection) {
-                        ForEach(groupedReviews(), id: \.title) { group in
-                            Section(group.title) {
-                                ForEach(group.reviews) { review in
-                                    sidebarRow(for: review)
-                                        .tag(review.id as String?)
-                                }
-                            }
-                        }
-                    }
+            List(selection: $model.selection) {
+                let sections = sidebarSections(
+                    items: model.reviews,
+                    myLogin: model.currentLogin,
+                    sort: model.settings.sidebarSort
+                )
+                Section(isExpanded: myWorkExpandedBinding()) {
+                    sectionBody(sections.myWork)
+                } header: {
+                    sectionHeader(title: "My Work", count: sections.myWork.count, accent: .blue)
+                }
+                Section(isExpanded: reviewsExpandedBinding()) {
+                    sectionBody(sections.reviewRequests)
+                } header: {
+                    sectionHeader(title: "Review Requests", count: sections.reviewRequests.count, accent: .purple)
                 }
             }
             .onDeleteCommand {
@@ -40,15 +39,15 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItem {
                     Menu {
-                        Picker("Group by", selection: groupingBinding) {
-                            ForEach(SidebarGrouping.allCases, id: \.self) { mode in
+                        Picker("Sort", selection: sortBinding) {
+                            ForEach(SidebarSort.allCases, id: \.self) { mode in
                                 Text(mode.displayName).tag(mode)
                             }
                         }
                     } label: {
-                        Label("Group", systemImage: "rectangle.3.group")
+                        Label("Sort", systemImage: "arrow.up.arrow.down")
                     }
-                    .help("Group sidebar by category, date, author, status, or none")
+                    .help("Sort items within each section by recency, status, or author")
                 }
                 ToolbarItem {
                     Menu {
@@ -89,6 +88,68 @@ struct ContentView: View {
             model.prefetch(for: review)
             _ = webViewCache.ensure(for: review)
             Task { await model.markReviewOpened(id) }
+        }
+    }
+
+    private var sortBinding: Binding<SidebarSort> {
+        Binding(
+            get: { model.settings.sidebarSort },
+            set: { newValue in
+                var updated = model.settings
+                updated.sidebarSort = newValue
+                Task { await model.updateSettings(updated) }
+            }
+        )
+    }
+
+    private func myWorkExpandedBinding() -> Binding<Bool> {
+        Binding(
+            get: { !model.settings.myWorkCollapsed },
+            set: { expanded in
+                var updated = model.settings
+                updated.myWorkCollapsed = !expanded
+                Task { await model.updateSettings(updated) }
+            }
+        )
+    }
+
+    private func reviewsExpandedBinding() -> Binding<Bool> {
+        Binding(
+            get: { !model.settings.reviewsCollapsed },
+            set: { expanded in
+                var updated = model.settings
+                updated.reviewsCollapsed = !expanded
+                Task { await model.updateSettings(updated) }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func sectionBody(_ items: [WorkItem]) -> some View {
+        if items.isEmpty {
+            Text("Nothing here yet")
+                .font(.callout)
+                .foregroundStyle(.tertiary)
+        } else {
+            ForEach(items) { review in
+                sidebarRow(for: review)
+                    .tag(review.id as String?)
+            }
+        }
+    }
+
+    private func sectionHeader(title: String, count: Int, accent: Color) -> some View {
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(accent)
+                .frame(width: 3, height: 14)
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.5)
+            Spacer()
+            Text("\(count)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -164,100 +225,6 @@ struct ContentView: View {
                 Label("Remove from List", systemImage: "trash")
             }
         }
-    }
-
-    private struct ReviewGroup: Identifiable {
-        let title: String
-        let reviews: [WorkItem]
-        var id: String { title }
-    }
-
-    private var groupingBinding: Binding<SidebarGrouping> {
-        Binding(
-            get: { model.settings.sidebarGrouping },
-            set: { newValue in
-                var updated = model.settings
-                updated.sidebarGrouping = newValue
-                Task { await model.updateSettings(updated) }
-            }
-        )
-    }
-
-    private func groupedReviews() -> [ReviewGroup] {
-        switch model.settings.sidebarGrouping {
-        case .byCategory:
-            return groupByCategory()
-        case .none:
-            return [ReviewGroup(title: "", reviews: model.reviews.sorted { $0.addedAt > $1.addedAt })]
-        case .byDate:
-            return groupByDate()
-        case .byAuthor:
-            return groupByAuthor()
-        case .byStatus:
-            return groupByStatus()
-        }
-    }
-
-    private func groupByCategory() -> [ReviewGroup] {
-        let myLogin = model.currentLogin
-        var myWork: [WorkItem] = []
-        var reviewRequests: [WorkItem] = []
-        for review in model.reviews {
-            switch review.category(myLogin: myLogin) {
-            case .task, .myPR:
-                myWork.append(review)
-            case .reviewRequest:
-                reviewRequests.append(review)
-            }
-        }
-        var groups: [ReviewGroup] = []
-        if !myWork.isEmpty {
-            groups.append(ReviewGroup(title: "My Work", reviews: myWork.sorted { $0.addedAt > $1.addedAt }))
-        }
-        if !reviewRequests.isEmpty {
-            groups.append(ReviewGroup(title: "Review Requests", reviews: reviewRequests.sorted { $0.addedAt > $1.addedAt }))
-        }
-        return groups
-    }
-
-    private func groupByDate() -> [ReviewGroup] {
-        let buckets: [(String, (WorkItem) -> Bool)] = [
-            ("Today", { Calendar.current.isDateInToday($0.addedAt) }),
-            ("Yesterday", { Calendar.current.isDateInYesterday($0.addedAt) }),
-            ("This Week", { daysAgo($0.addedAt) < 7 }),
-            ("Last Week", { daysAgo($0.addedAt) < 14 }),
-            ("Older", { _ in true })
-        ]
-        var remaining = model.reviews
-        var groups: [ReviewGroup] = []
-        for (title, predicate) in buckets {
-            let (match, rest) = remaining.partitioned(by: predicate)
-            if !match.isEmpty {
-                groups.append(ReviewGroup(title: title, reviews: match.sorted { $0.addedAt > $1.addedAt }))
-            }
-            remaining = rest
-        }
-        return groups
-    }
-
-    private func groupByAuthor() -> [ReviewGroup] {
-        let byAuthor = Dictionary(grouping: model.reviews) { $0.author ?? "unknown" }
-        return byAuthor.keys.sorted().map { author in
-            ReviewGroup(title: author, reviews: byAuthor[author]!.sorted { $0.addedAt > $1.addedAt })
-        }
-    }
-
-    private func groupByStatus() -> [ReviewGroup] {
-        let order: [(PRState, String)] = [(.open, "Open"), (.draft, "Draft"), (.merged, "Merged"), (.closed, "Closed")]
-        return order.compactMap { (state, title) in
-            let matching = model.reviews.filter { $0.prState == state }
-            guard !matching.isEmpty else { return nil }
-            return ReviewGroup(title: title, reviews: matching.sorted { $0.addedAt > $1.addedAt })
-        }
-    }
-
-    private func daysAgo(_ date: Date) -> Int {
-        Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0
     }
 
     @ViewBuilder
@@ -370,19 +337,4 @@ private func relativeDateLabel(for date: Date) -> String {
     if daysAgo < 7 { return "This Week" }
     if daysAgo < 14 { return "Last Week" }
     return "Older"
-}
-
-private extension Array {
-    func partitioned(by predicate: (Element) -> Bool) -> (matching: [Element], rest: [Element]) {
-        var matching: [Element] = []
-        var rest: [Element] = []
-        for element in self {
-            if predicate(element) {
-                matching.append(element)
-            } else {
-                rest.append(element)
-            }
-        }
-        return (matching, rest)
-    }
 }
