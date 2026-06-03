@@ -26,6 +26,7 @@ public final class AppModel {
     public private(set) var registeredRepos: [RegisteredRepo] = []
     public private(set) var claudeSessions: [String: ClaudeSession] = [:]
     public private(set) var claudePaneState: [String: ClaudePaneState] = [:]
+    public private(set) var terminalIsDark: Bool = true
     public private(set) var claudePrepLog: [String: [PrepLogEntry]] = [:]
     public private(set) var claudeStatuses: [String: ClaudeStatus] = [:]
     public private(set) var prStatuses: [String: PRStatus] = [:]
@@ -96,6 +97,11 @@ public final class AppModel {
         reviews = await store.allItems()
         registeredRepos = await store.allRepos()
         settings = await store.settings()
+        switch settings.appearance {
+        case .light: terminalIsDark = false
+        case .dark: terminalIsDark = true
+        case .system: break   // resolved by ContentView's colorScheme observer
+        }
         if currentLogin == nil {
             currentLogin = try? await client.fetchCurrentLogin()
         }
@@ -507,6 +513,9 @@ public final class AppModel {
         let session = ClaudeSession(spec: spec)
         claudeSessions[review.id] = session
         claudePaneState[review.id] = .sessionLive
+        if !terminalIsDark {
+            session.applyLightAppearance()
+        }
         session.start()
         attachTranscriptWatcher(reviewID: review.id, worktreePath: ready.worktreePath)
         recomputeStatus(for: review.id, now: Date())
@@ -695,6 +704,26 @@ public final class AppModel {
         }
         guard let refreshed = reviews.first(where: { $0.id == id }) else { return }
         await ensureClaudeSession(for: refreshed, forceFresh: true)
+    }
+
+    /// Updates the terminal appearance. On a real change, relaunches ONLY the currently
+    /// selected session (resuming) so Claude re-detects the background and re-themes its
+    /// TUI. Other running sessions are left as-is (selected-only scope). The selected
+    /// session is relaunched only if it is safely resumable.
+    public func setTerminalAppearance(isDark: Bool) async {
+        guard isDark != terminalIsDark else { return }
+        terminalIsDark = isDark
+
+        guard let id = selection,
+              claudeSessions[id] != nil,
+              let review = reviews.first(where: { $0.id == id }),
+              let worktreePath = review.worktreePath,
+              let sessionID = review.claudeSessionID,
+              ClaudeTranscriptPath.transcriptExists(forWorktreePath: worktreePath, sessionID: sessionID)
+        else { return }
+
+        terminateClaudeSession(for: id)
+        await ensureClaudeSession(for: review)
     }
 
     func markClaudeReviewed(_ id: String) async {

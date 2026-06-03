@@ -1867,3 +1867,14 @@ private func editableItem(worktreePath: String = "/tmp/wt", headBranch: String =
     #expect(model.pushability[item.id]?.canPush == true)
     #expect(model.pushability[item.id]?.needsForce == false)
 }
+
+@Test @MainActor func setTerminalAppearanceFlipsOnlyOnChange() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+
+    #expect(model.terminalIsDark == true)
+    await model.setTerminalAppearance(isDark: true)   // no-op
+    #expect(model.terminalIsDark == true)
+    await model.setTerminalAppearance(isDark: false)  // flips; no selection → no relaunch
+    #expect(model.terminalIsDark == false)
+}
