@@ -44,6 +44,12 @@ public final class ClaudeSession {
         state = .running
     }
 
+    /// Applies the light terminal theme. Dark appearance needs no call — the terminal
+    /// uses SwiftTerm's defaults. Call before `start()` so Claude detects the background.
+    public func applyLightAppearance() {
+        ClaudeTerminalTheme.applyLight(to: terminalView)
+    }
+
     public func restart() {
         terminate()
         start()
