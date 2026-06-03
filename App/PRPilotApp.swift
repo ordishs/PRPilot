@@ -17,6 +17,7 @@ struct PRPilotApp: App {
                         .sheet(isPresented: $showingManage) {
                             ManageLocalClonesView(model: model, isPresented: $showingManage)
                         }
+                        .preferredColorScheme(model.settings.appearance.colorScheme)
                 } else if let startupError {
                     Text(startupError)
                         .foregroundStyle(.red)
@@ -59,6 +60,7 @@ struct PRPilotApp: App {
         Settings {
             if let model {
                 SettingsView(model: model)
+                    .preferredColorScheme(model.settings.appearance.colorScheme)
             } else {
                 Text("Loading…")
                     .frame(width: 540, height: 360)
