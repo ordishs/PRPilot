@@ -13,3 +13,7 @@ import SwiftTerm
     #expect(black.green == 40 * 257)
     #expect(black.blue == 40 * 257)
 }
+
+@Test func darkAnsiPaletteHasSixteenColors() {
+    #expect(ClaudeTerminalTheme.darkAnsiPalette.count == 16)
+}

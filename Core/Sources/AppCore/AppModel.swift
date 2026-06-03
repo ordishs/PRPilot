@@ -513,9 +513,7 @@ public final class AppModel {
         let session = ClaudeSession(spec: spec)
         claudeSessions[review.id] = session
         claudePaneState[review.id] = .sessionLive
-        if !terminalIsDark {
-            session.applyLightAppearance()
-        }
+        session.applyAppearance(isDark: terminalIsDark)
         session.start()
         attachTranscriptWatcher(reviewID: review.id, worktreePath: ready.worktreePath)
         recomputeStatus(for: review.id, now: Date())
@@ -706,13 +704,18 @@ public final class AppModel {
         await ensureClaudeSession(for: refreshed, forceFresh: true)
     }
 
-    /// Updates the terminal appearance. On a real change, relaunches ONLY the currently
-    /// selected session (resuming) so Claude re-detects the background and re-themes its
-    /// TUI. Other running sessions are left as-is (selected-only scope). The selected
-    /// session is relaunched only if it is safely resumable.
+    /// Updates the terminal appearance. On a real change, immediately re-themes the chrome
+    /// of EVERY live session so the terminal deterministically follows the app appearance,
+    /// then relaunches ONLY the currently selected session (resuming) so Claude re-detects
+    /// the background and re-themes its own TUI. Relaunch is skipped if the selected session
+    /// isn't safely resumable.
     public func setTerminalAppearance(isDark: Bool) async {
         guard isDark != terminalIsDark else { return }
         terminalIsDark = isDark
+
+        for session in claudeSessions.values {
+            session.applyAppearance(isDark: isDark)
+        }
 
         guard let id = selection,
               claudeSessions[id] != nil,
