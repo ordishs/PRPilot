@@ -55,7 +55,8 @@ public final class AppModel {
     private var claudePreparing: Set<String> = []
     private var lastEventAt: [String: Date] = [:]
     private var lastVerdictSnippet: [String: String] = [:]
-    private var notifiedIdleForSession: Set<String> = []
+    private var lastEventWasTurnCompletion: [String: Bool] = [:]
+    private var notifiedAwaitingForSession: Set<String> = []
     private var tickTask: Task<Void, Never>?
     private var discoveryTask: Task<Void, Never>?
     private static let tickIntervalNanoseconds: UInt64 = 5_000_000_000
@@ -631,6 +632,7 @@ public final class AppModel {
         let isNewer = lastEventAt[reviewID].map { $0 < date } ?? true
         if isNewer {
             lastEventAt[reviewID] = date
+            lastEventWasTurnCompletion[reviewID] = turnCompleted
         }
         if let snippet, !snippet.isEmpty {
             lastVerdictSnippet[reviewID] = snippet
@@ -650,27 +652,31 @@ public final class AppModel {
             processState: processState,
             lastEventAt: lastEventAt[reviewID],
             lastVerdictSnippet: lastVerdictSnippet[reviewID],
-            now: now
+            now: now,
+            lastEventWasTurnCompletion: lastEventWasTurnCompletion[reviewID] ?? false
         )
         let oldStatus = claudeStatuses[reviewID]
         claudeStatuses[reviewID] = newStatus
+        if case .working = newStatus {
+            notifiedAwaitingForSession.remove(reviewID)
+        }
         if shouldFireReviewReady(old: oldStatus, new: newStatus, reviewID: reviewID) {
-            notifiedIdleForSession.insert(reviewID)
+            notifiedAwaitingForSession.insert(reviewID)
             postReviewReadyNotification(for: reviewID, status: newStatus)
         }
     }
 
     private func shouldFireReviewReady(old: ClaudeStatus?, new: ClaudeStatus, reviewID: String) -> Bool {
-        guard !notifiedIdleForSession.contains(reviewID) else { return false }
-        guard case .idle = new else { return false }
-        guard case .working = old else { return false }
+        guard !notifiedAwaitingForSession.contains(reviewID) else { return false }
+        guard case .awaitingInput = new else { return false }
         return true
     }
 
     private func postReviewReadyNotification(for reviewID: String, status: ClaudeStatus) {
         guard let review = reviews.first(where: { $0.id == reviewID }) else { return }
         var snippet: String? = nil
-        if case .idle(_, let s) = status { snippet = s }
+        if case .awaitingInput(_, let s) = status { snippet = s }
+        if snippet == nil { snippet = lastVerdictSnippet[reviewID] }
         let title = "Review ready · #\(review.number.map(String.init) ?? "?")"
         let body = snippet ?? "\(review.owner)/\(review.repo) · \(review.author ?? "")"
         let poster = notificationPoster
@@ -693,7 +699,8 @@ public final class AppModel {
         pushability.removeValue(forKey: id)
         lastEventAt.removeValue(forKey: id)
         lastVerdictSnippet.removeValue(forKey: id)
-        notifiedIdleForSession.remove(id)
+        lastEventWasTurnCompletion.removeValue(forKey: id)
+        notifiedAwaitingForSession.remove(id)
     }
 
     public func terminateAllClaudeSessions() {
@@ -712,7 +719,8 @@ public final class AppModel {
         pushability.removeAll()
         lastEventAt.removeAll()
         lastVerdictSnippet.removeAll()
-        notifiedIdleForSession.removeAll()
+        lastEventWasTurnCompletion.removeAll()
+        notifiedAwaitingForSession.removeAll()
     }
 
     public func prefetch(for review: WorkItem) {

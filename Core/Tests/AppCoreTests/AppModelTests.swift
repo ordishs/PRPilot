@@ -699,12 +699,13 @@ private func stubClient() -> GitHubClient {
     try await Task.sleep(nanoseconds: 300_000_000)
     #expect(model.reviews.first(where: { $0.id == review.id })?.claudeReviewedAt != nil)
 
-    // Completing a turn is silent — the notification only fires on a live working->idle edge.
+    // Completing a turn now yields .awaitingInput, which fires the "needs you" notification.
     let posted = await poster.posted
-    #expect(posted.isEmpty)
+    #expect(posted.count == 1)
+    #expect(posted.first?.reviewID == review.id)
 }
 
-@Test @MainActor func firstIdleTransitionFiresNotificationOnce() async throws {
+@Test @MainActor func awaitingInputFiresNotificationOnceAndRearms() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
     try await store.upsertItem(review)
@@ -723,24 +724,25 @@ private func stubClient() -> GitHubClient {
     await model.load()
     await model.ensureClaudeSession(for: review)
 
+    // All transitions run synchronously (no await) so the stub process cannot
+    // exit mid-sequence; the single sleep at the end flushes the notification Tasks.
     let t0 = Date()
-    model.handleTranscriptEvent(reviewID: review.id, at: t0, snippet: "first")
-    model.recomputeStatus(for: review.id, now: t0)
-
+    model.handleTranscriptEvent(reviewID: review.id, at: t0, snippet: "working", turnCompleted: false)
+    model.recomputeStatus(for: review.id, now: t0)                       // working
     let t1 = t0.addingTimeInterval(1)
-    model.recomputeStatus(for: review.id, now: t1)
-
-    let t2 = t1.addingTimeInterval(0.05)
-    model.handleTranscriptEvent(reviewID: review.id, at: t2, snippet: "second")
-    model.recomputeStatus(for: review.id, now: t2)
-
+    model.handleTranscriptEvent(reviewID: review.id, at: t1, snippet: "done", turnCompleted: true)
+    model.recomputeStatus(for: review.id, now: t1)                       // awaitingInput -> fire #1
+    model.recomputeStatus(for: review.id, now: t1.addingTimeInterval(1)) // still awaiting -> no fire
+    let t2 = t1.addingTimeInterval(2)
+    model.handleTranscriptEvent(reviewID: review.id, at: t2, snippet: "more", turnCompleted: false)
+    model.recomputeStatus(for: review.id, now: t2)                       // working -> re-arm
     let t3 = t2.addingTimeInterval(1)
-    model.recomputeStatus(for: review.id, now: t3)
+    model.handleTranscriptEvent(reviewID: review.id, at: t3, snippet: "done2", turnCompleted: true)
+    model.recomputeStatus(for: review.id, now: t3)                       // awaitingInput -> fire #2
 
-    try await Task.sleep(nanoseconds: 100_000_000)
+    try await Task.sleep(nanoseconds: 200_000_000)
     let posted = await poster.posted
-    #expect(posted.count == 1)
-    #expect(posted.first?.reviewID == review.id)
+    #expect(posted.count == 2)
 }
 
 private let sampleSearchHitJSON = """
