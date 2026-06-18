@@ -24,3 +24,5 @@ build/
 
 # Local release config (team id, notary profile) loaded by scripts/release.sh
 .env
+
+.worktrees/
