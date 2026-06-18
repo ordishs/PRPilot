@@ -201,6 +201,20 @@ struct ContentView: View {
         }
         .opacity(review.disabled ? 0.45 : 1.0)
         .contextMenu {
+            if review.category(myLogin: model.currentLogin) == .issue {
+                Menu {
+                    Button("On Hold") { Task { await model.setIssueStatus(.onHold, for: review.id) } }
+                    Button("Done") { Task { await model.setIssueStatus(.done, for: review.id) } }
+                    Button("In Review") { Task { await model.setIssueStatus(.inReview, for: review.id) } }
+                    Button("Reviewed") { Task { await model.setIssueStatus(.reviewed, for: review.id) } }
+                    Button("New") { Task { await model.setIssueStatus(.new, for: review.id) } }
+                    Divider()
+                    Button("Clear (Auto)") { Task { await model.setIssueStatus(nil, for: review.id) } }
+                } label: {
+                    Label("Set Status", systemImage: "tag")
+                }
+                Divider()
+            }
             if review.category(myLogin: model.currentLogin) != .reviewRequest, review.headBranch != nil {
                 Button {
                     Task { await model.rebase(id: review.id) }
@@ -243,21 +257,43 @@ struct ContentView: View {
 
     @ViewBuilder
     private func statusBadge(for review: WorkItem) -> some View {
-        switch review.sidebarStatus {
-        case .merged:
-            StateBadge(text: "Merged", color: .purple)
-        case .closed:
-            StateBadge(text: "Closed", color: .red)
-        case .approved:
-            StateBadge(text: "Approved", color: .green)
-        case .new:
-            StateBadge(text: "New", color: .orange)
-        case .reviewed:
-            StateBadge(text: "Reviewed", color: .blue)
-        case .draft:
-            StateBadge(text: "Draft", color: .gray)
-        case .open:
-            EmptyView()
+        if review.category(myLogin: model.currentLogin) == .issue {
+            issueStatusBadge(for: review)
+        } else {
+            switch review.sidebarStatus {
+            case .merged:
+                StateBadge(text: "Merged", color: .purple)
+            case .closed:
+                StateBadge(text: "Closed", color: .red)
+            case .approved:
+                StateBadge(text: "Approved", color: .green)
+            case .new:
+                StateBadge(text: "New", color: .orange)
+            case .reviewed:
+                StateBadge(text: "Reviewed", color: .blue)
+            case .draft:
+                StateBadge(text: "Draft", color: .gray)
+            case .open:
+                EmptyView()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func issueStatusBadge(for review: WorkItem) -> some View {
+        let status = resolveIssueStatus(
+            manual: review.manualIssueStatus,
+            prState: review.prState,
+            claudeReviewedAt: review.claudeReviewedAt,
+            claudeWorking: model.claudeStatuses[review.id] == .working
+        )
+        switch status {
+        case .new: StateBadge(text: "New", color: .orange)
+        case .inReview: StateBadge(text: "In Review", color: .blue)
+        case .reviewed: StateBadge(text: "Reviewed", color: .teal)
+        case .onHold: StateBadge(text: "On Hold", color: .gray)
+        case .done: StateBadge(text: "Done", color: .purple)
+        case .closed: StateBadge(text: "Closed", color: .red)
         }
     }
 }
