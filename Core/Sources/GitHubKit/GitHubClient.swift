@@ -169,6 +169,29 @@ public struct GitHubClient: Sendable {
     }
 }
 
+public struct IssueHit: Sendable, Equatable {
+    public let owner: String
+    public let repo: String
+    public let number: Int
+    public let title: String
+    public let url: String
+    public let authorLogin: String
+    public let state: String
+
+    public var id: String { "\(owner)/\(repo)/issues/\(number)" }
+    public var locator: IssueLocator { IssueLocator(owner: owner, repo: repo, number: number) }
+
+    public init(owner: String, repo: String, number: Int, title: String, url: String, authorLogin: String, state: String) {
+        self.owner = owner
+        self.repo = repo
+        self.number = number
+        self.title = title
+        self.url = url
+        self.authorLogin = authorLogin
+        self.state = state
+    }
+}
+
 public struct DiscoveryHit: Sendable, Equatable {
     public let owner: String
     public let repo: String
@@ -202,6 +225,26 @@ private struct GHSearchHit: Decodable {
     let url: String
     let state: String
     let isDraft: Bool
+    let author: Author
+    let repository: Repository
+}
+
+struct GHIssue: Decodable {
+    struct Author: Decodable { let login: String }
+    let number: Int
+    let title: String
+    let url: String
+    let state: String
+    let author: Author
+}
+
+private struct GHIssueSearchHit: Decodable {
+    struct Author: Decodable { let login: String }
+    struct Repository: Decodable { let nameWithOwner: String }
+    let number: Int
+    let title: String
+    let url: String
+    let state: String
     let author: Author
     let repository: Repository
 }
@@ -241,6 +284,74 @@ extension GitHubClient {
 
     public static func mapDiscoveryState(state: String, isDraft: Bool) -> PRState {
         mapState(state: state.uppercased(), isDraft: isDraft)
+    }
+}
+
+extension GitHubClient {
+    public static func mapIssueState(state: String) -> PRState {
+        state.uppercased() == "CLOSED" ? .closed : .open
+    }
+
+    public func searchIssues(query: String) async throws -> [IssueHit] {
+        let fields = "number,title,url,state,author,repository"
+        var tokens = query.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        if !tokens.contains("is:issue") {
+            tokens.append("is:issue")
+        }
+        let result = try await runner.run(
+            executable: ghPath,
+            arguments: ["search", "issues"] + tokens + ["--json", fields, "--limit", "100"]
+        )
+        guard result.exitCode == 0 else {
+            throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
+        }
+        let raw: [GHIssueSearchHit]
+        do {
+            raw = try JSONDecoder().decode([GHIssueSearchHit].self, from: Data(result.standardOutput.utf8))
+        } catch {
+            throw GitHubError.decodingFailed(String(describing: error))
+        }
+        return raw.compactMap { row -> IssueHit? in
+            let parts = row.repository.nameWithOwner.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return nil }
+            return IssueHit(
+                owner: parts[0], repo: parts[1], number: row.number, title: row.title,
+                url: row.url, authorLogin: row.author.login, state: row.state
+            )
+        }
+    }
+
+    public func fetchIssue(for loc: IssueLocator, origin: ReviewOrigin = .added, now: Date = Date()) async throws -> WorkItem {
+        let result = try await runner.run(
+            executable: ghPath,
+            arguments: ["issue", "view", String(loc.number), "--repo", "\(loc.owner)/\(loc.repo)", "--json", "number,title,url,state,author"]
+        )
+        guard result.exitCode == 0 else {
+            throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
+        }
+        let issue: GHIssue
+        do {
+            issue = try JSONDecoder().decode(GHIssue.self, from: Data(result.standardOutput.utf8))
+        } catch {
+            throw GitHubError.decodingFailed(String(describing: error))
+        }
+        guard let url = URL(string: issue.url) else {
+            throw GitHubError.decodingFailed("invalid url: \(issue.url)")
+        }
+        let base = (try? await fetchDefaultBase(owner: loc.owner, repo: loc.repo)) ?? "main"
+        return WorkItem(
+            title: issue.title,
+            repoKey: "github.com/\(loc.owner)/\(loc.repo)",
+            baseBranch: base,
+            headBranch: WorkItem.issueBranchName(number: issue.number, title: issue.title),
+            issueRef: IssueRef(
+                owner: loc.owner, repo: loc.repo, number: issue.number,
+                url: url, authorLogin: issue.author.login
+            ),
+            prState: GitHubClient.mapIssueState(state: issue.state),
+            origin: origin,
+            addedAt: now
+        )
     }
 }
 

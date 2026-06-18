@@ -5,18 +5,28 @@ import CommandSupport
 @testable import GitHubKit
 
 private actor RecordingRunner: CommandRunner {
-    let result: CommandResult
+    let result: CommandResult?
+    private var results: [CommandResult]
     private(set) var lastExecutable: String?
     private(set) var lastArguments: [String]?
 
     init(result: CommandResult) {
         self.result = result
+        self.results = []
+    }
+
+    init(results: [CommandResult]) {
+        self.result = nil
+        self.results = results
     }
 
     func run(executable: String, arguments: [String]) async throws -> CommandResult {
         lastExecutable = executable
         lastArguments = arguments
-        return result
+        if !results.isEmpty {
+            return results.removeFirst()
+        }
+        return result!
     }
 }
 
@@ -443,4 +453,90 @@ private let sampleSearchJSONWithMalformedRepo = """
     #expect(status.ci == .none)
     #expect(status.isBehind == false)
     #expect(status.readiness == .draft)
+}
+
+private let sampleIssueSearchJSON = """
+[
+  {
+    "number": 42,
+    "title": "Login crashes on empty password",
+    "url": "https://github.com/bsv-blockchain/teranode/issues/42",
+    "state": "open",
+    "author": { "login": "alice" },
+    "repository": { "nameWithOwner": "bsv-blockchain/teranode" }
+  }
+]
+"""
+
+private let sampleIssueViewJSON = """
+{
+  "number": 42,
+  "title": "Login crashes on empty password",
+  "url": "https://github.com/bsv-blockchain/teranode/issues/42",
+  "state": "OPEN",
+  "author": { "login": "alice" }
+}
+"""
+
+private let repoViewMainJSON = """
+{ "isFork": false, "parent": null, "defaultBranchRef": { "name": "main" } }
+"""
+
+@Test func searchIssuesParsesResultsAndAppendsIsIssue() async throws {
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: sampleIssueSearchJSON, standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+
+    let hits = try await client.searchIssues(query: "assignee:@me is:open")
+
+    #expect(hits.count == 1)
+    #expect(hits[0].owner == "bsv-blockchain")
+    #expect(hits[0].repo == "teranode")
+    #expect(hits[0].number == 42)
+    #expect(hits[0].authorLogin == "alice")
+    #expect(hits[0].state == "open")
+    #expect(hits[0].id == "bsv-blockchain/teranode/issues/42")
+    #expect(hits[0].locator == IssueLocator(owner: "bsv-blockchain", repo: "teranode", number: 42))
+
+    let args = await runner.lastArguments
+    #expect(args == ["search", "issues", "assignee:@me", "is:open", "is:issue", "--json", "number,title,url,state,author,repository", "--limit", "100"])
+}
+
+@Test func searchIssuesDoesNotDuplicateIsIssue() async throws {
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: "[]", standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    _ = try await client.searchIssues(query: "assignee:@me is:issue")
+    let args = await runner.lastArguments
+    #expect(args == ["search", "issues", "assignee:@me", "is:issue", "--json", "number,title,url,state,author,repository", "--limit", "100"])
+}
+
+@Test func searchIssuesThrowsOnNonZeroExit() async {
+    let runner = RecordingRunner(result: CommandResult(exitCode: 1, standardOutput: "", standardError: "auth required"))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    await #expect(throws: GitHubError.self) {
+        try await client.searchIssues(query: "assignee:@me")
+    }
+}
+
+@Test func fetchIssueBuildsWorkItemWithBranchAndBase() async throws {
+    // First call: gh issue view → issue JSON. Second call: gh repo view → default base.
+    let runner = RecordingRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: sampleIssueViewJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: repoViewMainJSON, standardError: ""),
+    ])
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+
+    let item = try await client.fetchIssue(
+        for: IssueLocator(owner: "bsv-blockchain", repo: "teranode", number: 42),
+        origin: .discovered
+    )
+
+    #expect(item.prRef == nil)
+    #expect(item.issueRef?.number == 42)
+    #expect(item.issueRef?.authorLogin == "alice")
+    #expect(item.repoKey == "github.com/bsv-blockchain/teranode")
+    #expect(item.baseBranch == "main")
+    #expect(item.headBranch == "issue-42-login-crashes-on-empty-password")
+    #expect(item.prState == .open)
+    #expect(item.origin == .discovered)
+    #expect(item.category(myLogin: nil) == .issue)
 }
