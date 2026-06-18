@@ -966,6 +966,17 @@ public final class AppModel {
         }
     }
 
+    public func setIssueStatus(_ status: IssueWorkStatus?, for id: String) async {
+        guard var review = reviews.first(where: { $0.id == id }) else { return }
+        review.manualIssueStatus = status
+        do {
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
     public func setFileViewed(_ viewed: Bool, filePath: String, reviewID: String) async {
         guard var review = reviews.first(where: { $0.id == reviewID }) else { return }
         let already = review.viewedFiles.contains(filePath)

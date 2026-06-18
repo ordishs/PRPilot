@@ -1980,3 +1980,32 @@ private let issueSearchHitJSON = """
     #expect(item.headBranch == "issue-42-login-crash")
     #expect(item.category(myLogin: "user") == .issue)
 }
+
+@Test @MainActor func setIssueStatusSetsAndClearsManualOverride() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    let issue = WorkItem(
+        title: "Login crash",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        headBranch: "issue-42-login-crash",
+        issueRef: IssueRef(owner: "bsv-blockchain", repo: "teranode", number: 42,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/issues/42")!, authorLogin: "alice"),
+        prState: .open,
+        origin: .discovered,
+        addedAt: Date()
+    )
+    try await store.upsertItem(issue)
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.setIssueStatus(.onHold, for: issue.id)
+    #expect(model.reviews.first(where: { $0.id == issue.id })?.manualIssueStatus == .onHold)
+
+    // Persistence: a fresh store over the same file reflects the override.
+    let reopened = try ReviewStore(fileURL: url)
+    #expect(await reopened.item(id: issue.id)?.manualIssueStatus == .onHold)
+
+    await model.setIssueStatus(nil, for: issue.id)
+    #expect(model.reviews.first(where: { $0.id == issue.id })?.manualIssueStatus == nil)
+}
