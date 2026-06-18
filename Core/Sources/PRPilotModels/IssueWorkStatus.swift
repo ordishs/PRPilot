@@ -24,6 +24,8 @@ public enum IssueWorkStatus: String, Codable, Sendable, Equatable, CaseIterable 
 /// issue always shows `.closed`; otherwise a manual override wins; otherwise the
 /// status is derived from the Claude session (`.inReview` while working,
 /// `.reviewed` once a turn has completed, else `.new`).
+/// This function is invoked only for issue work items, where `prState` is only
+/// ever `.open` or `.closed`; the `.merged` and `.draft` states require no handling.
 public func resolveIssueStatus(
     manual: IssueWorkStatus?,
     prState: PRState?,

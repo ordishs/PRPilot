@@ -203,11 +203,11 @@ struct ContentView: View {
         .contextMenu {
             if review.category(myLogin: model.currentLogin) == .issue {
                 Menu {
-                    Button("On Hold") { Task { await model.setIssueStatus(.onHold, for: review.id) } }
-                    Button("Done") { Task { await model.setIssueStatus(.done, for: review.id) } }
-                    Button("In Review") { Task { await model.setIssueStatus(.inReview, for: review.id) } }
-                    Button("Reviewed") { Task { await model.setIssueStatus(.reviewed, for: review.id) } }
-                    Button("New") { Task { await model.setIssueStatus(.new, for: review.id) } }
+                    Button(IssueWorkStatus.onHold.displayName) { Task { await model.setIssueStatus(.onHold, for: review.id) } }
+                    Button(IssueWorkStatus.done.displayName) { Task { await model.setIssueStatus(.done, for: review.id) } }
+                    Button(IssueWorkStatus.inReview.displayName) { Task { await model.setIssueStatus(.inReview, for: review.id) } }
+                    Button(IssueWorkStatus.reviewed.displayName) { Task { await model.setIssueStatus(.reviewed, for: review.id) } }
+                    Button(IssueWorkStatus.new.displayName) { Task { await model.setIssueStatus(.new, for: review.id) } }
                     Divider()
                     Button("Clear (Auto)") { Task { await model.setIssueStatus(nil, for: review.id) } }
                 } label: {
@@ -279,6 +279,17 @@ struct ContentView: View {
         }
     }
 
+    private func issueStatusColor(_ status: IssueWorkStatus) -> Color {
+        switch status {
+        case .new: return .orange
+        case .inReview: return .blue
+        case .reviewed: return .teal
+        case .onHold: return .gray
+        case .done: return .purple
+        case .closed: return .red
+        }
+    }
+
     @ViewBuilder
     private func issueStatusBadge(for review: WorkItem) -> some View {
         let status = resolveIssueStatus(
@@ -287,14 +298,7 @@ struct ContentView: View {
             claudeReviewedAt: review.claudeReviewedAt,
             claudeWorking: model.claudeStatuses[review.id] == .working
         )
-        switch status {
-        case .new: StateBadge(text: "New", color: .orange)
-        case .inReview: StateBadge(text: "In Review", color: .blue)
-        case .reviewed: StateBadge(text: "Reviewed", color: .teal)
-        case .onHold: StateBadge(text: "On Hold", color: .gray)
-        case .done: StateBadge(text: "Done", color: .purple)
-        case .closed: StateBadge(text: "Closed", color: .red)
-        }
+        StateBadge(text: status.displayName, color: issueStatusColor(status))
     }
 }
 
