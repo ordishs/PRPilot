@@ -41,6 +41,8 @@ public final class AppModel {
     public struct Pushability: Sendable, Equatable {
         public var canPush: Bool
         public var needsForce: Bool
+        public var ahead: Int
+        public var behind: Int
     }
     public private(set) var rebaseStates: [String: RebaseState] = [:]
     public private(set) var pushability: [String: Pushability] = [:]
@@ -955,9 +957,9 @@ public final class AppModel {
             return
         }
         if let counts = try? await worktreeOps.aheadBehind(worktreePath: worktreePath, upstream: "origin/\(branch)") {
-            pushability[id] = Pushability(canPush: counts.ahead > 0, needsForce: counts.behind > 0)
+            pushability[id] = Pushability(canPush: counts.ahead > 0, needsForce: counts.behind > 0, ahead: counts.ahead, behind: counts.behind)
         } else if let base = try? await worktreeOps.aheadBehind(worktreePath: worktreePath, upstream: "origin/\(item.baseBranch)") {
-            pushability[id] = Pushability(canPush: base.ahead > 0, needsForce: false)
+            pushability[id] = Pushability(canPush: base.ahead > 0, needsForce: false, ahead: base.ahead, behind: 0)
         } else {
             pushability[id] = nil
         }

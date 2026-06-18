@@ -2011,3 +2011,31 @@ private let issueSearchHitJSON = """
     await model.setIssueStatus(nil, for: issue.id)
     #expect(model.reviews.first(where: { $0.id == issue.id })?.manualIssueStatus == nil)
 }
+
+@Test @MainActor func refreshPushabilityStoresAheadBehindCounts() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()
+    try await store.upsertItem(review)
+    let ops = StubWorktreeOps()
+    await ops.set(currentBranchResult: "fix/centrifuge")
+    await ops.set(aheadBehindByUpstream: ["origin/fix/centrifuge": (ahead: 3, behind: 2)])
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: ops,
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    await model.ensureClaudeSession(for: review)   // sets worktreePath via the stub provider
+    await model.refreshPushability(for: review.id)
+
+    let p = model.pushability[review.id]
+    #expect(p?.ahead == 3)
+    #expect(p?.behind == 2)
+    #expect(p?.canPush == true)
+    #expect(p?.needsForce == true)
+}
