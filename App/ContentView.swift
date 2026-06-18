@@ -10,13 +10,74 @@ struct ContentView: View {
     @State private var showingAdd = false
     @State private var showingAddIssue = false
     @State private var showingNewTask = false
+    @State private var searchText = ""
+    @State private var sidebarFilter: SidebarFilter = .all
     @Environment(\.colorScheme) private var colorScheme
+
+    private func isWorking(_ id: String) -> Bool { model.claudeStatuses[id] == .working }
+    private func isAwaiting(_ id: String) -> Bool {
+        if case .awaitingInput = model.claudeStatuses[id] { return true }
+        return false
+    }
+    private var filteredReviews: [WorkItem] {
+        model.reviews.filter {
+            sidebarItemMatches($0, query: searchText, filter: sidebarFilter,
+                               isWorking: isWorking($0.id), isAwaiting: isAwaiting($0.id))
+        }
+    }
+    private var activeCount: Int { model.reviews.filter { isWorking($0.id) || isAwaiting($0.id) }.count }
+    private var awaitingCount: Int { model.reviews.filter { isAwaiting($0.id) }.count }
+
+    private var sidebarHeader: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary).font(.system(size: 12))
+                TextField("Search", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                if !searchText.isEmpty {
+                    Button { searchText = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.borderless).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(Color.secondary.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            HStack(spacing: 6) {
+                filterPill(.all, label: "All", count: nil)
+                filterPill(.active, label: "Active", count: activeCount)
+                filterPill(.awaiting, label: "Awaiting", count: awaitingCount)
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private func filterPill(_ f: SidebarFilter, label: String, count: Int?) -> some View {
+        Button { sidebarFilter = f } label: {
+            HStack(spacing: 4) {
+                Text(label)
+                if let count { Text("\(count)").opacity(0.7) }
+            }
+            .font(.system(size: 12, weight: .medium))
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(sidebarFilter == f ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.12))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $model.selection) {
+            VStack(spacing: 0) {
+                sidebarHeader
+                List(selection: $model.selection) {
                 let sections = sidebarSections(
-                    items: model.reviews,
+                    items: filteredReviews,
                     myLogin: model.currentLogin,
                     sort: model.settings.sidebarSort
                 )
@@ -74,6 +135,7 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showingNewTask) {
                 NewTaskSheet(model: model, isPresented: $showingNewTask)
+            }
             }
         } detail: {
             if let review = model.selectedReview() {
@@ -189,6 +251,12 @@ struct ContentView: View {
                         }
                         if status.isBehind { StateBadge(text: "behind", color: .orange) }
                         if status.readiness == .changesRequested { StateBadge(text: "changes", color: .red) }
+                    }
+                }
+                if let push = model.pushability[review.id], push.ahead > 0 || push.behind > 0 {
+                    HStack(spacing: 4) {
+                        if push.ahead > 0 { StateBadge(text: "↑\(push.ahead)", color: .green) }
+                        if push.behind > 0 { StateBadge(text: "↓\(push.behind)", color: .orange) }
                     }
                 }
                 Text(relativeDateLabel(for: review.addedAt))
@@ -443,6 +511,8 @@ private struct StatusDot: View {
         switch status {
         case .working:
             return .blue
+        case .awaitingInput:
+            return Color(red: 0.95, green: 0.61, blue: 0.07)
         case .idle:
             return .gray
         case .ready(let code):
@@ -463,6 +533,14 @@ private func statusTooltip(_ status: ClaudeStatus?) -> String {
         let elapsed = Int(Date().timeIntervalSince(since))
         let mins = max(elapsed / 60, 0)
         let base = mins > 0 ? "Idle \(mins)m" : "Idle"
+        if let snippet, !snippet.isEmpty {
+            return "\(base) · \(snippet)"
+        }
+        return base
+    case .awaitingInput(let since, let snippet):
+        let elapsed = Int(Date().timeIntervalSince(since))
+        let mins = max(elapsed / 60, 0)
+        let base = mins > 0 ? "Awaiting input \(mins)m" : "Awaiting input"
         if let snippet, !snippet.isEmpty {
             return "\(base) · \(snippet)"
         }
