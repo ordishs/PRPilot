@@ -61,8 +61,10 @@ private struct DiscoverySettingsTab: View {
 
     @State private var reviewRows: [QueryRow] = []
     @State private var myPRRows: [QueryRow] = []
+    @State private var issueRows: [QueryRow] = []
     @State private var reviewEnabled = true
     @State private var myPRsEnabled = true
+    @State private var issuesEnabled = true
     @State private var pollIntervalSeconds = 120
     @State private var autoLoad = false
 
@@ -82,6 +84,7 @@ private struct DiscoverySettingsTab: View {
 
             querySection(title: "Review requests", rows: $reviewRows, enabled: $reviewEnabled)
             querySection(title: "My PRs", rows: $myPRRows, enabled: $myPRsEnabled)
+            querySection(title: "Issues", rows: $issueRows, enabled: $issuesEnabled)
 
             if !model.discoveryWarnings.isEmpty {
                 Section("Discovery warnings") {
@@ -102,15 +105,19 @@ private struct DiscoverySettingsTab: View {
         .onAppear {
             reviewRows = model.settings.reviewRequestQueries.map { QueryRow(text: $0.text, allowUnscoped: $0.allowUnscoped) }
             myPRRows = model.settings.myPRQueries.map { QueryRow(text: $0.text, allowUnscoped: $0.allowUnscoped) }
+            issueRows = model.settings.issueQueries.map { QueryRow(text: $0.text, allowUnscoped: $0.allowUnscoped) }
             reviewEnabled = model.settings.reviewRequestsEnabled
             myPRsEnabled = model.settings.myPRsEnabled
+            issuesEnabled = model.settings.issuesEnabled
             pollIntervalSeconds = model.settings.pollIntervalSeconds
             autoLoad = model.settings.autoLoad
         }
         .onChange(of: reviewRows) { _, _ in commit() }
         .onChange(of: myPRRows) { _, _ in commit() }
+        .onChange(of: issueRows) { _, _ in commit() }
         .onChange(of: reviewEnabled) { _, _ in commit() }
         .onChange(of: myPRsEnabled) { _, _ in commit() }
+        .onChange(of: issuesEnabled) { _, _ in commit() }
         .onChange(of: pollIntervalSeconds) { _, _ in commit() }
         .onChange(of: autoLoad) { _, _ in commit() }
     }
@@ -156,8 +163,12 @@ private struct DiscoverySettingsTab: View {
         updated.myPRQueries = myPRRows
             .map { DiscoveryQuery(text: $0.text.trimmingCharacters(in: .whitespaces), allowUnscoped: $0.allowUnscoped) }
             .filter { !$0.text.isEmpty }
+        updated.issueQueries = issueRows
+            .map { DiscoveryQuery(text: $0.text.trimmingCharacters(in: .whitespaces), allowUnscoped: $0.allowUnscoped) }
+            .filter { !$0.text.isEmpty }
         updated.reviewRequestsEnabled = reviewEnabled
         updated.myPRsEnabled = myPRsEnabled
+        updated.issuesEnabled = issuesEnabled
         updated.pollIntervalSeconds = pollIntervalSeconds
         updated.autoLoad = autoLoad
         Task { await model.updateSettings(updated) }

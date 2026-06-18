@@ -8,6 +8,7 @@ struct ContentView: View {
     @Bindable var model: AppModel
     let webViewCache: WebViewCache
     @State private var showingAdd = false
+    @State private var showingAddIssue = false
     @State private var showingNewTask = false
     @Environment(\.colorScheme) private var colorScheme
 
@@ -59,6 +60,7 @@ struct ContentView: View {
                     Menu {
                         Button { showingNewTask = true } label: { Label("New Task…", systemImage: "hammer") }
                         Button { showingAdd = true } label: { Label("Add PR by URL…", systemImage: "link") }
+                        Button { showingAddIssue = true } label: { Label("Add Issue by URL…", systemImage: "exclamationmark.circle") }
                     } label: {
                         Label("Add", systemImage: "plus")
                     }
@@ -66,6 +68,9 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showingAdd) {
                 AddPRSheet(model: model, isPresented: $showingAdd)
+            }
+            .sheet(isPresented: $showingAddIssue) {
+                AddIssueSheet(model: model, isPresented: $showingAddIssue)
             }
             .sheet(isPresented: $showingNewTask) {
                 NewTaskSheet(model: model, isPresented: $showingNewTask)
