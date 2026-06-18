@@ -1927,3 +1927,56 @@ private let repoViewJSON = """
     #expect(model.reviews.isEmpty)
     #expect(model.errorMessage != nil)
 }
+
+private let issueSearchHitJSON = """
+[
+  {
+    "number": 42,
+    "title": "Login crash",
+    "url": "https://github.com/bsv-blockchain/teranode/issues/42",
+    "state": "open",
+    "author": { "login": "alice" },
+    "repository": { "nameWithOwner": "bsv-blockchain/teranode" }
+  }
+]
+"""
+
+@Test @MainActor func discoverNowCreatesDiscoveredIssue() async throws {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestsEnabled = false
+    seed.myPRsEnabled = false
+    seed.issuesEnabled = true
+    seed.issueQueries = [DiscoveryQuery(text: "assignee:@me is:open")]
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: issueSearchHitJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: issueViewJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: repoViewJSON, standardError: ""),
+    ])
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let model = AppModel(
+        store: store,
+        client: client,
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.discoverNow()
+
+    #expect(model.reviews.count == 1)
+    let item = try #require(model.reviews.first)
+    #expect(item.issueRef?.number == 42)
+    #expect(item.prRef == nil)
+    #expect(item.origin == .discovered)
+    #expect(item.headBranch == "issue-42-login-crash")
+    #expect(item.category(myLogin: "user") == .issue)
+}

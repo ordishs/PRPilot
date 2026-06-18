@@ -743,7 +743,8 @@ public final class AppModel {
                 if self.settings.autoLoad {
                     await self.ensureClaudeSession(for: review)
                 } else {
-                    _ = try? await self.worktreeProvider.ensureWorktree(for: review, editable: false, registeredClonePath: clonePath)
+                    let editable = review.category(myLogin: self.currentLogin) != .reviewRequest
+                    _ = try? await self.worktreeProvider.ensureWorktree(for: review, editable: editable, registeredClonePath: clonePath)
                 }
             }
         }
