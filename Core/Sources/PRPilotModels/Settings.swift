@@ -17,8 +17,11 @@ public struct Settings: Codable, Sendable, Equatable {
     public var diffMode: DiffMode
     public var diffIgnoreWhitespace: Bool
     public var sidebarSort: SidebarSort
+    public var issueQueries: [DiscoveryQuery]
+    public var issuesEnabled: Bool
     public var myWorkCollapsed: Bool
     public var reviewsCollapsed: Bool
+    public var issuesCollapsed: Bool
     public var appearance: Appearance
 
     private enum LegacyKeys: String, CodingKey {
@@ -32,6 +35,8 @@ public struct Settings: Codable, Sendable, Equatable {
         myPRQueries: [DiscoveryQuery],
         reviewRequestsEnabled: Bool = true,
         myPRsEnabled: Bool = true,
+        issueQueries: [DiscoveryQuery] = Settings.defaultIssueQueries,
+        issuesEnabled: Bool = true,
         pollIntervalSeconds: Int,
         ghPath: String? = nil,
         gitPath: String? = nil,
@@ -45,6 +50,7 @@ public struct Settings: Codable, Sendable, Equatable {
         sidebarSort: SidebarSort = .recent,
         myWorkCollapsed: Bool = false,
         reviewsCollapsed: Bool = false,
+        issuesCollapsed: Bool = false,
         appearance: Appearance = .system
     ) {
         self.managedRoot = managedRoot
@@ -52,6 +58,8 @@ public struct Settings: Codable, Sendable, Equatable {
         self.myPRQueries = myPRQueries
         self.reviewRequestsEnabled = reviewRequestsEnabled
         self.myPRsEnabled = myPRsEnabled
+        self.issueQueries = issueQueries
+        self.issuesEnabled = issuesEnabled
         self.pollIntervalSeconds = pollIntervalSeconds
         self.ghPath = ghPath
         self.gitPath = gitPath
@@ -65,6 +73,7 @@ public struct Settings: Codable, Sendable, Equatable {
         self.sidebarSort = sidebarSort
         self.myWorkCollapsed = myWorkCollapsed
         self.reviewsCollapsed = reviewsCollapsed
+        self.issuesCollapsed = issuesCollapsed
         self.appearance = appearance
     }
 
@@ -101,6 +110,9 @@ public struct Settings: Codable, Sendable, Equatable {
         }
         myWorkCollapsed = try c.decodeIfPresent(Bool.self, forKey: .myWorkCollapsed) ?? false
         reviewsCollapsed = try c.decodeIfPresent(Bool.self, forKey: .reviewsCollapsed) ?? false
+        issuesCollapsed = try c.decodeIfPresent(Bool.self, forKey: .issuesCollapsed) ?? false
+        issueQueries = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .issueQueries) ?? Settings.defaultIssueQueries
+        issuesEnabled = try c.decodeIfPresent(Bool.self, forKey: .issuesEnabled) ?? true
         appearance = try c.decodeIfPresent(Appearance.self, forKey: .appearance) ?? .system
 
         if let rrq = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .reviewRequestQueries) {
@@ -124,6 +136,9 @@ public struct Settings: Codable, Sendable, Equatable {
     ]
     public static let defaultMyPRQueries: [DiscoveryQuery] = [
         DiscoveryQuery(text: "author:@me is:open"),
+    ]
+    public static let defaultIssueQueries: [DiscoveryQuery] = [
+        DiscoveryQuery(text: "assignee:@me is:open"),
     ]
 
     public static let `default` = Settings(
