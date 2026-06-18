@@ -9,6 +9,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
     public var worktreePath: String?
     public var prRef: PRRef?
     public var prState: PRState?
+    public var issueRef: IssueRef?
     public var origin: ReviewOrigin
     public var closingIssueNumber: Int?
     public var notes: String?
@@ -23,7 +24,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
     public var approvedByMe: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, title, repoKey, baseBranch, headBranch, worktreePath, prRef, prState
+        case id, title, repoKey, baseBranch, headBranch, worktreePath, prRef, prState, issueRef
         case origin, closingIssueNumber, notes, claudeFlags, claudeSessionID, autoReview
         case addedAt, lastOpenedAt, disabled, viewedFiles, claudeReviewedAt, approvedByMe
     }
@@ -40,6 +41,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         headBranch: String? = nil,
         worktreePath: String? = nil,
         prRef: PRRef? = nil,
+        issueRef: IssueRef? = nil,
         prState: PRState? = nil,
         origin: ReviewOrigin,
         closingIssueNumber: Int? = nil,
@@ -61,6 +63,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.headBranch = headBranch
         self.worktreePath = worktreePath
         self.prRef = prRef
+        self.issueRef = issueRef
         self.prState = prState
         self.origin = origin
         self.closingIssueNumber = closingIssueNumber
@@ -82,6 +85,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.baseBranch = try c.decode(String.self, forKey: .baseBranch)
         self.headBranch = try c.decodeIfPresent(String.self, forKey: .headBranch)
         self.worktreePath = try c.decodeIfPresent(String.self, forKey: .worktreePath)
+        self.issueRef = try c.decodeIfPresent(IssueRef.self, forKey: .issueRef)
         self.origin = try c.decode(ReviewOrigin.self, forKey: .origin)
         self.closingIssueNumber = try c.decodeIfPresent(Int.self, forKey: .closingIssueNumber)
         self.notes = try c.decodeIfPresent(String.self, forKey: .notes)
@@ -116,18 +120,46 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
     }
 
     public func category(myLogin: String?) -> WorkItemCategory {
-        guard let prRef else { return .task }
-        if let myLogin, prRef.authorLogin.caseInsensitiveCompare(myLogin) == .orderedSame {
-            return .myPR
+        if let prRef {
+            if let myLogin, prRef.authorLogin.caseInsensitiveCompare(myLogin) == .orderedSame {
+                return .myPR
+            }
+            return .reviewRequest
         }
-        return .reviewRequest
+        if issueRef != nil { return .issue }
+        return .task
     }
 
     public var owner: String { WorkItem.ownerRepo(from: repoKey).owner }
     public var repo: String { WorkItem.ownerRepo(from: repoKey).repo }
     public var number: Int? { prRef?.number }
-    public var url: URL? { prRef?.url }
-    public var author: String? { prRef?.authorLogin }
+    public var issueNumber: Int? { issueRef?.number }
+    public var displayNumber: Int? { prRef?.number ?? issueRef?.number }
+    public var url: URL? { prRef?.url ?? issueRef?.url }
+    public var author: String? { prRef?.authorLogin ?? issueRef?.authorLogin }
+
+    public static func slug(_ text: String, maxLength: Int = 40) -> String {
+        var out = ""
+        var lastDash = false
+        for ch in text.lowercased() {
+            if ch.isASCII && (ch.isLetter || ch.isNumber) {
+                out.append(ch)
+                lastDash = false
+            } else if !lastDash {
+                out.append("-")
+                lastDash = true
+            }
+        }
+        let dashes = CharacterSet(charactersIn: "-")
+        let trimmed = out.trimmingCharacters(in: dashes)
+        guard trimmed.count > maxLength else { return trimmed }
+        return String(trimmed.prefix(maxLength)).trimmingCharacters(in: dashes)
+    }
+
+    public static func issueBranchName(number: Int, title: String) -> String {
+        let s = slug(title)
+        return s.isEmpty ? "issue-\(number)" : "issue-\(number)-\(s)"
+    }
 
     static func ownerRepo(from repoKey: String) -> (owner: String, repo: String) {
         let parts = repoKey.split(separator: "/").map(String.init)

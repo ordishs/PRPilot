@@ -15,7 +15,7 @@ public func sidebarSections(items: [WorkItem], myLogin: String?, sort: SidebarSo
     var reviews: [WorkItem] = []
     for item in items {
         switch item.category(myLogin: myLogin) {
-        case .task, .myPR:
+        case .task, .myPR, .issue:
             myWork.append(item)
         case .reviewRequest:
             reviews.append(item)
