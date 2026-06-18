@@ -11,7 +11,8 @@ public struct ClaudeStatusReader: Sendable {
         processState: ClaudeSessionState,
         lastEventAt: Date?,
         lastVerdictSnippet: String?,
-        now: Date = Date()
+        now: Date = Date(),
+        lastEventWasTurnCompletion: Bool = false
     ) -> ClaudeStatus {
         switch processState {
         case .failedToLaunch(let reason):
@@ -23,6 +24,9 @@ public struct ClaudeStatusReader: Sendable {
         case .running:
             guard let lastEventAt else {
                 return .starting
+            }
+            if lastEventWasTurnCompletion {
+                return .awaitingInput(since: lastEventAt, lastVerdictSnippet: lastVerdictSnippet)
             }
             if now.timeIntervalSince(lastEventAt) < idleThresholdSeconds {
                 return .working

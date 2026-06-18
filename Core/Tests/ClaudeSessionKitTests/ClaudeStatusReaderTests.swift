@@ -50,3 +50,34 @@ private let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
         Issue.record("expected .failed, got \(status)")
     }
 }
+
+@Test func completedTurnYieldsAwaitingInputEvenWhenStale() {
+    let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+    let t = Date(timeIntervalSince1970: 1000)
+    let s = reader.status(processState: .running, lastEventAt: t, lastVerdictSnippet: "done",
+                          now: t.addingTimeInterval(600), lastEventWasTurnCompletion: true)
+    #expect(s == .awaitingInput(since: t, lastVerdictSnippet: "done"))
+}
+
+@Test func recentNonCompletedIsWorking() {
+    let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+    let t = Date(timeIntervalSince1970: 1000)
+    let s = reader.status(processState: .running, lastEventAt: t, lastVerdictSnippet: nil,
+                          now: t.addingTimeInterval(5), lastEventWasTurnCompletion: false)
+    #expect(s == .working)
+}
+
+@Test func staleNonCompletedIsIdle() {
+    let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+    let t = Date(timeIntervalSince1970: 1000)
+    let s = reader.status(processState: .running, lastEventAt: t, lastVerdictSnippet: "x",
+                          now: t.addingTimeInterval(60), lastEventWasTurnCompletion: false)
+    #expect(s == .idle(since: t, lastVerdictSnippet: "x"))
+}
+
+@Test func runningWithNoEventIsStartingEvenIfCompletionFlagSet() {
+    let reader = ClaudeStatusReader()
+    let s = reader.status(processState: .running, lastEventAt: nil, lastVerdictSnippet: nil,
+                          now: Date(), lastEventWasTurnCompletion: true)
+    #expect(s == .starting)
+}
