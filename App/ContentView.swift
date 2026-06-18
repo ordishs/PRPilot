@@ -29,6 +29,11 @@ struct ContentView: View {
                 } header: {
                     SidebarSectionHeader(title: "Review Requests", count: sections.reviewRequests.count, kind: .reviewRequests)
                 }
+                Section(isExpanded: issuesExpandedBinding()) {
+                    sectionBody(sections.issues)
+                } header: {
+                    SidebarSectionHeader(title: "Issues", count: sections.issues.count, kind: .issues)
+                }
             }
             .onDeleteCommand {
                 if let id = model.selection {
@@ -126,6 +131,17 @@ struct ContentView: View {
             set: { expanded in
                 var updated = model.settings
                 updated.reviewsCollapsed = !expanded
+                Task { await model.updateSettings(updated) }
+            }
+        )
+    }
+
+    private func issuesExpandedBinding() -> Binding<Bool> {
+        Binding(
+            get: { !model.settings.issuesCollapsed },
+            set: { expanded in
+                var updated = model.settings
+                updated.issuesCollapsed = !expanded
                 Task { await model.updateSettings(updated) }
             }
         )
@@ -244,6 +260,7 @@ struct ContentView: View {
 private enum SidebarSectionKind {
     case myWork
     case reviewRequests
+    case issues
 }
 
 private struct SectionStyle {
@@ -278,6 +295,20 @@ private struct SectionStyle {
                 text: Color(red: 0.431, green: 0.176, blue: 0.667)
             )
     }
+
+    static func issues(_ scheme: ColorScheme) -> SectionStyle {
+        scheme == .dark
+            ? SectionStyle(
+                band: Color(red: 0.149, green: 0.247, blue: 0.243),
+                border: Color(red: 0.298, green: 0.686, blue: 0.620),
+                text: Color(red: 0.486, green: 0.831, blue: 0.769)
+            )
+            : SectionStyle(
+                band: Color(red: 0.890, green: 0.965, blue: 0.953),
+                border: Color(red: 0.118, green: 0.533, blue: 0.451),
+                text: Color(red: 0.063, green: 0.396, blue: 0.333)
+            )
+    }
 }
 
 private struct SidebarSectionHeader: View {
@@ -290,6 +321,7 @@ private struct SidebarSectionHeader: View {
         switch kind {
         case .myWork: return .myWork(colorScheme)
         case .reviewRequests: return .reviewRequests(colorScheme)
+        case .issues: return .issues(colorScheme)
         }
     }
 

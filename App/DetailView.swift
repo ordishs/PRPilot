@@ -70,10 +70,16 @@ struct DetailView: View {
         }
     }
 
-    // A task has no PR, so the GitHub pane is empty — open it on the Claude pane.
+    // PRs and issues have a web page → show GitHub. Freeform tasks have no page → Claude.
     private func defaultPaneForSelection() {
-        if review.prRef == nil && !review.disabled {
+        if review.disabled {
+            pane = .github
+            return
+        }
+        if review.prRef == nil && review.issueRef == nil {
             pane = .claude
+        } else {
+            pane = .github
         }
     }
 
