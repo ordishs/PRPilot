@@ -678,7 +678,6 @@ public final class AppModel {
         guard let review = reviews.first(where: { $0.id == reviewID }) else { return }
         var snippet: String? = nil
         if case .awaitingInput(_, let s) = status { snippet = s }
-        if snippet == nil { snippet = lastVerdictSnippet[reviewID] }
         let title = "Review ready · #\(review.number.map(String.init) ?? "?")"
         let body = snippet ?? "\(review.owner)/\(review.repo) · \(review.author ?? "")"
         let poster = notificationPoster

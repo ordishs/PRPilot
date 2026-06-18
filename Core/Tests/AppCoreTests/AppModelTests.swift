@@ -2039,3 +2039,32 @@ private let issueSearchHitJSON = """
     #expect(p?.canPush == true)
     #expect(p?.needsForce == true)
 }
+
+@Test @MainActor func refreshPushabilityFallsBackToBaseWithZeroBehind() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()   // headBranch "fix/centrifuge", baseBranch "main"
+    try await store.upsertItem(review)
+    let ops = StubWorktreeOps()
+    await ops.set(currentBranchResult: "fix/centrifuge")
+    await ops.set(shouldThrowAheadBehind: ["origin/fix/centrifuge"])   // upstream path unavailable
+    await ops.set(aheadBehindByUpstream: ["origin/main": (ahead: 1, behind: 5)])
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: ops,
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    await model.ensureClaudeSession(for: review)
+    await model.refreshPushability(for: review.id)
+
+    let p = model.pushability[review.id]
+    #expect(p?.ahead == 1)
+    #expect(p?.behind == 0)        // base-fallback forces behind to 0
+    #expect(p?.canPush == true)
+    #expect(p?.needsForce == false)
+}

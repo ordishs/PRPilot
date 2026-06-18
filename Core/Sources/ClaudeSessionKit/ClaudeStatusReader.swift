@@ -25,6 +25,8 @@ public struct ClaudeStatusReader: Sendable {
             guard let lastEventAt else {
                 return .starting
             }
+            // A completed turn means Claude yielded control: stay .awaitingInput until a
+            // newer, non-completing event arrives (it does not decay to .idle on its own).
             if lastEventWasTurnCompletion {
                 return .awaitingInput(since: lastEventAt, lastVerdictSnippet: lastVerdictSnippet)
             }
