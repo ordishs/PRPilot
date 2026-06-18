@@ -36,8 +36,10 @@ public enum ClaudeLaunchBuilder {
         } else {
             args.append("--session-id")
             args.append(sessionID)
-            if let url = review.url {
+            if review.prRef != nil, let url = review.url {
                 args.append("/review \(url.absoluteString)")
+            } else if let issueNumber = review.issueNumber {
+                args.append("/start-issue \(issueNumber)")
             }
         }
         return ClaudeLaunchSpec(
@@ -52,7 +54,7 @@ public enum ClaudeLaunchBuilder {
     /// Display name for the Claude session (shown in Claude Desktop "Recents").
     /// PR-backed items use "#<number> <title>"; tasks use their title (the branch).
     static func sessionName(for review: WorkItem) -> String {
-        if let number = review.number {
+        if let number = review.displayNumber {
             return "#\(number) \(review.title)"
         }
         return review.title

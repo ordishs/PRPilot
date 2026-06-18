@@ -92,6 +92,54 @@ private func nameArg(_ args: [String]) -> String? {
     #expect(nameArg(spec.arguments) == "feat/parallel-validation")
 }
 
+private func sampleIssueItem() -> WorkItem {
+    WorkItem(
+        title: "Login crash",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        headBranch: "issue-42-login-crash",
+        issueRef: IssueRef(
+            owner: "bsv-blockchain", repo: "teranode", number: 42,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/issues/42")!,
+            authorLogin: "alice"
+        ),
+        prState: .open,
+        origin: .discovered,
+        addedAt: Date()
+    )
+}
+
+@Test func launchBuilderIssueUsesStartIssueCommand() {
+    let spec = ClaudeLaunchBuilder.build(
+        settings: .default,
+        review: sampleIssueItem(),
+        worktreePath: "/tmp/wt",
+        resolvedClaudePath: "/bin/claude",
+        sessionID: "abc",
+        resume: false
+    )
+    #expect(spec.arguments.contains("/start-issue 42"))
+    #expect(!spec.arguments.contains { $0.hasPrefix("/review") })
+    let nameIdx = spec.arguments.firstIndex(of: "--name")
+    #expect(nameIdx != nil)
+    if let nameIdx {
+        #expect(spec.arguments[spec.arguments.index(after: nameIdx)] == "#42 Login crash")
+    }
+}
+
+@Test func launchBuilderIssueResumeOmitsStartIssue() {
+    let spec = ClaudeLaunchBuilder.build(
+        settings: .default,
+        review: sampleIssueItem(),
+        worktreePath: "/tmp/wt",
+        resolvedClaudePath: "/bin/claude",
+        sessionID: "abc",
+        resume: true
+    )
+    #expect(!spec.arguments.contains { $0.hasPrefix("/start-issue") })
+    #expect(spec.arguments.contains("--resume"))
+}
+
 @Test func buildOmitsReviewCommandWhenNoPR() {
     let item = WorkItem(
         title: "spike", repoKey: "github.com/o/r", baseBranch: "main",
