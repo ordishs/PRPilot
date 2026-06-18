@@ -793,6 +793,7 @@ private let prFetchJSON = """
     var seed = Settings.default
     seed.reviewRequestQueries = [DiscoveryQuery(text: "review-requested:@me is:open")]
     seed.myPRsEnabled = false
+    seed.issuesEnabled = false
     try await seedStore.updateSettings(seed)
     let store = try ReviewStore(fileURL: url)
     let runner = StubRunner(results: [
@@ -929,6 +930,7 @@ private let prFetchJSON = """
         DiscoveryQuery(text: "assignee:@me is:open"),
     ]
     seed.myPRsEnabled = false
+    seed.issuesEnabled = false
     try await seedStore.updateSettings(seed)
     let store = try ReviewStore(fileURL: url)
     let runner = StubRunner(results: [
@@ -1493,6 +1495,7 @@ private let prFetchJSON = """
     var seed = Settings.default
     seed.reviewRequestQueries = [DiscoveryQuery(text: "is:open", allowUnscoped: true)]
     seed.myPRsEnabled = false
+    seed.issuesEnabled = false
     try await seedStore.updateSettings(seed)
     let store = try ReviewStore(fileURL: url)
     let runner = StubRunner(results: [
@@ -1608,6 +1611,7 @@ private let taskFetchJSON = """
     var seed = Settings.default
     seed.reviewRequestQueries = [DiscoveryQuery(text: "author:@me is:open")]
     seed.myPRsEnabled = false
+    seed.issuesEnabled = false
     try await seedStore.updateSettings(seed)
 
     let store = try ReviewStore(fileURL: url)
@@ -1877,4 +1881,49 @@ private func editableItem(worktreePath: String = "/tmp/wt", headBranch: String =
     #expect(model.terminalIsDark == true)
     await model.setTerminalAppearance(isDark: false)  // flips; no selection → no relaunch
     #expect(model.terminalIsDark == false)
+}
+
+private let issueViewJSON = """
+{
+  "number": 42,
+  "title": "Login crash",
+  "url": "https://github.com/bsv-blockchain/teranode/issues/42",
+  "state": "OPEN",
+  "author": { "login": "alice" }
+}
+"""
+private let repoViewJSON = """
+{ "isFork": false, "parent": null, "defaultBranchRef": { "name": "main" } }
+"""
+
+@Test @MainActor func addIssueFetchesStoresAndSelects() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    // fetchIssue → gh issue view, then gh repo view (fetchDefaultBase).
+    let client = GitHubClient(runner: StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: issueViewJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: repoViewJSON, standardError: ""),
+    ]), ghPath: "gh")
+    let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+
+    await model.addIssue(urlString: "https://github.com/bsv-blockchain/teranode/issues/42")
+
+    #expect(model.reviews.count == 1)
+    let item = try #require(model.reviews.first)
+    #expect(item.issueRef?.number == 42)
+    #expect(item.prRef == nil)
+    #expect(item.headBranch == "issue-42-login-crash")
+    #expect(item.category(myLogin: nil) == .issue)
+    #expect(model.selection == item.id)
+    #expect(model.errorMessage == nil)
+}
+
+@Test @MainActor func addIssueSetsErrorOnInvalidURL() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let client = GitHubClient(runner: StubRunner(result: CommandResult(exitCode: 0, standardOutput: "", standardError: "")), ghPath: "gh")
+    let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+
+    await model.addIssue(urlString: "https://github.com/o/r/pull/7")
+
+    #expect(model.reviews.isEmpty)
+    #expect(model.errorMessage != nil)
 }

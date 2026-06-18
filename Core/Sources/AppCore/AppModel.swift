@@ -177,10 +177,35 @@ public final class AppModel {
                 }
             }
         }
+        var issueHitsByID: [String: IssueHit] = [:]
+        var anyIssueQuerySucceeded = false
+        if settings.issuesEnabled {
+            for query in settings.issueQueries {
+                let text = query.text.trimmingCharacters(in: .whitespaces)
+                guard !text.isEmpty else { continue }
+                guard query.isScoped || query.allowUnscoped else {
+                    warnings.append("Skipped \"\(text)\" — not scoped to you, an org, or a repo. Add a qualifier (author:/org:/repo:/…) or enable \"run anyway\".")
+                    continue
+                }
+                guard let results = try? await client.searchIssues(query: text) else { continue }
+                anyIssueQuerySucceeded = true
+                if results.count >= 100 {
+                    warnings.append("\"\(text)\" returned 100+ results (too broad) — refine it. Those results were not added.")
+                    continue
+                }
+                for hit in results {
+                    issueHitsByID[hit.id] = hit
+                }
+            }
+        }
         discoveryWarnings = warnings
         await mergeDiscoveryHits(Array(hitsByID.values))
         if anyQuerySucceeded {
             await pruneStaleDiscoveredReviews(currentHitIDs: Set(hitsByID.keys))
+        }
+        await mergeDiscoveredIssues(Array(issueHitsByID.values))
+        if anyIssueQuerySucceeded {
+            await pruneStaleDiscoveredIssues(currentIssueIDs: Set(issueHitsByID.keys))
         }
     }
 
@@ -202,6 +227,53 @@ public final class AppModel {
     private func prKey(_ item: WorkItem) -> String? {
         guard let r = item.prRef else { return nil }
         return "\(r.owner)/\(r.repo)#\(r.number)"
+    }
+
+    private func issueKey(_ item: WorkItem) -> String? {
+        guard let r = item.issueRef else { return nil }
+        return "\(r.owner)/\(r.repo)/issues/\(r.number)"
+    }
+
+    private func issueAutoStart(_ item: WorkItem) {
+        guard !item.disabled else { return }
+        Task { await ensureClaudeSession(for: item) }
+        webPreloadHandler?(item)
+    }
+
+    private func mergeDiscoveredIssues(_ hits: [IssueHit]) async {
+        let existingByKey = Dictionary(
+            reviews.compactMap { item in issueKey(item).map { ($0, item) } },
+            uniquingKeysWith: { a, _ in a }
+        )
+        for hit in hits {
+            if let existing = existingByKey[hit.id] {
+                var updated = existing
+                updated.title = hit.title
+                updated.prState = GitHubClient.mapIssueState(state: hit.state)
+                if existing.origin == .added { updated.origin = .both }
+                try? await store.upsertItem(updated)
+            } else {
+                guard let fresh = try? await client.fetchIssue(for: hit.locator, origin: .discovered) else { continue }
+                try? await store.upsertItem(fresh)
+                issueAutoStart(fresh)
+            }
+        }
+        reviews = await store.allItems()
+    }
+
+    private func pruneStaleDiscoveredIssues(currentIssueIDs: Set<String>) async {
+        let staleIDs = reviews.compactMap { item -> String? in
+            guard item.origin == .discovered, item.issueRef != nil else { return nil }
+            guard item.prState == .closed else { return nil }
+            guard let key = issueKey(item), !currentIssueIDs.contains(key) else { return nil }
+            return item.id
+        }
+        for id in staleIDs {
+            do { try await store.removeItem(id: id) } catch { continue }
+        }
+        if !staleIDs.isEmpty {
+            reviews = await store.allItems()
+        }
     }
 
     private func mergeDiscoveryHits(_ hits: [DiscoveryHit]) async {
@@ -252,6 +324,23 @@ public final class AppModel {
             errorMessage = nil
             prefetch(for: review)
             autoLoadIfEnabled(review)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    public func addIssue(urlString: String) async {
+        isAdding = true
+        defer { isAdding = false }
+        do {
+            let loc = try IssueLocator.parse(urlString)
+            let item = try await client.fetchIssue(for: loc)
+            try await store.upsertItem(item)
+            reviews = await store.allItems()
+            selection = item.id
+            errorMessage = nil
+            prefetch(for: item)
+            webPreloadHandler?(item)
         } catch {
             errorMessage = String(describing: error)
         }
