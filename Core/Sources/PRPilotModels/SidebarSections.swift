@@ -3,27 +3,33 @@ import Foundation
 public struct SidebarSections: Sendable, Equatable {
     public let myWork: [WorkItem]
     public let reviewRequests: [WorkItem]
+    public let issues: [WorkItem]
 
-    public init(myWork: [WorkItem], reviewRequests: [WorkItem]) {
+    public init(myWork: [WorkItem], reviewRequests: [WorkItem], issues: [WorkItem]) {
         self.myWork = myWork
         self.reviewRequests = reviewRequests
+        self.issues = issues
     }
 }
 
 public func sidebarSections(items: [WorkItem], myLogin: String?, sort: SidebarSort) -> SidebarSections {
     var myWork: [WorkItem] = []
     var reviews: [WorkItem] = []
+    var issues: [WorkItem] = []
     for item in items {
         switch item.category(myLogin: myLogin) {
-        case .task, .myPR, .issue:
+        case .task, .myPR:
             myWork.append(item)
         case .reviewRequest:
             reviews.append(item)
+        case .issue:
+            issues.append(item)
         }
     }
     return SidebarSections(
         myWork: sortWorkItems(myWork, by: sort),
-        reviewRequests: sortWorkItems(reviews, by: sort)
+        reviewRequests: sortWorkItems(reviews, by: sort),
+        issues: sortWorkItems(issues, by: sort)
     )
 }
 

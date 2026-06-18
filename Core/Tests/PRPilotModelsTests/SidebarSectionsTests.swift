@@ -92,3 +92,21 @@ private func makeItem(
     #expect(s.myWork.isEmpty)
     #expect(s.reviewRequests.isEmpty)
 }
+
+@Test func issuesGoIntoIssuesBucket() {
+    let issue = WorkItem(
+        title: "bug", repoKey: "github.com/o/r", baseBranch: "main",
+        headBranch: "issue-1-bug",
+        issueRef: IssueRef(owner: "o", repo: "r", number: 1,
+            url: URL(string: "https://github.com/o/r/issues/1")!, authorLogin: "alice"),
+        prState: .open, origin: .discovered, addedAt: Date()
+    )
+    let task = WorkItem(
+        title: "feat/x", repoKey: "github.com/o/r", baseBranch: "main",
+        headBranch: "feat/x", origin: .added, addedAt: Date()
+    )
+    let sections = sidebarSections(items: [issue, task], myLogin: "me", sort: .recent)
+    #expect(sections.issues.map(\.id) == [issue.id])
+    #expect(sections.myWork.map(\.id) == [task.id])
+    #expect(sections.reviewRequests.isEmpty)
+}
