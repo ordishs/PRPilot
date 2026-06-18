@@ -22,11 +22,12 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
     public var viewedFiles: [String]
     public var claudeReviewedAt: Date?
     public var approvedByMe: Bool
+    public var manualIssueStatus: IssueWorkStatus?
 
     enum CodingKeys: String, CodingKey {
         case id, title, repoKey, baseBranch, headBranch, worktreePath, prRef, prState, issueRef
         case origin, closingIssueNumber, notes, claudeFlags, claudeSessionID, autoReview
-        case addedAt, lastOpenedAt, disabled, viewedFiles, claudeReviewedAt, approvedByMe
+        case addedAt, lastOpenedAt, disabled, viewedFiles, claudeReviewedAt, approvedByMe, manualIssueStatus
     }
 
     private enum LegacyKeys: String, CodingKey {
@@ -54,7 +55,8 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         disabled: Bool = false,
         viewedFiles: [String] = [],
         claudeReviewedAt: Date? = nil,
-        approvedByMe: Bool = false
+        approvedByMe: Bool = false,
+        manualIssueStatus: IssueWorkStatus? = nil
     ) {
         self.id = id
         self.title = title
@@ -77,6 +79,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.viewedFiles = viewedFiles
         self.claudeReviewedAt = claudeReviewedAt
         self.approvedByMe = approvedByMe
+        self.manualIssueStatus = manualIssueStatus
     }
 
     public init(from decoder: Decoder) throws {
@@ -97,6 +100,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.viewedFiles = try c.decodeIfPresent([String].self, forKey: .viewedFiles) ?? []
         self.claudeReviewedAt = try c.decodeIfPresent(Date.self, forKey: .claudeReviewedAt)
         self.approvedByMe = try c.decodeIfPresent(Bool.self, forKey: .approvedByMe) ?? false
+        self.manualIssueStatus = try c.decodeIfPresent(IssueWorkStatus.self, forKey: .manualIssueStatus)
 
         if c.contains(.repoKey) {
             self.id = try c.decode(String.self, forKey: .id)

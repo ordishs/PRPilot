@@ -130,6 +130,28 @@ private func sampleIssue() -> WorkItem {
     #expect(decoded.issueRef?.number == 42)
 }
 
+@Test func manualIssueStatusRoundTrips() throws {
+    var item = sampleIssue()
+    item.manualIssueStatus = .onHold
+    let data = try JSONEncoder().encode(item)
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: data)
+    #expect(decoded.manualIssueStatus == .onHold)
+}
+
+@Test func legacyItemDecodesWithNilManualIssueStatus() throws {
+    let json = """
+    {
+      "id": "X", "title": "t", "repoKey": "github.com/o/r",
+      "baseBranch": "main", "origin": "added", "autoReview": false,
+      "addedAt": "2023-11-14T22:13:20Z", "disabled": false, "viewedFiles": [], "approvedByMe": false
+    }
+    """
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let decoded = try decoder.decode(WorkItem.self, from: Data(json.utf8))
+    #expect(decoded.manualIssueStatus == nil)
+}
+
 @Test func legacyItemWithoutIssueRefDecodes() throws {
     let json = """
     {
