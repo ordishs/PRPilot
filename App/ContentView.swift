@@ -303,6 +303,15 @@ struct ContentView: View {
             }
             .disabled(review.claudeSessionID == nil)
             Button {
+                if let worktreePath = review.worktreePath {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(worktreePath, forType: .string)
+                }
+            } label: {
+                Label("Copy Worktree Path", systemImage: "folder")
+            }
+            .disabled(review.worktreePath == nil)
+            Button {
                 Task { await model.clearClaudeSession(for: review.id) }
             } label: {
                 Label("Clear Claude Session", systemImage: "xmark.circle")
