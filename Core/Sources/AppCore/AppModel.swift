@@ -447,8 +447,13 @@ public final class AppModel {
         guard let review = reviews.first(where: { $0.id == id }) else { return }
         terminateClaudeSession(for: id)
         diffStates.removeValue(forKey: id)
+        var preservedClonePath: String?
         if let worktreePath = review.worktreePath, FileManager.default.fileExists(atPath: worktreePath) {
-            try? FileManager.default.removeItem(atPath: worktreePath)
+            if isRegisteredClonePath(worktreePath) {
+                preservedClonePath = worktreePath
+            } else {
+                try? FileManager.default.removeItem(atPath: worktreePath)
+            }
         }
         do {
             try await store.removeItem(id: id)
@@ -456,10 +461,28 @@ public final class AppModel {
             if selection == id {
                 selection = nil
             }
-            errorMessage = nil
+            if let preservedClonePath {
+                errorMessage = "Kept \(preservedClonePath) — it is a registered repository clone, not a worktree, so it was not deleted."
+            } else {
+                errorMessage = nil
+            }
         } catch {
             errorMessage = String(describing: error)
         }
+    }
+
+    private func isRegisteredClonePath(_ path: String) -> Bool {
+        func standardized(_ p: String) -> String {
+            URL(fileURLWithPath: p).standardizedFileURL.path
+        }
+        let target = standardized(path)
+        for repo in registeredRepos {
+            let clone = standardized(repo.localClonePath)
+            if target == clone || clone.hasPrefix(target + "/") {
+                return true
+            }
+        }
+        return false
     }
 
     public func loadDiff(for review: WorkItem, force: Bool = false) async {

@@ -406,6 +406,64 @@ private func stubClient() -> GitHubClient {
     #expect(!FileManager.default.fileExists(atPath: tempWorktree))
 }
 
+@Test @MainActor func removeReviewNeverDeletesRegisteredClone() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let clonePath = FileManager.default.temporaryDirectory
+        .appendingPathComponent("clone-\(UUID().uuidString)", isDirectory: true)
+        .path
+    try FileManager.default.createDirectory(atPath: clonePath, withIntermediateDirectories: true)
+    let sentinel = clonePath + "/.git"
+    try FileManager.default.createDirectory(atPath: sentinel, withIntermediateDirectories: true)
+    try await store.upsert(RegisteredRepo(
+        remoteIdentity: "github.com/bsv-blockchain/teranode",
+        localClonePath: clonePath,
+        defaultBase: "main"
+    ))
+    var review = sampleReview()
+    review.worktreePath = clonePath
+    try await store.upsertItem(review)
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.removeReview(id: review.id)
+
+    #expect(model.reviews.isEmpty)
+    #expect(FileManager.default.fileExists(atPath: clonePath))
+    #expect(FileManager.default.fileExists(atPath: sentinel))
+    #expect(model.errorMessage?.contains("registered repository clone") == true)
+
+    try? FileManager.default.removeItem(atPath: clonePath)
+}
+
+@Test @MainActor func removeReviewDeletesWorktreeInsideCloneParent() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let clonePath = FileManager.default.temporaryDirectory
+        .appendingPathComponent("clone-\(UUID().uuidString)", isDirectory: true)
+        .path
+    try FileManager.default.createDirectory(atPath: clonePath, withIntermediateDirectories: true)
+    try await store.upsert(RegisteredRepo(
+        remoteIdentity: "github.com/bsv-blockchain/teranode",
+        localClonePath: clonePath,
+        defaultBase: "main"
+    ))
+    let worktree = FileManager.default.temporaryDirectory
+        .appendingPathComponent("wt-\(UUID().uuidString)", isDirectory: true)
+        .path
+    try FileManager.default.createDirectory(atPath: worktree, withIntermediateDirectories: true)
+    var review = sampleReview()
+    review.worktreePath = worktree
+    try await store.upsertItem(review)
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.removeReview(id: review.id)
+
+    #expect(!FileManager.default.fileExists(atPath: worktree))
+    #expect(FileManager.default.fileExists(atPath: clonePath))
+
+    try? FileManager.default.removeItem(atPath: clonePath)
+}
+
 @Test @MainActor func prepLogRetainedOnWorktreeFailure() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
