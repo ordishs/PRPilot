@@ -1009,6 +1009,32 @@ public final class AppModel {
         }
     }
 
+    public func setLabel(_ label: String?, for id: String) async {
+        guard var review = reviews.first(where: { $0.id == id }) else { return }
+        let trimmed = label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        if review.label == normalized { return }
+        review.label = normalized
+        do {
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    public func setPane(_ pane: PaneSelection, for id: String) async {
+        guard var review = reviews.first(where: { $0.id == id }) else { return }
+        if review.lastPane == pane { return }
+        review.lastPane = pane
+        do {
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
     public func setFileViewed(_ viewed: Bool, filePath: String, reviewID: String) async {
         guard var review = reviews.first(where: { $0.id == reviewID }) else { return }
         let already = review.viewedFiles.contains(filePath)

@@ -29,6 +29,14 @@ private func sample() -> WorkItem {
     #expect(sidebarItemMatches(i, query: "TERANODE", filter: .all, isWorking: false, isAwaiting: false))     // case-insensitive
 }
 
+@Test func queryMatchesLabel() {
+    var i = sample()
+    i.label = "Blocks the mainnet upgrade"
+    #expect(sidebarItemMatches(i, query: "mainnet", filter: .all, isWorking: false, isAwaiting: false))
+    #expect(sidebarItemMatches(i, query: "MAINNET", filter: .all, isWorking: false, isAwaiting: false))
+    #expect(!sidebarItemMatches(sample(), query: "mainnet", filter: .all, isWorking: false, isAwaiting: false))
+}
+
 @Test func nonMatchingQueryFails() {
     #expect(!sidebarItemMatches(sample(), query: "nope-zzz", filter: .all, isWorking: false, isAwaiting: false))
 }

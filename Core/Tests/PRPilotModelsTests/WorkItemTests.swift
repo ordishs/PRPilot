@@ -166,3 +166,87 @@ private func sampleIssue() -> WorkItem {
     #expect(decoded.issueRef == nil)
     #expect(decoded.category(myLogin: nil) == .task)
 }
+
+@Test func labelAndLastPaneRoundTrip() throws {
+    var item = sampleIssue()
+    item.label = "Blocks the mainnet upgrade"
+    item.lastPane = .claude
+    let data = try JSONEncoder().encode(item)
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: data)
+    #expect(decoded.label == "Blocks the mainnet upgrade")
+    #expect(decoded.lastPane == .claude)
+    #expect(decoded == item)
+}
+
+@Test func legacyItemDecodesWithNilLabelAndLastPane() throws {
+    let json = """
+    {
+      "id": "X", "title": "t", "repoKey": "github.com/o/r",
+      "baseBranch": "main", "origin": "added", "autoReview": false,
+      "addedAt": "2023-11-14T22:13:20Z", "disabled": false, "viewedFiles": [], "approvedByMe": false
+    }
+    """
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let decoded = try decoder.decode(WorkItem.self, from: Data(json.utf8))
+    #expect(decoded.label == nil)
+    #expect(decoded.lastPane == nil)
+}
+
+@Test func resolvedPaneRestoresRememberedChoiceOverTypeDefault() {
+    var pr = prItem()
+    pr.lastPane = .claude
+    #expect(resolvedPane(for: pr) == .claude)
+
+    var task = WorkItem(
+        id: "t", title: "spike", repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main", origin: .added, addedAt: Date(timeIntervalSince1970: 0)
+    )
+    task.lastPane = .github
+    #expect(resolvedPane(for: task) == .github)
+}
+
+@Test func resolvedPaneFallsBackToTypeDefaultOnFirstVisit() {
+    #expect(prItem().lastPane == nil)
+    #expect(resolvedPane(for: prItem()) == .github)
+
+    let task = WorkItem(
+        id: "t", title: "spike", repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main", origin: .added, addedAt: Date(timeIntervalSince1970: 0)
+    )
+    #expect(resolvedPane(for: task) == .claude)
+
+    let issue = sampleIssue()
+    #expect(issue.prRef == nil && issue.issueRef != nil)
+    #expect(resolvedPane(for: issue) == .github)
+}
+
+@Test func resolvedPanePinsDisabledItemToGitHubWithoutLosingMemory() {
+    var pr = prItem()
+    pr.lastPane = .claude
+    pr.disabled = true
+    #expect(resolvedPane(for: pr) == .github)
+    // The remembered choice survives so re-enabling restores it.
+    #expect(pr.lastPane == .claude)
+    pr.disabled = false
+    #expect(resolvedPane(for: pr) == .claude)
+}
+
+@Test func resolvedPaneIsIndependentPerItem() {
+    var a = prItem()
+    a.lastPane = .claude
+    var b = prItem()
+    b.lastPane = .github
+    #expect(resolvedPane(for: a) == .claude)
+    #expect(resolvedPane(for: b) == .github)
+}
+
+@Test func paneSelectionEncodesStableRawValues() throws {
+    #expect(PaneSelection.claude.rawValue == "claude")
+    #expect(PaneSelection.github.rawValue == "github")
+    #expect(PaneSelection.claude.displayName == "Claude Review")
+    #expect(PaneSelection.github.displayName == "GitHub")
+    #expect(PaneSelection.allCases == [.claude, .github])
+    let decoded = try JSONDecoder().decode(PaneSelection.self, from: Data("\"github\"".utf8))
+    #expect(decoded == .github)
+}

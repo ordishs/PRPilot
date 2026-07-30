@@ -31,6 +31,7 @@ public func sidebarItemMatches(
         "\(item.owner)/\(item.repo)",
         item.author ?? "",
         item.headBranch ?? "",
+        item.label ?? "",
         numberStr,
     ]
     return haystacks.contains { $0.lowercased().contains(q) }

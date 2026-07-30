@@ -2126,3 +2126,75 @@ private let issueSearchHitJSON = """
     #expect(p?.canPush == true)
     #expect(p?.needsForce == false)
 }
+
+@Test @MainActor func setLabelPersistsTrimmedValue() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    try await store.upsertItem(sampleReview())
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.setLabel("  Blocks the mainnet upgrade  ", for: sampleReviewID)
+
+    #expect(model.reviews.first?.label == "Blocks the mainnet upgrade")
+    let reloaded = try ReviewStore(fileURL: url)
+    #expect(await reloaded.allItems().first?.label == "Blocks the mainnet upgrade")
+}
+
+@Test @MainActor func setLabelClearsOnNilOrBlank() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var seeded = sampleReview()
+    seeded.label = "old label"
+    try await store.upsertItem(seeded)
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.setLabel("   ", for: sampleReviewID)
+    #expect(model.reviews.first?.label == nil)
+
+    await model.setLabel("again", for: sampleReviewID)
+    #expect(model.reviews.first?.label == "again")
+
+    await model.setLabel(nil, for: sampleReviewID)
+    #expect(model.reviews.first?.label == nil)
+}
+
+@Test @MainActor func setPanePersistsSelectionPerItem() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    try await store.upsertItem(sampleReview())
+    let other = WorkItem(
+        id: "other-item",
+        title: "second",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        origin: .added,
+        addedAt: Date(timeIntervalSince1970: 1_700_000_100)
+    )
+    try await store.upsertItem(other)
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.setPane(.claude, for: sampleReviewID)
+    await model.setPane(.github, for: "other-item")
+
+    #expect(model.reviews.first(where: { $0.id == sampleReviewID })?.lastPane == .claude)
+    #expect(model.reviews.first(where: { $0.id == "other-item" })?.lastPane == .github)
+
+    let reloaded = try ReviewStore(fileURL: url)
+    let persisted = await reloaded.allItems()
+    #expect(persisted.first(where: { $0.id == sampleReviewID })?.lastPane == .claude)
+    #expect(persisted.first(where: { $0.id == "other-item" })?.lastPane == .github)
+}
+
+@Test @MainActor func setPaneIsNoOpForUnknownItem() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.setPane(.claude, for: "does-not-exist")
+
+    #expect(model.reviews.first?.lastPane == nil)
+    #expect(model.errorMessage == nil)
+}

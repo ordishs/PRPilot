@@ -6,13 +6,7 @@ struct DetailView: View {
     let model: AppModel
     let webViewCache: WebViewCache
     let review: WorkItem
-    @State private var pane: Pane = .github
-
-    enum Pane: String, CaseIterable, Identifiable {
-        case claude = "Claude Review"
-        case github = "GitHub"
-        var id: String { rawValue }
-    }
+    @State private var pane: PaneSelection = .github
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,8 +34,8 @@ struct DetailView: View {
                 .background(Color.red.opacity(0.12))
             }
             Picker("", selection: $pane) {
-                ForEach(Pane.allCases) { pane in
-                    Text(pane.rawValue)
+                ForEach(PaneSelection.allCases, id: \.self) { pane in
+                    Text(pane.displayName)
                         .tag(pane)
                         .disabled(pane == .claude && review.disabled)
                 }
@@ -61,26 +55,21 @@ struct DetailView: View {
             }
         }
         .navigationTitle(review.number.map { "#\($0) \(review.title)" } ?? review.title)
-        .onAppear { defaultPaneForSelection() }
-        .onChange(of: review.id) { _, _ in defaultPaneForSelection() }
+        .onAppear { restorePaneForSelection() }
+        .onChange(of: review.id) { _, _ in restorePaneForSelection() }
         .onChange(of: review.disabled) { _, disabled in
             if disabled && pane == .claude {
                 pane = .github
             }
         }
+        .onChange(of: pane) { _, selected in
+            guard !review.disabled else { return }
+            Task { await model.setPane(selected, for: review.id) }
+        }
     }
 
-    // PRs and issues have a web page → show GitHub. Freeform tasks have no page → Claude.
-    private func defaultPaneForSelection() {
-        if review.disabled {
-            pane = .github
-            return
-        }
-        if review.prRef == nil && review.issueRef == nil {
-            pane = .claude
-        } else {
-            pane = .github
-        }
+    private func restorePaneForSelection() {
+        pane = resolvedPane(for: review)
     }
 
     private var paneShortcuts: some View {

@@ -23,11 +23,16 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
     public var claudeReviewedAt: Date?
     public var approvedByMe: Bool
     public var manualIssueStatus: IssueWorkStatus?
+    /// Short user-authored reminder of what this item is about.
+    public var label: String?
+    /// Detail pane this item was last viewed in, so selection is restored on return.
+    public var lastPane: PaneSelection?
 
     enum CodingKeys: String, CodingKey {
         case id, title, repoKey, baseBranch, headBranch, worktreePath, prRef, prState, issueRef
         case origin, closingIssueNumber, notes, claudeFlags, claudeSessionID, autoReview
         case addedAt, lastOpenedAt, disabled, viewedFiles, claudeReviewedAt, approvedByMe, manualIssueStatus
+        case label, lastPane
     }
 
     private enum LegacyKeys: String, CodingKey {
@@ -56,7 +61,9 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         viewedFiles: [String] = [],
         claudeReviewedAt: Date? = nil,
         approvedByMe: Bool = false,
-        manualIssueStatus: IssueWorkStatus? = nil
+        manualIssueStatus: IssueWorkStatus? = nil,
+        label: String? = nil,
+        lastPane: PaneSelection? = nil
     ) {
         self.id = id
         self.title = title
@@ -80,6 +87,8 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.claudeReviewedAt = claudeReviewedAt
         self.approvedByMe = approvedByMe
         self.manualIssueStatus = manualIssueStatus
+        self.label = label
+        self.lastPane = lastPane
     }
 
     public init(from decoder: Decoder) throws {
@@ -101,6 +110,8 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.claudeReviewedAt = try c.decodeIfPresent(Date.self, forKey: .claudeReviewedAt)
         self.approvedByMe = try c.decodeIfPresent(Bool.self, forKey: .approvedByMe) ?? false
         self.manualIssueStatus = try c.decodeIfPresent(IssueWorkStatus.self, forKey: .manualIssueStatus)
+        self.label = try c.decodeIfPresent(String.self, forKey: .label)
+        self.lastPane = try c.decodeIfPresent(PaneSelection.self, forKey: .lastPane)
 
         if c.contains(.repoKey) {
             self.id = try c.decode(String.self, forKey: .id)

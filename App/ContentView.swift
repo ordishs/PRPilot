@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var showingAdd = false
     @State private var showingAddIssue = false
     @State private var showingNewTask = false
+    @State private var labelTarget: WorkItem?
     @State private var searchText = ""
     @State private var sidebarFilter: SidebarFilter = .all
     @Environment(\.colorScheme) private var colorScheme
@@ -136,6 +137,11 @@ struct ContentView: View {
             .sheet(isPresented: $showingNewTask) {
                 NewTaskSheet(model: model, isPresented: $showingNewTask)
             }
+            .sheet(item: $labelTarget) { item in
+                LabelSheet(item: item) { newLabel in
+                    Task { await model.setLabel(newLabel, for: item.id) }
+                }
+            }
             }
         } detail: {
             if let review = model.selectedReview() {
@@ -238,6 +244,17 @@ struct ContentView: View {
                         .lineLimit(1)
                     statusBadge(for: review)
                 }
+                if let label = review.label {
+                    HStack(spacing: 3) {
+                        Image(systemName: "bookmark.fill").font(.system(size: 9))
+                        Text(label).lineLimit(2)
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.14))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
                 Text("\(review.owner)/\(review.repo) · \(review.author ?? "")")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
@@ -269,6 +286,19 @@ struct ContentView: View {
         }
         .opacity(review.disabled ? 0.45 : 1.0)
         .contextMenu {
+            Button {
+                labelTarget = review
+            } label: {
+                Label(review.label == nil ? "Add Label…" : "Edit Label…", systemImage: "bookmark")
+            }
+            if review.label != nil {
+                Button {
+                    Task { await model.setLabel(nil, for: review.id) }
+                } label: {
+                    Label("Clear Label", systemImage: "bookmark.slash")
+                }
+            }
+            Divider()
             if review.category(myLogin: model.currentLogin) == .issue {
                 Menu {
                     Button(IssueWorkStatus.onHold.displayName) { Task { await model.setIssueStatus(.onHold, for: review.id) } }
@@ -376,6 +406,45 @@ struct ContentView: View {
             claudeWorking: model.claudeStatuses[review.id] == .working
         )
         StateBadge(text: status.displayName, color: issueStatusColor(status))
+    }
+}
+
+private struct LabelSheet: View {
+    let item: WorkItem
+    let onSave: (String?) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Label")
+                .font(.headline)
+            Text(item.number.map { "#\($0) · \(item.title)" } ?? item.title)
+                .font(.callout).foregroundStyle(.secondary)
+                .lineLimit(2).frame(width: 380, alignment: .leading)
+            TextField("what this item is about", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 380)
+                .focused($focused)
+                .onSubmit { save() }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Save") { save() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .onAppear {
+            text = item.label ?? ""
+            focused = true
+        }
+    }
+
+    private func save() {
+        onSave(text)
+        dismiss()
     }
 }
 
