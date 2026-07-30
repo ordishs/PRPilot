@@ -3,10 +3,40 @@ import SwiftUI
 import WebKit
 import PRPilotModels
 
+/// Tracks whether a web view's current document actually finished loading, so a
+/// half-finished page can be re-driven instead of being displayed as-is.
+@MainActor
+final class LoadTracker: NSObject, WKNavigationDelegate {
+    private(set) var didFinishLoad = false
+    var onProcessTerminated: (() -> Void)?
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        didFinishLoad = false
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        didFinishLoad = true
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        didFinishLoad = false
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        didFinishLoad = false
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        didFinishLoad = false
+        onProcessTerminated?()
+    }
+}
+
 @MainActor
 @Observable
 final class WebViewCache {
     private var webViews: [String: WKWebView] = [:]
+    private var trackers: [String: LoadTracker] = [:]
     private let configuration: WKWebViewConfiguration
 
     init() {
@@ -41,28 +71,48 @@ final class WebViewCache {
         return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true)
     }()
 
+    /// Returns the web view for an item, creating it if needed. Deliberately does
+    /// *not* start loading: WebKit treats a page whose view has no window as
+    /// hidden and throttles its resource loading to a crawl, so a page started
+    /// here sits half-parsed — stylesheets fetched but not applied — and paints
+    /// blank or as unstyled HTML when it is finally shown. Loading happens in
+    /// `activate(for:)`, once the view is actually on screen.
     func ensure(for review: WorkItem) -> WKWebView {
-        guard let url = review.url else {
-            return webViews[review.id] ?? {
-                let webView = WKWebView(frame: .zero, configuration: configuration)
-                webViews[review.id] = webView
-                return webView
-            }()
-        }
-        if let existing = webViews[review.id] {
-            // All webviews share the persistent .default() cookie store, so a
-            // session established in one tab is visible to the rest. A tab that
-            // loaded while signed out stays on the login page until reloaded —
-            // refresh it on revisit so it picks up the now-present session.
-            if Self.isGitHubAuthPage(existing.url) {
-                existing.load(URLRequest(url: url))
-            }
-            return existing
-        }
+        if let existing = webViews[review.id] { return existing }
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.load(URLRequest(url: url))
+        let tracker = LoadTracker()
+        tracker.onProcessTerminated = { [weak webView] in
+            guard let webView, webView.window != nil, let url = review.url else { return }
+            webView.load(URLRequest(url: url))
+        }
+        webView.navigationDelegate = tracker
         webViews[review.id] = webView
+        trackers[review.id] = tracker
         return webView
+    }
+
+    /// Called when an item's web view enters a window. Starts the load if the page
+    /// isn't already loaded or loading — which also recovers a view whose earlier
+    /// load failed or whose web content process was killed.
+    func activate(for review: WorkItem) {
+        guard let url = review.url, let webView = webViews[review.id] else { return }
+        if webView.isLoading { return }
+        // All webviews share the persistent .default() cookie store, so a session
+        // established in one tab is visible to the rest. A tab that loaded while
+        // signed out stays on the login page until reloaded — refresh it on
+        // revisit so it picks up the now-present session.
+        let landedOnLogin = Self.isGitHubAuthPage(webView.url)
+        if trackers[review.id]?.didFinishLoad == true && !landedOnLogin { return }
+        webView.load(URLRequest(url: url))
+    }
+
+    /// Safety net for a view that is on screen with nothing loaded at all. Called
+    /// on every SwiftUI update, so it must never re-drive a page that merely
+    /// finished on GitHub's login screen — that would reload in a loop.
+    func loadIfBlank(for review: WorkItem) {
+        guard let url = review.url, let webView = webViews[review.id] else { return }
+        guard webView.url == nil, !webView.isLoading else { return }
+        webView.load(URLRequest(url: url))
     }
 
     private static func isGitHubAuthPage(_ url: URL?) -> Bool {
@@ -75,6 +125,7 @@ final class WebViewCache {
     }
 
     func remove(reviewID: String) {
+        trackers.removeValue(forKey: reviewID)
         if let webView = webViews.removeValue(forKey: reviewID) {
             webView.stopLoading()
             webView.removeFromSuperview()
@@ -82,6 +133,7 @@ final class WebViewCache {
     }
 
     func removeAll() {
+        trackers.removeAll()
         for webView in webViews.values {
             webView.stopLoading()
             webView.removeFromSuperview()

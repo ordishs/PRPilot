@@ -49,12 +49,26 @@ struct WebPane: View {
     }
 }
 
+/// Reports when it lands in a window, which is the moment WebKit will actually
+/// load a page at full speed.
+private final class WebContainerView: NSView {
+    var onEnterWindow: (() -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { onEnterWindow?() }
+    }
+}
+
 private struct WebViewHost: NSViewRepresentable {
     let cache: WebViewCache
     let review: WorkItem
 
     func makeNSView(context: Context) -> NSView {
-        let container = NSView()
+        let container = WebContainerView()
+        let review = review
+        let cache = cache
+        container.onEnterWindow = { cache.activate(for: review) }
         let webView = cache.ensure(for: review)
         webView.removeFromSuperview()
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -68,5 +82,7 @@ private struct WebViewHost: NSViewRepresentable {
         return container
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if nsView.window != nil { cache.loadIfBlank(for: review) }
+    }
 }
