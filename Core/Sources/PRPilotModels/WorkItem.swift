@@ -27,12 +27,15 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
     public var label: String?
     /// Detail pane this item was last viewed in, so selection is restored on return.
     public var lastPane: PaneSelection?
+    /// Author activity the user has dismissed by hand, so the "Updated" chip stays off
+    /// until the author does something newer.
+    public var authorUpdateSeenAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case id, title, repoKey, baseBranch, headBranch, worktreePath, prRef, prState, issueRef
         case origin, closingIssueNumber, notes, claudeFlags, claudeSessionID, autoReview
         case addedAt, lastOpenedAt, disabled, viewedFiles, claudeReviewedAt, approvedByMe, manualIssueStatus
-        case label, lastPane
+        case label, lastPane, authorUpdateSeenAt
     }
 
     private enum LegacyKeys: String, CodingKey {
@@ -63,7 +66,8 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         approvedByMe: Bool = false,
         manualIssueStatus: IssueWorkStatus? = nil,
         label: String? = nil,
-        lastPane: PaneSelection? = nil
+        lastPane: PaneSelection? = nil,
+        authorUpdateSeenAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -89,6 +93,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.manualIssueStatus = manualIssueStatus
         self.label = label
         self.lastPane = lastPane
+        self.authorUpdateSeenAt = authorUpdateSeenAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -112,6 +117,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.manualIssueStatus = try c.decodeIfPresent(IssueWorkStatus.self, forKey: .manualIssueStatus)
         self.label = try c.decodeIfPresent(String.self, forKey: .label)
         self.lastPane = try c.decodeIfPresent(PaneSelection.self, forKey: .lastPane)
+        self.authorUpdateSeenAt = try c.decodeIfPresent(Date.self, forKey: .authorUpdateSeenAt)
 
         if c.contains(.repoKey) {
             self.id = try c.decode(String.self, forKey: .id)

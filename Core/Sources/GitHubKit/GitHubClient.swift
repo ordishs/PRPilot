@@ -74,15 +74,6 @@ public struct GitHubClient: Sendable {
         return .open
     }
 
-    public struct ReviewState: Sendable, Equatable {
-        public let approvedByMe: Bool
-        public let prState: PRState
-        public init(approvedByMe: Bool, prState: PRState) {
-            self.approvedByMe = approvedByMe
-            self.prState = prState
-        }
-    }
-
     public func fetchCurrentLogin() async throws -> String {
         let result = try await runner.run(executable: ghPath, arguments: ["api", "user", "--jq", ".login"])
         guard result.exitCode == 0 else {
@@ -120,53 +111,124 @@ public struct GitHubClient: Sendable {
         }
     }
 
-    public func fetchReviewState(for ref: PRLocator, login: String) async throws -> ReviewState {
+    public struct PRSnapshot: Sendable, Equatable {
+        public let prState: PRState
+        public let approvedByMe: Bool
+        public let status: PRStatus
+        public init(prState: PRState, approvedByMe: Bool, status: PRStatus) {
+            self.prState = prState
+            self.approvedByMe = approvedByMe
+            self.status = status
+        }
+    }
+
+    /// Everything the per-item refresh needs, in one GraphQL call: PR state, whether you
+    /// approved it, CI/behind/readiness, and whether the author has moved since your last
+    /// review. Replaced two `gh pr view` calls, halving poll traffic.
+    public func fetchPRSnapshot(for ref: PRLocator, login: String) async throws -> PRSnapshot {
         let result = try await runner.run(
             executable: ghPath,
-            arguments: prViewArguments(ref: ref, fields: "state,isDraft,reviews")
+            arguments: [
+                "api", "graphql",
+                "-f", "owner=\(ref.owner)",
+                "-f", "repo=\(ref.repo)",
+                "-F", "number=\(ref.number)",
+                "-f", "query=\(Self.snapshotQuery)",
+            ]
         )
         guard result.exitCode == 0 else {
             throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
         }
-        let payload: GHReviewStatePayload
+        let payload: GHSnapshotResponse
         do {
-            payload = try JSONDecoder().decode(GHReviewStatePayload.self, from: Data(result.standardOutput.utf8))
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            payload = try decoder.decode(GHSnapshotResponse.self, from: Data(result.standardOutput.utf8))
         } catch {
             throw GitHubError.decodingFailed(String(describing: error))
         }
-        let decisive = payload.reviews.filter {
-            $0.author?.login == login && ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].contains($0.state)
-        }
+        let pr = payload.data.repository.pullRequest
+        let headCommit = pr.commits.nodes.first?.commit
+
+        let myReviews = pr.reviews.nodes.filter { $0.author?.login == login }
+        let decisive = myReviews.filter { ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].contains($0.state) }
         let approvedByMe = decisive.last?.state == "APPROVED"
-        return ReviewState(
+
+        let threads = pr.reviewThreads.nodes.map { node in
+            ReviewThreadSnapshot(
+                isResolved: node.isResolved,
+                resolvedByLogin: node.resolvedBy?.login,
+                comments: node.comments.nodes.compactMap { comment in
+                    guard let login = comment.author?.login else { return nil }
+                    return ThreadComment(authorLogin: login, createdAt: comment.createdAt)
+                }
+            )
+        }
+        let authorUpdatedAt = AuthorUpdate.latestUpdate(
+            myLogin: login,
+            authorLogin: pr.author?.login ?? "",
+            myReviewDates: myReviews.compactMap(\.submittedAt),
+            threads: threads,
+            headCommittedAt: headCommit?.committedDate,
+            reviewRequestedFromMeAt: pr.timelineItems.nodes
+                .filter { $0.requestedReviewer?.login == login }
+                .compactMap(\.createdAt)
+        )
+
+        return PRSnapshot(
+            prState: GitHubClient.mapState(state: pr.state, isDraft: pr.isDraft),
             approvedByMe: approvedByMe,
-            prState: GitHubClient.mapState(state: payload.state, isDraft: payload.isDraft)
+            status: PRStatus(
+                ci: Self.aggregateCI(rollup: headCommit?.statusCheckRollup),
+                isBehind: pr.mergeStateStatus == "BEHIND",
+                readiness: PRStatus.readiness(isDraft: pr.isDraft, reviewDecision: pr.reviewDecision),
+                authorUpdatedAt: authorUpdatedAt
+            )
         )
     }
 
-    public func fetchPRStatus(for ref: PRLocator) async throws -> PRStatus {
-        let result = try await runner.run(
-            executable: ghPath,
-            arguments: prViewArguments(ref: ref, fields: "statusCheckRollup,mergeStateStatus,isDraft,reviewDecision")
-        )
-        guard result.exitCode == 0 else {
-            throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
+    /// `contexts` is paginated at 100. Within that, aggregate the individual checks exactly
+    /// as before; beyond it an unfetched check could hide a failure, so defer to the
+    /// rollup's own state rather than report a wrong answer confidently.
+    static func aggregateCI(rollup: GHSnapshotResponse.StatusCheckRollup?) -> CIStatus {
+        guard let rollup else { return .none }
+        let contexts = rollup.contexts
+        if contexts.totalCount > contexts.nodes.count {
+            switch rollup.state?.uppercased() {
+            case "SUCCESS": return .passing
+            case "FAILURE", "ERROR": return .failing
+            case "PENDING", "EXPECTED": return .pending
+            default: return .none
+            }
         }
-        let payload: GHStatusPayload
-        do {
-            payload = try JSONDecoder().decode(GHStatusPayload.self, from: Data(result.standardOutput.utf8))
-        } catch {
-            throw GitHubError.decodingFailed(String(describing: error))
-        }
-        let checks = (payload.statusCheckRollup ?? []).map {
+        return PRStatus.aggregateCI(contexts.nodes.map {
             CICheck(status: $0.status, conclusion: $0.conclusion, state: $0.state)
-        }
-        return PRStatus(
-            ci: PRStatus.aggregateCI(checks),
-            isBehind: payload.mergeStateStatus == "BEHIND",
-            readiness: PRStatus.readiness(isDraft: payload.isDraft, reviewDecision: payload.reviewDecision)
-        )
+        })
     }
+
+    private static let snapshotQuery = """
+    query($owner:String!,$repo:String!,$number:Int!){
+      repository(owner:$owner,name:$repo){ pullRequest(number:$number){
+        state isDraft reviewDecision mergeStateStatus
+        author{login}
+        commits(last:1){nodes{commit{ committedDate
+          statusCheckRollup{ state contexts(first:100){ totalCount nodes{
+            __typename
+            ... on CheckRun{ status conclusion }
+            ... on StatusContext{ state }
+          }}}
+        }}}
+        reviews(first:100){nodes{author{login} state submittedAt}}
+        reviewThreads(first:100){nodes{
+          isResolved resolvedBy{login}
+          comments(first:50){nodes{author{login} createdAt}}
+        }}
+        timelineItems(first:100, itemTypes:[REVIEW_REQUESTED_EVENT]){nodes{
+          ... on ReviewRequestedEvent{ createdAt requestedReviewer{ ... on User{login} } }
+        }}
+      }}
+    }
+    """
 }
 
 public struct IssueHit: Sendable, Equatable {
@@ -367,27 +429,70 @@ struct GHRepoView: Decodable {
     let defaultBranchRef: Ref?
 }
 
-struct GHStatusPayload: Decodable {
-    struct Check: Decodable {
+struct GHSnapshotResponse: Decodable {
+    /// `login` is optional because an inline fragment that does not match yields an empty
+    /// object rather than null — a team review request decodes as `{}`.
+    struct Login: Decodable { let login: String? }
+
+    struct Context: Decodable {
         let status: String?
         let conclusion: String?
         let state: String?
     }
-    let statusCheckRollup: [Check]?
-    let mergeStateStatus: String?
-    let isDraft: Bool
-    let reviewDecision: String?
-}
-
-struct GHReviewStatePayload: Decodable {
-    struct Review: Decodable {
-        struct Author: Decodable { let login: String }
-        let author: Author?  // null for reviews by deleted accounts
-        let state: String
+    struct Contexts: Decodable {
+        let totalCount: Int
+        let nodes: [Context]
     }
-    let state: String
-    let isDraft: Bool
-    let reviews: [Review]
+    struct StatusCheckRollup: Decodable {
+        let state: String?
+        let contexts: Contexts
+    }
+    struct Commit: Decodable {
+        let committedDate: Date?
+        let statusCheckRollup: StatusCheckRollup?
+    }
+    struct CommitNode: Decodable { let commit: Commit }
+    struct Commits: Decodable { let nodes: [CommitNode] }
+
+    struct Review: Decodable {
+        let author: Login?   // null for reviews by deleted accounts
+        let state: String
+        let submittedAt: Date?
+    }
+    struct Reviews: Decodable { let nodes: [Review] }
+
+    struct Comment: Decodable {
+        let author: Login?
+        let createdAt: Date
+    }
+    struct Comments: Decodable { let nodes: [Comment] }
+    struct ReviewThread: Decodable {
+        let isResolved: Bool
+        let resolvedBy: Login?
+        let comments: Comments
+    }
+    struct ReviewThreads: Decodable { let nodes: [ReviewThread] }
+
+    struct TimelineItem: Decodable {
+        let createdAt: Date?
+        let requestedReviewer: Login?   // absent when the reviewer is a team
+    }
+    struct TimelineItems: Decodable { let nodes: [TimelineItem] }
+
+    struct PullRequest: Decodable {
+        let state: String
+        let isDraft: Bool
+        let reviewDecision: String?
+        let mergeStateStatus: String?
+        let author: Login?
+        let commits: Commits
+        let reviews: Reviews
+        let reviewThreads: ReviewThreads
+        let timelineItems: TimelineItems
+    }
+    struct Repository: Decodable { let pullRequest: PullRequest }
+    struct DataPayload: Decodable { let repository: Repository }
+    let data: DataPayload
 }
 
 struct GHPullRequest: Decodable {

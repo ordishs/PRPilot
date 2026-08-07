@@ -268,6 +268,7 @@ struct ContentView: View {
                         }
                         if status.isBehind { StateBadge(text: "behind", color: .orange) }
                         if status.readiness == .changesRequested { StateBadge(text: "changes", color: .red) }
+                        if model.hasUnseenAuthorUpdate(review) { StateBadge(text: "Updated", color: .teal) }
                     }
                 }
                 if let push = model.pushability[review.id], push.ahead > 0 || push.behind > 0 {
@@ -347,6 +348,14 @@ struct ContentView: View {
                 Label("Clear Claude Session", systemImage: "xmark.circle")
             }
             .disabled(review.claudeSessionID == nil)
+            if review.prRef != nil {
+                Button {
+                    Task { await model.markAuthorUpdateSeen(id: review.id) }
+                } label: {
+                    Label("Clear Updated Badge", systemImage: "bell.slash")
+                }
+                .disabled(!model.hasUnseenAuthorUpdate(review))
+            }
             Divider()
             Button {
                 Task { await model.setReviewDisabled(!review.disabled, for: review.id) }

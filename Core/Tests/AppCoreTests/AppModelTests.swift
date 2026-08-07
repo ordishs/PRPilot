@@ -1477,16 +1477,19 @@ private let prFetchJSON = """
     let url = tempStoreURL()
     let store = try ReviewStore(fileURL: url)
     try await store.upsertItem(sampleReview())
-    let reviewsJSON = """
-    {"state":"OPEN","isDraft":false,"reviews":[{"author":{"login":"ordishs"},"state":"APPROVED"}]}
-    """
-    let prStatusJSON = """
-    {"statusCheckRollup":[],"mergeStateStatus":"CLEAN","isDraft":false,"reviewDecision":"APPROVED"}
+    let snapshotJSON = """
+    {"data":{"repository":{"pullRequest":{
+      "state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","mergeStateStatus":"CLEAN",
+      "author":{"login":"icellan"},
+      "commits":{"nodes":[{"commit":{"committedDate":null,"statusCheckRollup":null}}]},
+      "reviews":{"nodes":[{"author":{"login":"ordishs"},"state":"APPROVED","submittedAt":"2026-08-06T09:00:00Z"}]},
+      "reviewThreads":{"nodes":[]},
+      "timelineItems":{"nodes":[]}
+    }}}}
     """
     let client = GitHubClient(runner: StubRunner(results: [
         CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
-        CommandResult(exitCode: 0, standardOutput: reviewsJSON, standardError: ""),
-        CommandResult(exitCode: 0, standardOutput: prStatusJSON, standardError: "")
+        CommandResult(exitCode: 0, standardOutput: snapshotJSON, standardError: "")
     ]), ghPath: "gh")
     let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
     await model.load()
@@ -1720,16 +1723,20 @@ private let taskFetchJSON = """
     let url = tempStoreURL()
     let store = try ReviewStore(fileURL: url)
     try await store.upsertItem(sampleReview())
-    let reviewStateJSON = """
-    {"state":"OPEN","isDraft":false,"reviews":[]}
-    """
-    let prStatusJSON = """
-    {"statusCheckRollup":[{"status":"COMPLETED","conclusion":"FAILURE"}],"mergeStateStatus":"BEHIND","isDraft":false,"reviewDecision":null}
+    let snapshotJSON = """
+    {"data":{"repository":{"pullRequest":{
+      "state":"OPEN","isDraft":false,"reviewDecision":null,"mergeStateStatus":"BEHIND",
+      "author":{"login":"icellan"},
+      "commits":{"nodes":[{"commit":{"committedDate":"2026-08-06T11:00:00Z","statusCheckRollup":
+        {"state":"FAILURE","contexts":{"totalCount":1,"nodes":[{"status":"COMPLETED","conclusion":"FAILURE"}]}}}}]},
+      "reviews":{"nodes":[{"author":{"login":"ordishs"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-06T09:00:00Z"}]},
+      "reviewThreads":{"nodes":[]},
+      "timelineItems":{"nodes":[]}
+    }}}}
     """
     let client = GitHubClient(runner: StubRunner(results: [
         CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
-        CommandResult(exitCode: 0, standardOutput: reviewStateJSON, standardError: ""),
-        CommandResult(exitCode: 0, standardOutput: prStatusJSON, standardError: "")
+        CommandResult(exitCode: 0, standardOutput: snapshotJSON, standardError: "")
     ]), ghPath: "gh")
     let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
     await model.load()
@@ -1738,6 +1745,9 @@ private let taskFetchJSON = """
 
     #expect(model.prStatuses[sampleReviewID]?.ci == .failing)
     #expect(model.prStatuses[sampleReviewID]?.isBehind == true)
+    // The author pushed at 11:00, after the 09:00 change request — the "Updated" chip data
+    // has to reach the model, not just the client.
+    #expect(model.prStatuses[sampleReviewID]?.authorUpdatedAt == ISO8601DateFormatter().date(from: "2026-08-06T11:00:00Z"))
 }
 
 @Test @MainActor func discoverSkipsCappedResultsAndWarns() async throws {
@@ -2196,5 +2206,200 @@ private let issueSearchHitJSON = """
     await model.setPane(.claude, for: "does-not-exist")
 
     #expect(model.reviews.first?.lastPane == nil)
+    #expect(model.errorMessage == nil)
+}
+
+@Test @MainActor func pendingWorkflowKeepsStatusWorkingAndDoesNotStampReviewed() async throws {
+    // /code-review hands the review to a background workflow and ends its turn in
+    // seconds. That is not a finished review: the item must stay working, must not be
+    // stamped reviewed, and must not fire the "review ready" notification.
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()
+    try await store.upsertItem(review)
+    let poster = StubNotificationPoster()
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: poster,
+        statusReader: ClaudeStatusReader(idleThresholdSeconds: 0.1)
+    )
+    await model.load()
+    await model.ensureClaudeSession(for: review)
+
+    let launchedAt = Date().addingTimeInterval(-600)
+    model.handleTranscriptEvent(
+        reviewID: review.id,
+        at: launchedAt,
+        snippet: "Review workflow is running in the background",
+        turnCompleted: false,
+        workflowPending: true
+    )
+    model.recomputeStatus(for: review.id, now: Date())
+
+    #expect(model.claudeStatuses[review.id] == .working)
+
+    try await Task.sleep(nanoseconds: 300_000_000)
+    #expect(model.reviews.first(where: { $0.id == review.id })?.claudeReviewedAt == nil)
+    #expect(await poster.posted.isEmpty)
+}
+
+@Test @MainActor func completionAfterWorkflowSettlesStampsReviewedAndNotifies() async throws {
+    // When the workflow reports back and Claude finishes the turn for real, the item is
+    // reviewed and the notification carries the real verdict.
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()
+    try await store.upsertItem(review)
+    let poster = StubNotificationPoster()
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: poster,
+        statusReader: ClaudeStatusReader(idleThresholdSeconds: 0.1)
+    )
+    await model.load()
+    await model.ensureClaudeSession(for: review)
+
+    model.handleTranscriptEvent(
+        reviewID: review.id,
+        at: Date().addingTimeInterval(-600),
+        snippet: "Review workflow is running in the background",
+        turnCompleted: false,
+        workflowPending: true
+    )
+    model.handleTranscriptEvent(
+        reviewID: review.id,
+        at: Date(),
+        snippet: "3 confirmed findings",
+        turnCompleted: true,
+        workflowPending: false
+    )
+
+    try await Task.sleep(nanoseconds: 300_000_000)
+    #expect(model.reviews.first(where: { $0.id == review.id })?.claudeReviewedAt != nil)
+    let posted = await poster.posted
+    #expect(posted.count == 1)
+    #expect(posted.first?.body == "3 confirmed findings")
+}
+
+@Test @MainActor func discoverySurfacesSearchFailureAsWarning() async throws {
+    // A failing `gh search prs` (rate limit, auth, network) used to be swallowed: no new
+    // PRs appeared and nothing said why. It must surface as a discovery warning.
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "review-requested:@me is:open")]
+    seed.myPRsEnabled = false
+    seed.issuesEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
+        CommandResult(
+            exitCode: 1,
+            standardOutput: "",
+            standardError: "HTTP 403: You have exceeded a secondary rate limit."
+        ),
+    ])
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let model = AppModel(
+        store: store,
+        client: client,
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.discoverNow()
+
+    #expect(model.reviews.isEmpty)
+    #expect(model.discoveryWarnings.count == 1)
+    #expect(model.discoveryWarnings.first?.contains("review-requested:@me is:open") == true)
+    #expect(model.discoveryWarnings.first?.contains("secondary rate limit") == true)
+}
+
+private func authorUpdateSnapshotJSON(committedDate: String) -> String {
+    """
+    {"data":{"repository":{"pullRequest":{
+      "state":"OPEN","isDraft":false,"reviewDecision":"CHANGES_REQUESTED","mergeStateStatus":"CLEAN",
+      "author":{"login":"icellan"},
+      "commits":{"nodes":[{"commit":{"committedDate":"\(committedDate)","statusCheckRollup":null}}]},
+      "reviews":{"nodes":[{"author":{"login":"ordishs"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-06T09:00:00Z"}]},
+      "reviewThreads":{"nodes":[]},
+      "timelineItems":{"nodes":[]}
+    }}}}
+    """
+}
+
+@Test @MainActor func clearingTheUpdatedBadgePersistsAWatermarkAndHidesTheChip() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    try await store.upsertItem(sampleReview())
+    let client = GitHubClient(runner: StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: authorUpdateSnapshotJSON(committedDate: "2026-08-06T11:00:00Z"), standardError: ""),
+    ]), ghPath: "gh")
+    let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+    await model.refreshReviewState(for: sampleReviewID)
+
+    let before = try #require(model.reviews.first { $0.id == sampleReviewID })
+    #expect(model.hasUnseenAuthorUpdate(before))
+
+    await model.markAuthorUpdateSeen(id: sampleReviewID)
+
+    let after = try #require(model.reviews.first { $0.id == sampleReviewID })
+    #expect(model.hasUnseenAuthorUpdate(after) == false)
+    // The watermark is the update's own timestamp, not "now".
+    #expect(after.authorUpdateSeenAt == ISO8601DateFormatter().date(from: "2026-08-06T11:00:00Z"))
+
+    let reloaded = try ReviewStore(fileURL: url)
+    let persisted = await reloaded.allItems().first { $0.id == sampleReviewID }
+    #expect(persisted?.authorUpdateSeenAt != nil)
+}
+
+@Test @MainActor func aNewerAuthorUpdateReBadgesAfterDismissal() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let client = GitHubClient(runner: StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: authorUpdateSnapshotJSON(committedDate: "2026-08-06T11:00:00Z"), standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: authorUpdateSnapshotJSON(committedDate: "2026-08-06T15:30:00Z"), standardError: ""),
+    ]), ghPath: "gh")
+    let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+    await model.refreshReviewState(for: sampleReviewID)
+    await model.markAuthorUpdateSeen(id: sampleReviewID)
+    #expect(model.hasUnseenAuthorUpdate(try #require(model.reviews.first)) == false)
+
+    // The author pushes again after the dismissal.
+    await model.refreshReviewState(for: sampleReviewID)
+
+    #expect(model.hasUnseenAuthorUpdate(try #require(model.reviews.first)))
+}
+
+@Test @MainActor func clearingTheUpdatedBadgeIsANoOpWithoutAnUpdate() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+
+    await model.markAuthorUpdateSeen(id: sampleReviewID)
+    await model.markAuthorUpdateSeen(id: "does-not-exist")
+
+    #expect(model.reviews.first?.authorUpdateSeenAt == nil)
     #expect(model.errorMessage == nil)
 }

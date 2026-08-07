@@ -58,6 +58,7 @@ public final class AppModel {
     private var lastEventAt: [String: Date] = [:]
     private var lastVerdictSnippet: [String: String] = [:]
     private var lastEventWasTurnCompletion: [String: Bool] = [:]
+    private var workflowPendingForSession: [String: Bool] = [:]
     private var notifiedAwaitingForSession: Set<String> = []
     private var tickTask: Task<Void, Never>?
     private var discoveryTask: Task<Void, Never>?
@@ -169,7 +170,15 @@ public final class AppModel {
                     warnings.append("Skipped \"\(text)\" — not scoped to you, an org, or a repo. Add a qualifier (author:/org:/repo:/…) or enable \"run anyway\".")
                     continue
                 }
-                guard let results = try? await client.searchPRs(query: text) else { continue }
+                let results: [DiscoveryHit]
+                do {
+                    results = try await client.searchPRs(query: text)
+                } catch {
+                    // Swallowing this hid rate limits and auth failures: no new PRs
+                    // appeared and nothing said why.
+                    warnings.append("\"\(text)\" failed — \(Self.searchFailureReason(error))")
+                    continue
+                }
                 anyQuerySucceeded = true
                 if results.count >= 100 {
                     warnings.append("\"\(text)\" returned 100+ results (too broad) — refine it. Those results were not added.")
@@ -190,7 +199,13 @@ public final class AppModel {
                     warnings.append("Skipped \"\(text)\" — not scoped to you, an org, or a repo. Add a qualifier (author:/org:/repo:/…) or enable \"run anyway\".")
                     continue
                 }
-                guard let results = try? await client.searchIssues(query: text) else { continue }
+                let results: [IssueHit]
+                do {
+                    results = try await client.searchIssues(query: text)
+                } catch {
+                    warnings.append("\"\(text)\" failed — \(Self.searchFailureReason(error))")
+                    continue
+                }
                 anyIssueQuerySucceeded = true
                 if results.count >= 100 {
                     warnings.append("\"\(text)\" returned 100+ results (too broad) — refine it. Those results were not added.")
@@ -210,6 +225,19 @@ public final class AppModel {
         if anyIssueQuerySucceeded {
             await pruneStaleDiscoveredIssues(currentIssueIDs: Set(issueHitsByID.keys))
         }
+    }
+
+    /// `gh`'s own stderr is the useful part of a failed search (rate limit, auth, network),
+    /// so prefer it over the Swift error description.
+    private static func searchFailureReason(_ error: Error) -> String {
+        guard case GitHubError.commandFailed(_, let message) = error else {
+            return String(describing: error)
+        }
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let firstLine = trimmed.split(separator: "\n").first, !firstLine.isEmpty else {
+            return String(describing: error)
+        }
+        return String(firstLine.prefix(200))
     }
 
     private func pruneStaleDiscoveredReviews(currentHitIDs: Set<String>) async {
@@ -645,20 +673,33 @@ public final class AppModel {
         if transcriptWatchers[reviewID] != nil { return }
         let dir = ClaudeTranscriptPath.directoryURL(forWorktreePath: worktreePath)
         let watcher = TranscriptWatcher(transcriptDir: dir)
-        watcher.start { [weak self] date, snippet, turnCompleted in
+        watcher.start { [weak self] event in
             guard let self else { return }
-            self.handleTranscriptEvent(reviewID: reviewID, at: date, snippet: snippet, turnCompleted: turnCompleted)
+            self.handleTranscriptEvent(
+                reviewID: reviewID,
+                at: event.date,
+                snippet: event.snippet,
+                turnCompleted: event.turnCompleted,
+                workflowPending: event.workflowPending
+            )
         }
         transcriptWatchers[reviewID] = watcher
     }
 
-    func handleTranscriptEvent(reviewID: String, at date: Date, snippet: String?, turnCompleted: Bool = false) {
+    func handleTranscriptEvent(
+        reviewID: String,
+        at date: Date,
+        snippet: String?,
+        turnCompleted: Bool = false,
+        workflowPending: Bool = false
+    ) {
         guard claudeSessions[reviewID] != nil else { return }
         let isNewer = lastEventAt[reviewID].map { $0 < date } ?? true
         if isNewer {
             lastEventAt[reviewID] = date
             lastEventWasTurnCompletion[reviewID] = turnCompleted
         }
+        workflowPendingForSession[reviewID] = workflowPending
         if let snippet, !snippet.isEmpty {
             lastVerdictSnippet[reviewID] = snippet
         }
@@ -678,7 +719,8 @@ public final class AppModel {
             lastEventAt: lastEventAt[reviewID],
             lastVerdictSnippet: lastVerdictSnippet[reviewID],
             now: now,
-            lastEventWasTurnCompletion: lastEventWasTurnCompletion[reviewID] ?? false
+            lastEventWasTurnCompletion: lastEventWasTurnCompletion[reviewID] ?? false,
+            workflowPending: workflowPendingForSession[reviewID] ?? false
         )
         let oldStatus = claudeStatuses[reviewID]
         claudeStatuses[reviewID] = newStatus
@@ -724,6 +766,7 @@ public final class AppModel {
         lastEventAt.removeValue(forKey: id)
         lastVerdictSnippet.removeValue(forKey: id)
         lastEventWasTurnCompletion.removeValue(forKey: id)
+        workflowPendingForSession.removeValue(forKey: id)
         notifiedAwaitingForSession.remove(id)
     }
 
@@ -744,6 +787,7 @@ public final class AppModel {
         lastEventAt.removeAll()
         lastVerdictSnippet.removeAll()
         lastEventWasTurnCompletion.removeAll()
+        workflowPendingForSession.removeAll()
         notifiedAwaitingForSession.removeAll()
     }
 
@@ -892,11 +936,14 @@ public final class AppModel {
               let r = review.prRef else { return }
         let ref = PRLocator(owner: r.owner, repo: r.repo, number: r.number)
 
-        if let state = try? await client.fetchReviewState(for: ref, login: login),
-           var current = reviews.first(where: { $0.id == id }),
-           current.approvedByMe != state.approvedByMe || current.prState != state.prState {
-            current.approvedByMe = state.approvedByMe
-            current.prState = state.prState
+        // One GraphQL call carries review state, CI/readiness and author activity. On
+        // failure the previous status stays put — a transient error must not blank the chips.
+        guard let snapshot = try? await client.fetchPRSnapshot(for: ref, login: login) else { return }
+
+        if var current = reviews.first(where: { $0.id == id }),
+           current.approvedByMe != snapshot.approvedByMe || current.prState != snapshot.prState {
+            current.approvedByMe = snapshot.approvedByMe
+            current.prState = snapshot.prState
             do {
                 try await store.upsertItem(current)
                 reviews = await store.allItems()
@@ -905,9 +952,7 @@ public final class AppModel {
             }
         }
 
-        if let status = try? await client.fetchPRStatus(for: ref) {
-            prStatuses[id] = status
-        }
+        prStatuses[id] = snapshot.status
     }
 
     func refreshReviewStates() async {
@@ -990,6 +1035,29 @@ public final class AppModel {
     public func setReviewDisabled(_ disabled: Bool, for id: String) async {
         guard var review = reviews.first(where: { $0.id == id }) else { return }
         review.disabled = disabled
+        do {
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    /// Whether the "Updated" chip shows for an item: the poll found author activity newer
+    /// than the user's last review, and the user has not dismissed that particular update.
+    public func hasUnseenAuthorUpdate(_ item: WorkItem) -> Bool {
+        AuthorUpdate.isUnseen(
+            updatedAt: prStatuses[item.id]?.authorUpdatedAt,
+            seenAt: item.authorUpdateSeenAt
+        )
+    }
+
+    /// Dismisses the current "Updated" chip. Records the update's own timestamp rather than
+    /// the wall clock, so anything the author does afterwards badges the item again.
+    public func markAuthorUpdateSeen(id: String) async {
+        guard var review = reviews.first(where: { $0.id == id }),
+              let updatedAt = prStatuses[id]?.authorUpdatedAt else { return }
+        review.authorUpdateSeenAt = updatedAt
         do {
             try await store.upsertItem(review)
             reviews = await store.allItems()

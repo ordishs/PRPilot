@@ -9,6 +9,7 @@ private actor RecordingRunner: CommandRunner {
     private var results: [CommandResult]
     private(set) var lastExecutable: String?
     private(set) var lastArguments: [String]?
+    private(set) var invocationCount = 0
 
     init(result: CommandResult) {
         self.result = result
@@ -23,6 +24,7 @@ private actor RecordingRunner: CommandRunner {
     func run(executable: String, arguments: [String]) async throws -> CommandResult {
         lastExecutable = executable
         lastArguments = arguments
+        invocationCount += 1
         if !results.isEmpty {
             return results.removeFirst()
         }
@@ -369,90 +371,190 @@ private let sampleSearchJSONWithMalformedRepo = """
     #expect(args == ["api", "user", "--jq", ".login"])
 }
 
-@Test func fetchReviewStateApprovedWhenMyLatestDecisiveReviewIsApproved() async throws {
-    let json = """
-    {"state":"OPEN","isDraft":false,"reviews":[
-      {"author":{"login":"someoneelse"},"state":"CHANGES_REQUESTED"},
-      {"author":{"login":"ordishs"},"state":"COMMENTED"},
-      {"author":{"login":"ordishs"},"state":"APPROVED"},
-      {"author":{"login":"ordishs"},"state":"COMMENTED"}
-    ]}
+private func snapshotJSON(
+    state: String = "OPEN",
+    isDraft: Bool = false,
+    mergeStateStatus: String = "CLEAN",
+    reviewDecision: String? = nil,
+    author: String = "icellan",
+    committedDate: String? = nil,
+    rollupJSON: String = "null",
+    reviewsJSON: String = "[]",
+    threadsJSON: String = "[]",
+    timelineJSON: String = "[]"
+) -> String {
+    let decision = reviewDecision.map { "\"\($0)\"" } ?? "null"
+    let committed = committedDate.map { "\"\($0)\"" } ?? "null"
+    return """
+    {"data":{"repository":{"pullRequest":{
+      "state":"\(state)","isDraft":\(isDraft),"reviewDecision":\(decision),
+      "mergeStateStatus":"\(mergeStateStatus)","author":{"login":"\(author)"},
+      "commits":{"nodes":[{"commit":{"committedDate":\(committed),"statusCheckRollup":\(rollupJSON)}}]},
+      "reviews":{"nodes":\(reviewsJSON)},
+      "reviewThreads":{"nodes":\(threadsJSON)},
+      "timelineItems":{"nodes":\(timelineJSON)}
+    }}}}
     """
-    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
-    let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 944)
-    let state = try await client.fetchReviewState(for: ref, login: "ordishs")
-    #expect(state.approvedByMe == true)
-    #expect(state.prState == .open)
 }
 
-@Test func fetchReviewStateNotApprovedWhenMyApprovalWasDismissed() async throws {
-    let json = """
-    {"state":"OPEN","isDraft":false,"reviews":[
-      {"author":{"login":"ordishs"},"state":"APPROVED"},
-      {"author":{"login":"ordishs"},"state":"DISMISSED"}
-    ]}
-    """
+private func snapshotClient(_ json: String) -> (GitHubClient, RecordingRunner) {
     let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
-    let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 944)
-    let state = try await client.fetchReviewState(for: ref, login: "ordishs")
-    #expect(state.approvedByMe == false)
+    return (GitHubClient(runner: runner, ghPath: "/usr/bin/gh"), runner)
 }
 
-@Test func fetchReviewStateNotApprovedWhenOnlySomeoneElseApproved() async throws {
-    let json = """
-    {"state":"MERGED","isDraft":false,"reviews":[
-      {"author":{"login":"someoneelse"},"state":"APPROVED"}
-    ]}
+private let snapshotRef = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 944)
+
+@Test func snapshotApprovedWhenMyLatestDecisiveReviewIsApproved() async throws {
+    let reviews = """
+    [{"author":{"login":"someoneelse"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-01T09:00:00Z"},
+     {"author":{"login":"ordishs"},"state":"COMMENTED","submittedAt":"2026-08-01T10:00:00Z"},
+     {"author":{"login":"ordishs"},"state":"APPROVED","submittedAt":"2026-08-01T11:00:00Z"},
+     {"author":{"login":"ordishs"},"state":"COMMENTED","submittedAt":"2026-08-01T12:00:00Z"}]
     """
-    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
-    let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 944)
-    let state = try await client.fetchReviewState(for: ref, login: "ordishs")
-    #expect(state.approvedByMe == false)
-    #expect(state.prState == .merged)
+    let (client, _) = snapshotClient(snapshotJSON(reviewsJSON: reviews))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.approvedByMe == true)
+    #expect(snapshot.prState == .open)
 }
 
-@Test func fetchReviewStateThrowsOnNonZeroExit() async {
+@Test func snapshotNotApprovedWhenMyApprovalWasDismissed() async throws {
+    let reviews = """
+    [{"author":{"login":"ordishs"},"state":"APPROVED","submittedAt":"2026-08-01T10:00:00Z"},
+     {"author":{"login":"ordishs"},"state":"DISMISSED","submittedAt":"2026-08-01T11:00:00Z"}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(reviewsJSON: reviews))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.approvedByMe == false)
+}
+
+@Test func snapshotNotApprovedWhenOnlySomeoneElseApproved() async throws {
+    let reviews = """
+    [{"author":{"login":"someoneelse"},"state":"APPROVED","submittedAt":"2026-08-01T10:00:00Z"}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(state: "MERGED", reviewsJSON: reviews))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.approvedByMe == false)
+    #expect(snapshot.prState == .merged)
+}
+
+@Test func snapshotThrowsOnNonZeroExit() async {
     let runner = RecordingRunner(result: CommandResult(exitCode: 1, standardOutput: "", standardError: "no pull requests found"))
     let client = GitHubClient(runner: runner, ghPath: "gh")
-    let ref = PRLocator(owner: "bsv-blockchain", repo: "teranode", number: 999)
     await #expect(throws: GitHubError.self) {
-        try await client.fetchReviewState(for: ref, login: "ordishs")
+        try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
     }
 }
 
-@Test func fetchPRStatusParsesChecksBehindAndDecision() async throws {
-    let json = """
-    {
-      "statusCheckRollup": [
-        {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},
-        {"__typename":"StatusContext","state":"PENDING"}
-      ],
-      "mergeStateStatus": "BEHIND",
-      "isDraft": false,
-      "reviewDecision": "CHANGES_REQUESTED"
-    }
+@Test func snapshotParsesChecksBehindAndDecision() async throws {
+    let rollup = """
+    {"state":"PENDING","contexts":{"totalCount":2,"nodes":[
+      {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},
+      {"__typename":"StatusContext","state":"PENDING"}]}}
     """
-    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
-    let client = GitHubClient(runner: runner, ghPath: "/usr/bin/gh")
-    let status = try await client.fetchPRStatus(for: PRLocator(owner: "o", repo: "r", number: 1))
-    #expect(status.ci == .pending)
-    #expect(status.isBehind == true)
-    #expect(status.readiness == .changesRequested)
+    let (client, _) = snapshotClient(snapshotJSON(
+        mergeStateStatus: "BEHIND",
+        reviewDecision: "CHANGES_REQUESTED",
+        rollupJSON: rollup
+    ))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.ci == .pending)
+    #expect(snapshot.status.isBehind == true)
+    #expect(snapshot.status.readiness == .changesRequested)
 }
 
-@Test func fetchPRStatusHandlesNullRollupAndCleanMerge() async throws {
-    let json = """
-    { "statusCheckRollup": null, "mergeStateStatus": "CLEAN", "isDraft": true, "reviewDecision": null }
+@Test func snapshotHandlesNullRollupAndCleanMerge() async throws {
+    let (client, _) = snapshotClient(snapshotJSON(isDraft: true))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.ci == .none)
+    #expect(snapshot.status.isBehind == false)
+    #expect(snapshot.status.readiness == .draft)
+}
+
+@Test func snapshotFallsBackToRollupStateWhenContextsArePaginated() async throws {
+    // 150 checks, only 100 fetched: the unfetched remainder could hide the failure that
+    // the rollup itself is reporting, so the rollup state wins.
+    let rollup = """
+    {"state":"FAILURE","contexts":{"totalCount":150,"nodes":[
+      {"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}}
     """
-    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
-    let client = GitHubClient(runner: runner, ghPath: "/usr/bin/gh")
-    let status = try await client.fetchPRStatus(for: PRLocator(owner: "o", repo: "r", number: 1))
-    #expect(status.ci == .none)
-    #expect(status.isBehind == false)
-    #expect(status.readiness == .draft)
+    let (client, _) = snapshotClient(snapshotJSON(rollupJSON: rollup))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.ci == .failing)
+}
+
+@Test func snapshotFlagsAuthorUpdateFromPushAndReRequest() async throws {
+    // The real shape of teranode#1466: you requested changes at 09:21, freemans13 pushed
+    // at 11:06 and re-requested your review at 12:00.
+    let reviews = """
+    [{"author":{"login":"ordishs"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-06T09:21:56Z"}]
+    """
+    let timeline = """
+    [{"createdAt":"2026-08-06T12:00:29Z","requestedReviewer":{"login":"ordishs"}}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(
+        author: "freemans13",
+        committedDate: "2026-08-06T11:06:48Z",
+        reviewsJSON: reviews,
+        timelineJSON: timeline
+    ))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.authorUpdatedAt == ISO8601DateFormatter().date(from: "2026-08-06T12:00:29Z"))
+}
+
+@Test func snapshotFlagsAuthorUpdateFromThreadReply() async throws {
+    let reviews = """
+    [{"author":{"login":"ordishs"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-06T09:00:00Z"}]
+    """
+    let threads = """
+    [{"isResolved":true,"resolvedBy":{"login":"icellan"},"comments":{"nodes":[
+      {"author":{"login":"ordishs"},"createdAt":"2026-08-06T09:00:00Z"},
+      {"author":{"login":"icellan"},"createdAt":"2026-08-06T10:30:00Z"}]}}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(reviewsJSON: reviews, threadsJSON: threads))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.authorUpdatedAt == ISO8601DateFormatter().date(from: "2026-08-06T10:30:00Z"))
+}
+
+@Test func snapshotHasNoAuthorUpdateWhenYourReviewIsNewest() async throws {
+    let reviews = """
+    [{"author":{"login":"ordishs"},"state":"APPROVED","submittedAt":"2026-08-06T13:00:00Z"}]
+    """
+    let timeline = """
+    [{"createdAt":"2026-08-06T12:00:29Z","requestedReviewer":{"login":"ordishs"}}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(
+        committedDate: "2026-08-06T11:06:48Z",
+        reviewsJSON: reviews,
+        timelineJSON: timeline
+    ))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.authorUpdatedAt == nil)
+}
+
+@Test func snapshotToleratesTeamReviewRequestsWithNoUserLogin() async throws {
+    // requestedReviewer is a Team: the `... on User` fragment does not match, and GitHub
+    // returns an empty object rather than null. Decoding must survive it.
+    let reviews = """
+    [{"author":{"login":"ordishs"},"state":"COMMENTED","submittedAt":"2026-08-06T09:00:00Z"}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(
+        reviewsJSON: reviews,
+        timelineJSON: """
+        [{"createdAt":"2026-08-06T12:00:29Z","requestedReviewer":{}}]
+        """
+    ))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.authorUpdatedAt == nil)
+}
+
+@Test func snapshotIssuesOneGraphQLCall() async throws {
+    let (client, runner) = snapshotClient(snapshotJSON())
+    _ = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    let args = await runner.lastArguments
+    #expect(await runner.invocationCount == 1)
+    #expect(args?.prefix(2) == ["api", "graphql"])
+    #expect(args?.contains("owner=bsv-blockchain") == true)
+    #expect(args?.contains("number=944") == true)
 }
 
 private let sampleIssueSearchJSON = """

@@ -25,11 +25,15 @@ public struct PRStatus: Codable, Sendable, Equatable {
     public var ci: CIStatus
     public var isBehind: Bool
     public var readiness: ReviewReadiness
+    /// Newest thing the PR author did since your last review — nil when they have done
+    /// nothing since, or when you have never reviewed the PR. Drives the "Updated" chip.
+    public var authorUpdatedAt: Date?
 
-    public init(ci: CIStatus, isBehind: Bool, readiness: ReviewReadiness) {
+    public init(ci: CIStatus, isBehind: Bool, readiness: ReviewReadiness, authorUpdatedAt: Date? = nil) {
         self.ci = ci
         self.isBehind = isBehind
         self.readiness = readiness
+        self.authorUpdatedAt = authorUpdatedAt
     }
 
     public static func aggregateCI(_ checks: [CICheck]) -> CIStatus {

@@ -75,6 +75,35 @@ private let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
     #expect(s == .idle(since: t, lastVerdictSnippet: "x"))
 }
 
+@Test func pendingWorkflowKeepsSessionWorkingWhileTranscriptIsSilent() {
+    // A background code-review workflow emits nothing to the transcript for many
+    // minutes. The session is working, not idle.
+    let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+    let t = Date(timeIntervalSince1970: 1000)
+    let s = reader.status(processState: .running, lastEventAt: t, lastVerdictSnippet: "workflow running",
+                          now: t.addingTimeInterval(900), lastEventWasTurnCompletion: false,
+                          workflowPending: true)
+    #expect(s == .working)
+}
+
+@Test func pendingWorkflowNeverReportsAwaitingInput() {
+    // Even if a turn completion slips through, a pending workflow means Claude is not
+    // waiting on the user — so the "review ready" notification must not be armed.
+    let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+    let t = Date(timeIntervalSince1970: 1000)
+    let s = reader.status(processState: .running, lastEventAt: t, lastVerdictSnippet: "done",
+                          now: t.addingTimeInterval(600), lastEventWasTurnCompletion: true,
+                          workflowPending: true)
+    #expect(s == .working)
+}
+
+@Test func pendingWorkflowDoesNotMaskProcessExit() {
+    let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+    let s = reader.status(processState: .exited(code: 0), lastEventAt: Date(), lastVerdictSnippet: nil,
+                         now: Date(), lastEventWasTurnCompletion: false, workflowPending: true)
+    #expect(s == .ready(exitCode: 0))
+}
+
 @Test func runningWithNoEventIsStartingEvenIfCompletionFlagSet() {
     let reader = ClaudeStatusReader()
     let s = reader.status(processState: .running, lastEventAt: nil, lastVerdictSnippet: nil,
