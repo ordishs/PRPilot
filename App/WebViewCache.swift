@@ -9,25 +9,49 @@ import PRPilotModels
 final class LoadTracker: NSObject, WKNavigationDelegate {
     private(set) var didFinishLoad = false
     var onProcessTerminated: (() -> Void)?
+    /// Reports every transition so the cache can publish it to the progress bar.
+    var onLoadState: ((WebLoadState) -> Void)?
+    /// Retains the KVO registration on `estimatedProgress` for this web view's lifetime.
+    var progressObservation: NSKeyValueObservation?
+    private var loadState = WebLoadState()
+
+    private func publish() {
+        onLoadState?(loadState)
+    }
+
+    func progressed(to value: Double) {
+        loadState.progressed(to: value)
+        publish()
+    }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         didFinishLoad = false
+        loadState.started()
+        publish()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         didFinishLoad = true
+        loadState.finished()
+        publish()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         didFinishLoad = false
+        loadState.failed()
+        publish()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         didFinishLoad = false
+        loadState.failed()
+        publish()
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         didFinishLoad = false
+        loadState.failed()
+        publish()
         onProcessTerminated?()
     }
 }
@@ -37,6 +61,8 @@ final class LoadTracker: NSObject, WKNavigationDelegate {
 final class WebViewCache {
     private var webViews: [String: WKWebView] = [:]
     private var trackers: [String: LoadTracker] = [:]
+    /// Per-item load progress, driving the GitHub pane's progress bar.
+    private(set) var loadStates: [String: WebLoadState] = [:]
     private let configuration: WKWebViewConfiguration
 
     init() {
@@ -85,6 +111,17 @@ final class WebViewCache {
             guard let webView, webView.window != nil, let url = review.url else { return }
             webView.load(URLRequest(url: url))
         }
+        tracker.onLoadState = { [weak self] state in
+            self?.loadStates[review.id] = state
+        }
+        // estimatedProgress is the only source of intermediate progress; the delegate
+        // callbacks alone would give a bar that jumps straight from 0 to done. KVO for it
+        // fires on the main thread, since WKWebView is main-thread-only.
+        tracker.progressObservation = webView.observe(\.estimatedProgress, options: [.new]) { [weak tracker] webView, _ in
+            MainActor.assumeIsolated {
+                tracker?.progressed(to: webView.estimatedProgress)
+            }
+        }
         webView.navigationDelegate = tracker
         webViews[review.id] = webView
         trackers[review.id] = tracker
@@ -124,8 +161,13 @@ final class WebViewCache {
         webViews[review.id]?.reload()
     }
 
+    func loadState(for review: WorkItem) -> WebLoadState {
+        loadStates[review.id] ?? WebLoadState()
+    }
+
     func remove(reviewID: String) {
-        trackers.removeValue(forKey: reviewID)
+        trackers.removeValue(forKey: reviewID)?.progressObservation?.invalidate()
+        loadStates.removeValue(forKey: reviewID)
         if let webView = webViews.removeValue(forKey: reviewID) {
             webView.stopLoading()
             webView.removeFromSuperview()
@@ -133,7 +175,9 @@ final class WebViewCache {
     }
 
     func removeAll() {
+        for tracker in trackers.values { tracker.progressObservation?.invalidate() }
         trackers.removeAll()
+        loadStates.removeAll()
         for webView in webViews.values {
             webView.stopLoading()
             webView.removeFromSuperview()

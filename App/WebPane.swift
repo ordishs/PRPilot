@@ -35,6 +35,8 @@ struct WebPane: View {
             .padding(.vertical, 4)
             .background(Color.secondary.opacity(0.05))
 
+            LoadProgressBar(state: cache.loadState(for: review))
+
             Divider()
 
             WebViewHost(cache: cache, review: review)
@@ -46,6 +48,24 @@ struct WebPane: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(url.absoluteString, forType: .string)
         }
+    }
+}
+
+/// Safari-style loading strip. The band is always laid out — only its fill and opacity
+/// change — so starting or finishing a load never reflows the pane.
+private struct LoadProgressBar: View {
+    let state: WebLoadState
+
+    var body: some View {
+        GeometryReader { geometry in
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(width: max(0, geometry.size.width * state.progress))
+                .animation(.linear(duration: 0.15), value: state.progress)
+        }
+        .frame(height: 2)
+        .opacity(state.isLoading ? 1 : 0)
+        .animation(.easeOut(duration: 0.25), value: state.isLoading)
     }
 }
 
