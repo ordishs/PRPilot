@@ -243,6 +243,8 @@ private struct ClaudeSettingsTab: View {
     @State private var claudePath: String = ""
     @State private var argsText: String = ""
     @State private var notificationsEnabled: Bool = true
+    @State private var reviewPrompt: String = ""
+    @State private var issuePrompt: String = ""
 
     var body: some View {
         Form {
@@ -273,7 +275,23 @@ private struct ClaudeSettingsTab: View {
                     .font(.system(.body, design: .monospaced))
                     .labelsHidden()
                     .multilineTextAlignment(.leading)
-                Text("Appended to the claude command, exactly as typed. The app then appends the /review command for the selected PR (or --resume to continue a session).")
+                Text("Appended to the claude command, exactly as typed. The app then appends the launch prompt below (or --resume to continue a session).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Launch prompts") {
+                promptEditor(
+                    title: "PR review",
+                    text: $reviewPrompt,
+                    defaultValue: Settings.defaultReviewPromptTemplate
+                )
+                promptEditor(
+                    title: "Issue work",
+                    text: $issuePrompt,
+                    defaultValue: Settings.defaultIssuePromptTemplate
+                )
+                Text("The first prompt sent when a session starts. Placeholders: {url}, {number}, {owner}, {repo}, {title}. Add your own instructions on the lines below the command — they are passed through to the review. Leave a prompt empty to start the session without one.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -288,11 +306,37 @@ private struct ClaudeSettingsTab: View {
             claudePath = model.settings.claudePath ?? ""
             argsText = model.settings.claudeLaunchArgs
             notificationsEnabled = model.settings.notificationsEnabled
+            reviewPrompt = model.settings.reviewPromptTemplate
+            issuePrompt = model.settings.issuePromptTemplate
         }
         .onChange(of: envText) { _, _ in commit() }
         .onChange(of: claudePath) { _, _ in commit() }
         .onChange(of: argsText) { _, _ in commit() }
         .onChange(of: notificationsEnabled) { _, _ in commit() }
+        .onChange(of: reviewPrompt) { _, _ in commit() }
+        .onChange(of: issuePrompt) { _, _ in commit() }
+    }
+
+    @ViewBuilder
+    private func promptEditor(title: String, text: Binding<String>, defaultValue: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title).font(.callout.weight(.medium))
+                Spacer()
+                Button("Reset") { text.wrappedValue = defaultValue }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .disabled(text.wrappedValue == defaultValue)
+            }
+            TextEditor(text: text)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 68)
+                .padding(4)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.3))
+                )
+        }
     }
 
     private func pickClaude() {
@@ -308,6 +352,8 @@ private struct ClaudeSettingsTab: View {
 
     private func commit() {
         var updated = model.settings
+        updated.reviewPromptTemplate = reviewPrompt
+        updated.issuePromptTemplate = issuePrompt
         updated.claudeEnv = envText.trimmingCharacters(in: .whitespacesAndNewlines)
         updated.claudePath = claudePath.isEmpty ? nil : claudePath
         updated.claudeLaunchArgs = argsText.trimmingCharacters(in: .whitespacesAndNewlines)

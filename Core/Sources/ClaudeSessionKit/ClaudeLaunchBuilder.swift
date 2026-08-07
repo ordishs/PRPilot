@@ -36,10 +36,15 @@ public enum ClaudeLaunchBuilder {
         } else {
             args.append("--session-id")
             args.append(sessionID)
-            if review.prRef != nil, let url = review.url {
-                args.append("/review \(url.absoluteString)")
-            } else if let issueNumber = review.issueNumber {
-                args.append("/start-issue \(issueNumber)")
+            // The prompt comes from a user-owned template, so upstream changing what
+            // /review does no longer requires an app change. A blank template deliberately
+            // launches the session with no prompt at all.
+            let template = review.prRef != nil
+                ? settings.reviewPromptTemplate
+                : (review.issueNumber != nil ? settings.issuePromptTemplate : "")
+            let prompt = LaunchPrompt.render(template, for: review, url: review.url)
+            if !prompt.isEmpty {
+                args.append(prompt)
             }
         }
         return ClaudeLaunchSpec(

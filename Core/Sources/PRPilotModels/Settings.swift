@@ -23,6 +23,11 @@ public struct Settings: Codable, Sendable, Equatable {
     public var reviewsCollapsed: Bool
     public var issuesCollapsed: Bool
     public var appearance: Appearance
+    /// First prompt of a review session. The user owns it because what `/review` does is
+    /// decided upstream and has changed under us before.
+    public var reviewPromptTemplate: String
+    /// First prompt of an issue session.
+    public var issuePromptTemplate: String
 
     private enum LegacyKeys: String, CodingKey {
         case discoveryQueries
@@ -51,7 +56,9 @@ public struct Settings: Codable, Sendable, Equatable {
         myWorkCollapsed: Bool = false,
         reviewsCollapsed: Bool = false,
         issuesCollapsed: Bool = false,
-        appearance: Appearance = .system
+        appearance: Appearance = .system,
+        reviewPromptTemplate: String = Settings.defaultReviewPromptTemplate,
+        issuePromptTemplate: String = Settings.defaultIssuePromptTemplate
     ) {
         self.managedRoot = managedRoot
         self.reviewRequestQueries = reviewRequestQueries
@@ -75,6 +82,8 @@ public struct Settings: Codable, Sendable, Equatable {
         self.reviewsCollapsed = reviewsCollapsed
         self.issuesCollapsed = issuesCollapsed
         self.appearance = appearance
+        self.reviewPromptTemplate = reviewPromptTemplate
+        self.issuePromptTemplate = issuePromptTemplate
     }
 
     public init(from decoder: Decoder) throws {
@@ -114,6 +123,10 @@ public struct Settings: Codable, Sendable, Equatable {
         issueQueries = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .issueQueries) ?? Settings.defaultIssueQueries
         issuesEnabled = try c.decodeIfPresent(Bool.self, forKey: .issuesEnabled) ?? true
         appearance = try c.decodeIfPresent(Appearance.self, forKey: .appearance) ?? .system
+        reviewPromptTemplate = try c.decodeIfPresent(String.self, forKey: .reviewPromptTemplate)
+            ?? Settings.defaultReviewPromptTemplate
+        issuePromptTemplate = try c.decodeIfPresent(String.self, forKey: .issuePromptTemplate)
+            ?? Settings.defaultIssuePromptTemplate
 
         if let rrq = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .reviewRequestQueries) {
             reviewRequestQueries = rrq
@@ -129,6 +142,9 @@ public struct Settings: Codable, Sendable, Equatable {
             myPRsEnabled = true
         }
     }
+
+    public static let defaultReviewPromptTemplate = "/review {url}"
+    public static let defaultIssuePromptTemplate = "/start-issue {number}"
 
     public static let defaultReviewRequestQueries: [DiscoveryQuery] = [
         DiscoveryQuery(text: "review-requested:@me is:open"),

@@ -154,3 +154,91 @@ private func sampleIssueItem() -> WorkItem {
     #expect(spec.arguments.contains("--session-id"))
     #expect(spec.arguments.contains("sid"))
 }
+
+private func issueItem() -> WorkItem {
+    WorkItem(
+        title: "limit reorg depth",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        headBranch: nil,
+        issueRef: IssueRef(
+            owner: "bsv-blockchain", repo: "teranode", number: 4577,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/issues/4577")!,
+            authorLogin: "icellan"
+        ),
+        prState: .open,
+        origin: .discovered,
+        addedAt: Date()
+    )
+}
+
+private func settings(review: String? = nil, issue: String? = nil) -> Settings {
+    var s = Settings.default
+    if let review { s.reviewPromptTemplate = review }
+    if let issue { s.issuePromptTemplate = issue }
+    return s
+}
+
+@Test func launchBuilderUsesCustomReviewTemplate() {
+    let template = """
+    /review {url}
+
+    End with a single line: VERDICT: APPROVE | REQUEST CHANGES | COMMENT.
+    """
+    let spec = ClaudeLaunchBuilder.build(
+        settings: settings(review: template), review: sampleReview(), worktreePath: "/tmp/wt",
+        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
+    )
+    #expect(spec.arguments.contains("""
+    /review https://github.com/bsv-blockchain/teranode/pull/944
+
+    End with a single line: VERDICT: APPROVE | REQUEST CHANGES | COMMENT.
+    """))
+}
+
+@Test func launchBuilderUsesDefaultIssueTemplate() {
+    let spec = ClaudeLaunchBuilder.build(
+        settings: .default, review: issueItem(), worktreePath: "/tmp/wt",
+        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
+    )
+    #expect(spec.arguments.contains("/start-issue 4577"))
+}
+
+@Test func launchBuilderUsesCustomIssueTemplate() {
+    let spec = ClaudeLaunchBuilder.build(
+        settings: settings(issue: "/start-issue {number} in {owner}/{repo}"),
+        review: issueItem(), worktreePath: "/tmp/wt",
+        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
+    )
+    #expect(spec.arguments.contains("/start-issue 4577 in bsv-blockchain/teranode"))
+}
+
+@Test func launchBuilderAppendsNoPromptWhenTemplateIsBlank() {
+    // A deliberately empty template opens the session with no prompt at all.
+    let spec = ClaudeLaunchBuilder.build(
+        settings: settings(review: "   "), review: sampleReview(), worktreePath: "/tmp/wt",
+        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
+    )
+    #expect(!spec.arguments.contains { $0.hasPrefix("/") })
+    #expect(spec.arguments.contains("--session-id"))
+}
+
+@Test func launchBuilderIgnoresTemplatesOnResume() {
+    let spec = ClaudeLaunchBuilder.build(
+        settings: settings(review: "/review {url} and be brief"), review: sampleReview(),
+        worktreePath: "/tmp/wt", resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: true
+    )
+    #expect(!spec.arguments.contains { $0.hasPrefix("/review") })
+}
+
+@Test func settingsWithoutPromptKeysDecodeToDefaults() {
+    // An existing store predates these keys: the user keeps today's behaviour.
+    let json = """
+    {"managedRoot":"/tmp","reviewRequestQueries":[],"myPRQueries":[],"pollIntervalSeconds":60,
+     "claudeLaunchArgs":"","claudeEnv":"","autoLoad":true,"notificationsEnabled":true,
+     "diffMode":"unified","diffIgnoreWhitespace":false}
+    """
+    let decoded = try! JSONDecoder().decode(Settings.self, from: Data(json.utf8))
+    #expect(decoded.reviewPromptTemplate == "/review {url}")
+    #expect(decoded.issuePromptTemplate == "/start-issue {number}")
+}
