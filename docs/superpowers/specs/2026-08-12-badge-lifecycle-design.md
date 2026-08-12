@@ -20,20 +20,36 @@ if claudeReviewedAt != nil { return .reviewed }
 - REVIEWED keys on `claudeReviewedAt`. That field records Claude completing a turn, not
   the user posting anything. It fires for the state this design calls WAITING.
 
-## Intended lifecycle
+## Intended behaviour
 
-For a pull request authored by somebody else:
+Two independent signals, not one chain. A row shows at most two chips.
+
+**The lifecycle badge** says how far the user's own review has got. One value, mutually
+exclusive:
 
 ```
-NEW  ──Claude review completes──▶  WAITING  ──I submit a review──▶  REVIEWED
-                                      │                                │
-                                      └──I submit an approval──────────┴──▶  APPROVED
+NEW  ──I submit a comment or a change request──▶  REVIEWED  ──I approve──▶  APPROVED
 ```
 
-- NEW: no Claude review has ever completed.
-- WAITING: Claude output exists that the user has not answered.
+- NEW: the user has submitted no review.
 - REVIEWED: the user submitted a review of COMMENTED or CHANGES_REQUESTED.
-- APPROVED: the user submitted an approval.
+- APPROVED: the user submitted an approval. Sticky — it stays whatever happens next.
+
+**The WAITING chip** says there is Claude output the user has not answered. It appears
+and disappears independently of the lifecycle badge.
+
+Together:
+
+```
+Never reviewed, Claude not run        #1421  [New]
+Claude finished, no response yet      #1421  [New]       [Waiting]
+I commented, nothing new since        #1421  [Reviewed]
+I approved, nothing new since         #1421  [Approved]
+I approved, then Claude re-reviewed   #1421  [Approved]  [Waiting]
+```
+
+Separating the two is what lets APPROVED be sticky. The earlier single-chain design had to
+choose between "did I approve" and "is there output I have not read". It no longer does.
 
 ## Scope
 
@@ -115,7 +131,8 @@ working.
 
 ### 2. Persistence
 
-Two new optional fields on `WorkItem`, beside `approvedByMe`:
+Two new optional fields on `WorkItem`, beside `approvedByMe`. Section 4 adds a third,
+`claudeLastCompletedAt`, which follows the same decoding rule:
 
 - `myReviewState: MyReviewState?`
 - `myLastReviewAt: Date?`
@@ -127,9 +144,10 @@ launch, before the first poll, and while offline.
 `AppModel.refreshReviewState` writes them through the existing change guard, which only
 calls `store.upsertItem` when a value actually differs.
 
-### 3. The status resolver
+### 3. The lifecycle resolver
 
-`SidebarStatus` gains one case, `.waiting`.
+`SidebarStatus` keeps its existing cases. WAITING is not one of them, because it is not
+part of the chain.
 
 The derivation moves out of the `WorkItem` extension into a free function, matching the
 shape of `resolveIssueStatus`:
@@ -138,9 +156,7 @@ shape of `resolveIssueStatus`:
 public func resolveSidebarStatus(
     category: WorkItemCategory,
     prState: PRState?,
-    claudeReviewedAt: Date?,
-    myReviewState: MyReviewState?,
-    myLastReviewAt: Date?
+    myReviewState: MyReviewState?
 ) -> SidebarStatus
 ```
 
@@ -149,70 +165,127 @@ Precedence:
 1. `prState == .merged` → `.merged`
 2. `prState == .closed` → `.closed`
 3. `category != .reviewRequest` → `.draft` when `prState == .draft`, else `.open`
-4. `claudeReviewedAt == nil` and `myReviewState` is nil or `.none` → `.new`
-5. Claude output is unanswered → `.waiting`
-6. `myReviewState == .approved` → `.approved`
-7. `myReviewState` is `.commented` or `.changesRequested` → `.reviewed`
-8. `prState == .draft` → `.draft`
-9. otherwise → `.open`
+4. `myReviewState == .approved` → `.approved`
+5. `myReviewState` is `.commented` or `.changesRequested` → `.reviewed`
+6. `prState == .draft` → `.draft`
+7. otherwise → `.new`
 
-"Claude output is unanswered" at step 5 means:
+Note what leaves and what arrives:
 
-- `claudeReviewedAt != nil`, and
-- `myLastReviewAt == nil`, or `claudeReviewedAt > myLastReviewAt`
+- `lastOpenedAt` and `claudeReviewedAt` are gone from this function. Neither describes
+  what the user posted, and both caused the reported bug.
+- `.new` moves from near the top of the chain to the fallback. For a review request it now
+  means "I have submitted no review", so it persists until the user acts, with no timeout.
+  That is the requested behaviour: a PR stuck on NEW truly has had no review.
+- `.open` becomes unreachable for `.reviewRequest`, since `.new` is the fallback. It stays
+  reachable through step 3 for the user's own PRs and tasks.
 
-Step 4 before step 5 gives the requested behaviour for a PR that Claude never ran on: it
-shows NEW indefinitely, with no timeout. A PR stuck on NEW is a true signal that nothing
-has looked at it.
+**Draft outranks New**, at step 6. An unreviewed draft review-request shows Draft rather
+than New, which preserves today's visibility of draft state. Being asked to review a draft
+is rare, so the lost NEW signal costs little. Reject this if you would rather see New.
 
-Step 4 also yields `.new` only when the user has posted nothing. A PR the user reviewed
-by hand, without ever running Claude, reaches step 6 or 7 and shows REVIEWED or APPROVED.
+### 4. A timestamp that actually tracks the latest Claude output
 
-**Approval is not sticky.** Step 5 sits above step 6, so a PR the user approved returns to
-WAITING when Claude later produces newer output. This is deliberate: the badge answers
-"is there Claude output I have not answered", and that question outranks "did I approve".
-
-### 4. Badge rendering
-
-`ContentView.statusBadge` gains one case:
-
-```swift
-case .waiting:
-    StateBadge(text: "Waiting", color: .yellow)
-```
-
-Yellow separates it from NEW's orange and REVIEWED's blue. The existing "Updated" chip,
-which flags author activity since the user's last review, is unaffected and complementary.
-
-## Known limitation
-
-`claudeReviewedAt` is stamped by `AppModel.handleTranscriptEvent` whenever Claude
-completes a turn:
+`claudeReviewedAt` cannot drive the WAITING chip. It is stamped exactly once. Both call
+sites guard on it being nil — `AppModel.swift:716` and `AppModel.swift:995`:
 
 ```swift
 if turnCompleted, reviews.first(where: { $0.id == reviewID })?.claudeReviewedAt == nil {
 ```
 
-It does not distinguish "the review finished" from "any turn finished". A conversation
-with the session therefore stamps it, and can push the badge to WAITING without a review
-having been produced.
+It therefore means "Claude has reviewed this at least once", and freezes at the first
+completion. Driving WAITING from it would show the chip once, hide it when the user
+submits a review, and never show it again. The approved-then-re-reviewed case could not
+work.
 
-This design accepts that. Separating the two needs a change to what the transcript
-watcher reports, which is a larger piece of work with its own risk. The badge is a
-better signal with this limitation than the current behaviour is without it.
+Changing `claudeReviewedAt` to re-stamp is the wrong fix. It also drives
+`resolveIssueStatus`, and `clearClaudeSession` at `AppModel.swift:939` clears it to force a
+fresh review. Both rely on its one-shot meaning.
+
+So `WorkItem` gains a third field:
+
+- `claudeLastCompletedAt: Date?` — updated on *every* completed turn, with no nil guard
+
+`handleTranscriptEvent` writes it beside the existing one-shot stamp. `clearClaudeSession`
+clears it alongside `claudeReviewedAt`, so a cleared session starts clean.
+
+### 5. The WAITING predicate
+
+A separate free function, because it answers a different question:
+
+```swift
+public func isAwaitingMyResponse(
+    category: WorkItemCategory,
+    prState: PRState?,
+    claudeLastCompletedAt: Date?,
+    myLastReviewAt: Date?
+) -> Bool
+```
+
+True when all hold:
+
+- `category == .reviewRequest`
+- `prState` is neither `.merged` nor `.closed`
+- `claudeLastCompletedAt != nil`
+- `myLastReviewAt == nil`, or `claudeLastCompletedAt > myLastReviewAt`
+
+Author activity does not feed this predicate. The existing "Updated" chip already reports
+that the author moved since the user's last review, and duplicating it here would put two
+chips on the same fact.
+
+### 6. Badge rendering
+
+`ContentView.statusBadge` renders the lifecycle badge as it does today, then appends the
+WAITING chip when the predicate holds:
+
+```swift
+if isAwaitingMyResponse(...) {
+    StateBadge(text: "Waiting", color: .yellow)
+}
+```
+
+Yellow separates it from NEW's orange, REVIEWED's blue and APPROVED's green. A row
+therefore shows at most two chips from this design, plus the existing "Updated" chip when
+that applies.
+
+## Known limitation
+
+`claudeLastCompletedAt` is stamped on any completed turn. The transcript watcher reports
+turn completion, and does not distinguish "the review finished" from "the session answered
+a question I asked it". A conversation with the session therefore raises the WAITING chip
+without a review having been produced.
+
+This design accepts that. Separating the two means changing what `TranscriptWatcher`
+reports, which is a larger piece of work with its own risk. The chip is a better signal
+with this limitation than the current badge is without it, and a stale WAITING clears as
+soon as the user submits a review.
 
 ## Testing
 
 Table-driven tests over `resolveSidebarStatus`, one row per rule:
 
-- Each of the eight outcomes is reachable.
-- The timestamp comparison in both directions: Claude newer than the user's review gives
-  WAITING; the user's review newer gives REVIEWED or APPROVED.
-- Approval followed by newer Claude output gives WAITING, pinning the not-sticky rule.
+- Each outcome is reachable.
+- A PR with no submitted review gives `.new`, whatever `lastOpenedAt` holds. This is the
+  regression test for the reported bug.
+- Approval stays `.approved` regardless of `claudeReviewedAt`, pinning the sticky rule.
 - A dismissed approval gives `.commented`, and leaves `approvedByMe` false.
-- `.myPR` and `.issue` categories are unaffected by the new inputs.
+- An unreviewed draft review-request gives `.draft`.
+- `.myPR`, `.issue` and `.task` categories are unaffected by `myReviewState`.
 - Merged and closed win over every other input.
-- A PR with no Claude review and no user review gives NEW, whatever `lastOpenedAt` holds.
+
+A test that `handleTranscriptEvent` updates `claudeLastCompletedAt` on a *second* completed
+turn while leaving `claudeReviewedAt` at its first value. This pins the distinction the
+whole WAITING chip depends on, and would have caught the one-shot stamp.
+
+Separate tests over `isAwaitingMyResponse`:
+
+- No completed Claude turn gives false, however long the item has existed.
+- A completed turn with no submitted user review gives true.
+- A completed turn newer than the user's review gives true; older gives false.
+- Equal timestamps give false, so the boundary is pinned.
+- True alongside `.approved`, proving the two signals are independent.
+- False for `.myPR`, `.issue` and `.task`.
+- False once the PR is merged or closed.
 
 A `GitHubClient` test decodes a fixture whose `reviews` array mixes authors and states,
 including `PENDING` and `DISMISSED`, and asserts the derived `myReviewState`,
