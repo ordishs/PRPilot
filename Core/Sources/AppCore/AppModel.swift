@@ -862,18 +862,35 @@ public final class AppModel {
 
     public func prewarmClaude() {
         Task(priority: .background) { [weak self] in
-            guard let self else { return }
-            _ = await self.claudeExecutable()
-            for review in self.reviews where !review.disabled {
-                if self.claudeSessions[review.id] != nil { continue }
-                guard let clonePath = self.registeredClonePath(for: review),
-                      FileManager.default.fileExists(atPath: clonePath) else { continue }
-                if self.settings.autoLoad {
-                    await self.ensureClaudeSession(for: review)
-                } else {
-                    let editable = review.category(myLogin: self.currentLogin) != .reviewRequest
-                    _ = try? await self.worktreeProvider.ensureWorktree(for: review, editable: editable, registeredClonePath: clonePath)
-                }
+            await self?.prewarmClaudeAndWait()
+        }
+    }
+
+    /// Warms the most recently opened items up to the session cap. Warming every item
+    /// starts one `claude` process per item, which exhausts memory on a large work list.
+    func prewarmClaudeAndWait() async {
+        _ = await claudeExecutable()
+        let ordered = reviews
+            .filter { !$0.disabled }
+            .sorted { left, right in
+                (left.lastOpenedAt ?? left.addedAt) > (right.lastOpenedAt ?? right.addedAt)
+            }
+        for review in ordered {
+            if claudeSessions[review.id] != nil { continue }
+            guard let clonePath = registeredClonePath(for: review),
+                  FileManager.default.fileExists(atPath: clonePath) else { continue }
+            if settings.autoLoad {
+                // The cap check sits inside this branch on purpose. The other branch only
+                // creates worktrees, which start no process, so the cap must not cut it short.
+                if claudeSessions.count >= settings.maxLiveClaudeSessions { continue }
+                await ensureClaudeSession(for: review)
+            } else {
+                let editable = review.category(myLogin: currentLogin) != .reviewRequest
+                _ = try? await worktreeProvider.ensureWorktree(
+                    for: review,
+                    editable: editable,
+                    registeredClonePath: clonePath
+                )
             }
         }
     }

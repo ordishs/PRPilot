@@ -2437,6 +2437,63 @@ private func cappedModel(store: ReviewStore) -> AppModel {
     )
 }
 
+/// `prewarmClaudeAndWait` skips any item whose registered clone is missing from disk, so a
+/// prewarm test must register a repo that really exists.
+private func registerExistingClone(in store: ReviewStore) async throws -> URL {
+    let clone = FileManager.default.temporaryDirectory
+        .appendingPathComponent("clone-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: clone, withIntermediateDirectories: true)
+    try await store.upsert(RegisteredRepo(
+        remoteIdentity: "github.com/bsv-blockchain/teranode",
+        localClonePath: clone.path,
+        defaultBase: "main"
+    ))
+    return clone
+}
+
+@Test @MainActor func prewarmStopsAtTheSessionCap() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    for index in 1...5 {
+        try await store.upsertItem(cappedReview("pw\(index)", number: index, openedMinutesAgo: index))
+    }
+    let clone = try await registerExistingClone(in: store)
+    defer { try? FileManager.default.removeItem(at: clone) }
+    var settings = await store.settings()
+    settings.autoLoad = true
+    settings.maxLiveClaudeSessions = 2
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    await model.prewarmClaudeAndWait()
+
+    #expect(model.claudeSessions.count == 2)
+}
+
+@Test @MainActor func prewarmStartsTheMostRecentlyOpenedItemsFirst() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    for index in 1...4 {
+        try await store.upsertItem(cappedReview("pw\(index)", number: index, openedMinutesAgo: index))
+    }
+    let clone = try await registerExistingClone(in: store)
+    defer { try? FileManager.default.removeItem(at: clone) }
+    var settings = await store.settings()
+    settings.autoLoad = true
+    settings.maxLiveClaudeSessions = 2
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    await model.prewarmClaudeAndWait()
+
+    #expect(model.claudeSessions["item-pw1"] != nil)
+    #expect(model.claudeSessions["item-pw2"] != nil)
+    #expect(model.claudeSessions["item-pw3"] == nil)
+    #expect(model.claudeSessions["item-pw4"] == nil)
+}
+
 @Test @MainActor func sessionBudgetEvictsTheOldestSessionBeyondTheCap() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let newest = cappedReview("newest", number: 1, openedMinutesAgo: 1)
