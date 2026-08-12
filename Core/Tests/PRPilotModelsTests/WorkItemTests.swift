@@ -250,3 +250,51 @@ private func sampleIssue() -> WorkItem {
     let decoded = try JSONDecoder().decode(PaneSelection.self, from: Data("\"github\"".utf8))
     #expect(decoded == .github)
 }
+
+@Test func workItemWithoutTheNewReviewFieldsDecodesWithNils() throws {
+    let json = """
+    {
+      "id": "abc",
+      "title": "t",
+      "repoKey": "github.com/o/r",
+      "baseBranch": "main",
+      "origin": "added",
+      "addedAt": "2026-08-01T10:00:00Z",
+      "disabled": false,
+      "viewedFiles": [],
+      "approvedByMe": false,
+      "autoReview": false
+    }
+    """
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+
+    let item = try decoder.decode(WorkItem.self, from: Data(json.utf8))
+
+    #expect(item.myReviewState == nil)
+    #expect(item.myLastReviewAt == nil)
+    #expect(item.claudeLastCompletedAt == nil)
+}
+
+@Test func workItemRoundTripsTheNewReviewFields() throws {
+    var item = WorkItem(
+        title: "t",
+        repoKey: "github.com/o/r",
+        baseBranch: "main",
+        origin: .added,
+        addedAt: Date(timeIntervalSince1970: 0)
+    )
+    item.myReviewState = .changesRequested
+    item.myLastReviewAt = Date(timeIntervalSince1970: 500)
+    item.claudeLastCompletedAt = Date(timeIntervalSince1970: 900)
+
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let decoded = try decoder.decode(WorkItem.self, from: encoder.encode(item))
+
+    #expect(decoded.myReviewState == .changesRequested)
+    #expect(decoded.myLastReviewAt == Date(timeIntervalSince1970: 500))
+    #expect(decoded.claudeLastCompletedAt == Date(timeIntervalSince1970: 900))
+}
