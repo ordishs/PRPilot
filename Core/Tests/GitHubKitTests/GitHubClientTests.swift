@@ -642,3 +642,85 @@ private let repoViewMainJSON = """
     #expect(item.origin == .discovered)
     #expect(item.category(myLogin: nil) == .issue)
 }
+
+private let mixedReviewsSnapshotJSON = """
+{"data":{"repository":{"pullRequest":{
+  "state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","mergeStateStatus":"CLEAN",
+  "author":{"login":"icellan"},
+  "commits":{"nodes":[{"commit":{"committedDate":"2026-08-01T10:00:00Z","statusCheckRollup":null}}]},
+  "reviews":{"nodes":[
+    {"author":{"login":"someone-else"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-02T10:00:00Z"},
+    {"author":{"login":"ordishs"},"state":"COMMENTED","submittedAt":"2026-08-03T10:00:00Z"},
+    {"author":{"login":"ordishs"},"state":"APPROVED","submittedAt":"2026-08-04T10:00:00Z"},
+    {"author":{"login":"ordishs"},"state":"PENDING","submittedAt":null}
+  ]},
+  "reviewThreads":{"nodes":[]},
+  "timelineItems":{"nodes":[]}
+}}}}
+"""
+
+@Test func snapshotReportsMyLatestReviewStateAndDate() async throws {
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: mixedReviewsSnapshotJSON, standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+
+    let snapshot = try await client.fetchPRSnapshot(
+        for: PRLocator(owner: "o", repo: "r", number: 1),
+        login: "ordishs"
+    )
+
+    #expect(snapshot.myReviewState == .approved)
+    #expect(snapshot.approvedByMe == true)
+    #expect(snapshot.myLastReviewAt == ISO8601DateFormatter().date(from: "2026-08-04T10:00:00Z"))
+}
+
+@Test func snapshotIgnoresOtherPeoplesReviews() async throws {
+    let json = """
+    {"data":{"repository":{"pullRequest":{
+      "state":"OPEN","isDraft":false,"reviewDecision":null,"mergeStateStatus":"CLEAN",
+      "author":{"login":"icellan"},
+      "commits":{"nodes":[]},
+      "reviews":{"nodes":[
+        {"author":{"login":"someone-else"},"state":"APPROVED","submittedAt":"2026-08-02T10:00:00Z"}
+      ]},
+      "reviewThreads":{"nodes":[]},
+      "timelineItems":{"nodes":[]}
+    }}}}
+    """
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+
+    let snapshot = try await client.fetchPRSnapshot(
+        for: PRLocator(owner: "o", repo: "r", number: 1),
+        login: "ordishs"
+    )
+
+    #expect(snapshot.myReviewState == .none)
+    #expect(snapshot.approvedByMe == false)
+    #expect(snapshot.myLastReviewAt == nil)
+}
+
+@Test func snapshotTreatsADismissedApprovalAsCommented() async throws {
+    let json = """
+    {"data":{"repository":{"pullRequest":{
+      "state":"OPEN","isDraft":false,"reviewDecision":null,"mergeStateStatus":"CLEAN",
+      "author":{"login":"icellan"},
+      "commits":{"nodes":[]},
+      "reviews":{"nodes":[
+        {"author":{"login":"ordishs"},"state":"APPROVED","submittedAt":"2026-08-02T10:00:00Z"},
+        {"author":{"login":"ordishs"},"state":"DISMISSED","submittedAt":"2026-08-03T10:00:00Z"}
+      ]},
+      "reviewThreads":{"nodes":[]},
+      "timelineItems":{"nodes":[]}
+    }}}}
+    """
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+
+    let snapshot = try await client.fetchPRSnapshot(
+        for: PRLocator(owner: "o", repo: "r", number: 1),
+        login: "ordishs"
+    )
+
+    #expect(snapshot.myReviewState == .commented)
+    #expect(snapshot.approvedByMe == false)
+}

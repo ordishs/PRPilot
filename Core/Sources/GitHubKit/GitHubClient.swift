@@ -114,10 +114,21 @@ public struct GitHubClient: Sendable {
     public struct PRSnapshot: Sendable, Equatable {
         public let prState: PRState
         public let approvedByMe: Bool
+        public let myReviewState: MyReviewState
+        public let myLastReviewAt: Date?
         public let status: PRStatus
-        public init(prState: PRState, approvedByMe: Bool, status: PRStatus) {
+
+        public init(
+            prState: PRState,
+            approvedByMe: Bool,
+            myReviewState: MyReviewState = .none,
+            myLastReviewAt: Date? = nil,
+            status: PRStatus
+        ) {
             self.prState = prState
             self.approvedByMe = approvedByMe
+            self.myReviewState = myReviewState
+            self.myLastReviewAt = myLastReviewAt
             self.status = status
         }
     }
@@ -151,8 +162,10 @@ public struct GitHubClient: Sendable {
         let headCommit = pr.commits.nodes.first?.commit
 
         let myReviews = pr.reviews.nodes.filter { $0.author?.login == login }
-        let decisive = myReviews.filter { ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].contains($0.state) }
-        let approvedByMe = decisive.last?.state == "APPROVED"
+        let resolved = MyReviewState.resolve(
+            from: myReviews.map { MyReviewSubmission(state: $0.state, submittedAt: $0.submittedAt) }
+        )
+        let approvedByMe = resolved.state == .approved
 
         let threads = pr.reviewThreads.nodes.map { node in
             ReviewThreadSnapshot(
@@ -178,6 +191,8 @@ public struct GitHubClient: Sendable {
         return PRSnapshot(
             prState: GitHubClient.mapState(state: pr.state, isDraft: pr.isDraft),
             approvedByMe: approvedByMe,
+            myReviewState: resolved.state,
+            myLastReviewAt: resolved.lastSubmittedAt,
             status: PRStatus(
                 ci: Self.aggregateCI(rollup: headCommit?.statusCheckRollup),
                 isBehind: pr.mergeStateStatus == "BEHIND",
