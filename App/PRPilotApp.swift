@@ -8,6 +8,7 @@ struct PRPilotApp: App {
     @State private var startupError: String?
     @State private var showingManage = false
     @State private var webViewCache = WebViewCache()
+    @State private var pruneCount: Int?
 
     var body: some Scene {
         WindowGroup {
@@ -16,6 +17,21 @@ struct PRPilotApp: App {
                     ContentView(model: model, webViewCache: webViewCache)
                         .sheet(isPresented: $showingManage) {
                             ManageLocalClonesView(model: model, isPresented: $showingManage)
+                        }
+                        .confirmationDialog(
+                            "Delete \(pruneCount ?? 0) orphaned worktree directories?",
+                            isPresented: Binding(
+                                get: { pruneCount != nil },
+                                set: { if !$0 { pruneCount = nil } }
+                            )
+                        ) {
+                            Button("Delete", role: .destructive) {
+                                Task { await model.pruneOrphanedWorktrees() }
+                                pruneCount = nil
+                            }
+                            Button("Cancel", role: .cancel) { pruneCount = nil }
+                        } message: {
+                            Text("This removes worktree checkouts no work item points at. Local commits in those directories are lost.")
                         }
                         .preferredColorScheme(model.settings.appearance.colorScheme)
                 } else if let startupError {
@@ -59,6 +75,12 @@ struct PRPilotApp: App {
                     showingManage = true
                 }
                 .keyboardShortcut("L", modifiers: [.command, .shift])
+                .disabled(model == nil)
+
+                Button("Prune Orphaned Worktrees…") {
+                    guard let model else { return }
+                    pruneCount = model.orphanedWorktreePaths().count
+                }
                 .disabled(model == nil)
             }
         }

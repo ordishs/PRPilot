@@ -1068,6 +1068,32 @@ public final class AppModel {
         Set(lastRefreshedAt.keys)
     }
 
+    public func orphanedWorktreePaths() -> [String] {
+        let root = WorktreeLayout.directory(managedRoot: settings.managedRoot)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: root) else { return [] }
+        let live = Set(reviews.compactMap(\.worktreePath))
+        return WorktreeOrphanScanner.orphanPaths(
+            directoryNames: names,
+            rootPath: root,
+            liveWorktreePaths: live
+        )
+    }
+
+    /// Deletes worktree directories no work item points at. Returns how many went.
+    @discardableResult
+    public func pruneOrphanedWorktrees() async -> Int {
+        var removed = 0
+        for path in orphanedWorktreePaths() {
+            do {
+                try FileManager.default.removeItem(atPath: path)
+                removed += 1
+            } catch {
+                errorMessage = "Could not remove \(path): \(error)"
+            }
+        }
+        return removed
+    }
+
     /// Moves the managed worktree root to a `.noindex` name so Spotlight stops indexing it,
     /// then repairs each clone's link to its moved worktree.
     ///

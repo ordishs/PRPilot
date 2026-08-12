@@ -2455,6 +2455,39 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     return clone
 }
 
+@Test @MainActor func pruneRemovesOnlyTheOrphanedWorktrees() async throws {
+    let managedRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("wtprune-\(UUID().uuidString)", isDirectory: true)
+    let root = managedRoot.appendingPathComponent("worktrees.noindex")
+    for name in ["live", "orphan-a", "orphan-b"] {
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(name),
+            withIntermediateDirectories: true
+        )
+    }
+    defer { try? FileManager.default.removeItem(at: managedRoot) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var item = cappedReview("live", number: 1, openedMinutesAgo: 1)
+    item.worktreePath = root.appendingPathComponent("live").path
+    try await store.upsertItem(item)
+    var settings = await store.settings()
+    settings.managedRoot = managedRoot.path
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    #expect(model.orphanedWorktreePaths().count == 2)
+
+    let removed = await model.pruneOrphanedWorktrees()
+
+    #expect(removed == 2)
+    #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("live").path))
+    #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("orphan-a").path))
+    #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("orphan-b").path))
+}
+
 @Test @MainActor func migrationMovesTheWorktreeRootAndRewritesPaths() async throws {
     let managedRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("wtmigrate-\(UUID().uuidString)", isDirectory: true)
