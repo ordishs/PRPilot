@@ -1469,12 +1469,15 @@ private let prFetchJSON = """
     let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
     await model.load()
 
-    await model.markClaudeReviewed(sampleReviewID)
+    await model.markClaudeTurnCompleted(sampleReviewID)
     let first = model.reviews.first?.claudeReviewedAt
+    let firstCompletion = model.reviews.first?.claudeLastCompletedAt
     #expect(first != nil)
+    #expect(firstCompletion != nil)
 
-    await model.markClaudeReviewed(sampleReviewID)
+    await model.markClaudeTurnCompleted(sampleReviewID)
     #expect(model.reviews.first?.claudeReviewedAt == first)
+    #expect(model.reviews.first?.claudeLastCompletedAt != firstCompletion)
 }
 
 @Test @MainActor func refreshReviewStateSetsApprovedByMe() async throws {
@@ -2453,6 +2456,51 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
         defaultBase: "main"
     ))
     return clone
+}
+
+/// The distinction the Waiting chip depends on: the one-shot stamp must stay put while the
+/// latest-completion stamp moves.
+@Test @MainActor func aSecondCompletedTurnMovesOnlyTheLatestStamp() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let item = cappedReview("turns", number: 1, openedMinutesAgo: 1)
+    try await store.upsertItem(item)
+
+    let model = cappedModel(store: store)
+    await model.load()
+    await model.ensureClaudeSession(for: item)
+
+    let first = Date(timeIntervalSince1970: 1_000)
+    model.handleTranscriptEvent(reviewID: item.id, at: first, snippet: "done", turnCompleted: true)
+    try await Task.sleep(nanoseconds: 200_000_000)
+    let afterFirst = model.reviews.first { $0.id == item.id }
+
+    let second = Date(timeIntervalSince1970: 2_000)
+    model.handleTranscriptEvent(reviewID: item.id, at: second, snippet: "done again", turnCompleted: true)
+    try await Task.sleep(nanoseconds: 200_000_000)
+    let afterSecond = model.reviews.first { $0.id == item.id }
+
+    #expect(afterFirst?.claudeReviewedAt != nil)
+    #expect(afterFirst?.claudeLastCompletedAt != nil)
+    #expect(afterSecond?.claudeReviewedAt == afterFirst?.claudeReviewedAt)
+    #expect(afterSecond?.claudeLastCompletedAt != afterFirst?.claudeLastCompletedAt)
+}
+
+@Test @MainActor func clearingASessionClearsBothClaudeStamps() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var item = cappedReview("clear", number: 1, openedMinutesAgo: 1)
+    item.claudeReviewedAt = Date(timeIntervalSince1970: 1_000)
+    item.claudeLastCompletedAt = Date(timeIntervalSince1970: 2_000)
+    try await store.upsertItem(item)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    await model.clearClaudeSession(for: item.id)
+
+    let stored = await store.item(id: item.id)
+
+    #expect(stored?.claudeReviewedAt == nil)
+    #expect(stored?.claudeLastCompletedAt == nil)
 }
 
 @Test @MainActor func refreshPersistsMyReviewStateAndDate() async throws {

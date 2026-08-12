@@ -713,8 +713,8 @@ public final class AppModel {
         // "Reviewed" means Claude actually completed a turn (stop_reason end_turn) — not
         // merely that the session went idle, which also happens when a review is
         // interrupted mid-task and later resumed.
-        if turnCompleted, reviews.first(where: { $0.id == reviewID })?.claudeReviewedAt == nil {
-            Task { await self.markClaudeReviewed(reviewID) }
+        if turnCompleted {
+            Task { await self.markClaudeTurnCompleted(reviewID) }
         }
         recomputeStatus(for: reviewID, now: Date())
     }
@@ -941,6 +941,7 @@ public final class AppModel {
         }
         review.claudeSessionID = nil
         review.claudeReviewedAt = nil
+        review.claudeLastCompletedAt = nil
         do {
             try await store.upsertItem(review)
             reviews = await store.allItems()
@@ -995,9 +996,17 @@ public final class AppModel {
         await ensureClaudeSession(for: review)
     }
 
-    func markClaudeReviewed(_ id: String) async {
-        guard var review = reviews.first(where: { $0.id == id }), review.claudeReviewedAt == nil else { return }
-        review.claudeReviewedAt = Date()
+    /// `claudeReviewedAt` records the *first* completion and then stays put; other code
+    /// treats it as "Claude has looked at this at least once". `claudeLastCompletedAt`
+    /// moves every time, which is what lets the Waiting chip come back after the user
+    /// responds and Claude runs again.
+    func markClaudeTurnCompleted(_ id: String) async {
+        guard var review = reviews.first(where: { $0.id == id }) else { return }
+        let now = Date()
+        if review.claudeReviewedAt == nil {
+            review.claudeReviewedAt = now
+        }
+        review.claudeLastCompletedAt = now
         do {
             try await store.upsertItem(review)
             reviews = await store.allItems()
