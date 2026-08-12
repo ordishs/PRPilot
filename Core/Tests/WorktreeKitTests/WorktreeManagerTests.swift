@@ -180,6 +180,58 @@ private func makeFixture(prNumber: Int) async throws -> GitFixture {
     }
 }
 
+/// The `.noindex` migration moves the worktree root, which leaves the clone pointing at the
+/// old path. A worktree no work item references gets no repair at migration time, so the next
+/// prepare finds a directory the clone does not list. It must repair that link, not fail.
+@Test func createWorktreeRepairsAWorktreeWhoseRootMoved() async throws {
+    let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        .appendingPathComponent("wtmoved-\(UUID().uuidString)", isDirectory: true).path
+    let managedRoot = root + "/managed"
+    let clone = managedRoot + "/repos/o/r"
+    let legacyDir = WorktreeLayout.legacyDirectory(managedRoot: managedRoot)
+    let worktreePath = WorktreeLayout.directory(managedRoot: managedRoot) + "/o-r-pr7"
+    try FileManager.default.createDirectory(atPath: clone, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: root) }
+
+    try await git(["-C", clone, "init", "-q", "-b", "main"])
+    try await git(["-C", clone, "-c", "user.email=t@e.st", "-c", "user.name=T", "-c", "commit.gpgsign=false",
+                   "commit", "-q", "--allow-empty", "-m", "init"])
+    try await git(["-C", clone, "worktree", "add", "--detach", "-q", legacyDir + "/o-r-pr7", "HEAD"])
+    try FileManager.default.moveItem(atPath: legacyDir, toPath: WorktreeLayout.directory(managedRoot: managedRoot))
+
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: managedRoot)
+    let result = try await manager.createWorktree(clonePath: clone, owner: "o", repo: "r", number: 7)
+
+    #expect(result == worktreePath)
+    let listed = try await git(["-C", clone, "worktree", "list", "--porcelain"])
+    let registered = listed.split(separator: "\n").filter { $0.hasPrefix("worktree ") }
+        .map { URL(fileURLWithPath: String($0.dropFirst("worktree ".count))).resolvingSymlinksInPath().path }
+    #expect(registered.contains(URL(fileURLWithPath: worktreePath).resolvingSymlinksInPath().path))
+    #expect(!registered.contains(URL(fileURLWithPath: legacyDir + "/o-r-pr7").resolvingSymlinksInPath().path))
+}
+
+/// A number-suffixed path must not match a longer sibling: `…-pr1` is not `…-pr17`.
+@Test func createWorktreeDoesNotMatchALongerSiblingPath() async throws {
+    let tmpRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("sibling-wt-\(UUID().uuidString)", isDirectory: true).path
+    let managedRoot = tmpRoot + "/managed"
+    let worktreePath = WorktreeLayout.directory(managedRoot: managedRoot) + "/o-r-pr1"
+    try FileManager.default.createDirectory(atPath: worktreePath, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tmpRoot) }
+
+    let siblingListing = "worktree \(worktreePath)7\nHEAD abc123\n"
+    let stub = StubRunner(responses: [
+        (arguments: [], result: CommandResult(exitCode: 0, standardOutput: siblingListing, standardError: "")),
+        (arguments: [], result: CommandResult(exitCode: 128, standardOutput: "", standardError: "not a git repository")),
+        (arguments: [], result: CommandResult(exitCode: 0, standardOutput: siblingListing, standardError: "")),
+    ])
+    let manager = WorktreeManager(runner: stub, gitPath: gitPath, managedRoot: managedRoot)
+
+    await #expect(throws: WorktreeError.self) {
+        _ = try await manager.createWorktree(clonePath: tmpRoot + "/clone", owner: "o", repo: "r", number: 1)
+    }
+}
+
 @Test func createWorktreeReturnsExistingRegisteredWorktree() async throws {
     let tmpRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("existing-wt-\(UUID().uuidString)", isDirectory: true).path

@@ -1180,6 +1180,7 @@ public final class AppModel {
         let destination = WorktreeLayout.directory(managedRoot: managedRoot)
         let fileManager = FileManager.default
 
+        var movedTree = false
         if fileManager.fileExists(atPath: legacy) {
             guard !fileManager.fileExists(atPath: destination) else {
                 errorMessage = "Both \(legacy) and \(destination) exist. Merge them by hand — PRPilot will not guess which worktree wins."
@@ -1191,6 +1192,13 @@ public final class AppModel {
                 errorMessage = "Could not move the worktree directory: \(error)"
                 return
             }
+            // Repair every moved directory, not only the ones a work item points at. A work
+            // item that lost its worktreePath — a rebuilt store, a pruned then reopened PR —
+            // otherwise leaves its clone pointing at the old path for good.
+            for name in (try? fileManager.contentsOfDirectory(atPath: destination)) ?? [] {
+                try? await worktreeOps.repairWorktree(worktreePath: destination + "/" + name)
+            }
+            movedTree = true
         }
 
         var rewroteAny = false
@@ -1201,7 +1209,7 @@ public final class AppModel {
             updated.worktreePath = new
             try? await store.upsertItem(updated)
             rewroteAny = true
-            guard fileManager.fileExists(atPath: new) else { continue }
+            guard !movedTree, fileManager.fileExists(atPath: new) else { continue }
             try? await worktreeOps.repairWorktree(worktreePath: new)
         }
         if rewroteAny {

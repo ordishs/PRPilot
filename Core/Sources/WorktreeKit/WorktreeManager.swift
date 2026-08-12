@@ -48,16 +48,7 @@ public struct WorktreeManager: Sendable {
         let worktreesDir = WorktreeLayout.directory(managedRoot: managedRoot)
         let worktreePath = worktreesDir + "/" + owner + "-" + repo + "-pr" + String(number)
         if FileManager.default.fileExists(atPath: worktreePath) {
-            let listing = try await runGit(["-C", clonePath, "worktree", "list", "--porcelain"])
-            if listing.contains("worktree \(worktreePath)\n") || listing.contains("worktree \(worktreePath)") {
-                await progress("Found existing worktree")
-                return worktreePath
-            }
-            throw WorktreeError.gitFailed(
-                arguments: ["worktree", "validate", worktreePath],
-                exitCode: 1,
-                message: "directory exists but is not a registered git worktree: \(worktreePath). Remove it with: rm -rf '\(worktreePath)'"
-            )
+            return try await adoptExistingDirectory(clonePath: clonePath, worktreePath: worktreePath, progress: progress)
         }
         await progress("Pruning stale worktrees…")
         try await runGit(["-C", clonePath, "worktree", "prune"])
@@ -85,6 +76,51 @@ public struct WorktreeManager: Sendable {
     /// the clone from the worktree's own `.git` file, so no clone path is needed.
     public func repairWorktree(worktreePath: String) async throws {
         _ = try await runGit(["-C", worktreePath, "worktree", "repair"])
+    }
+
+    /// Takes over a directory that already sits at the managed worktree path.
+    ///
+    /// A worktree holds two links: the clone's `.git/worktrees/<name>/gitdir` file, and the
+    /// worktree's own `.git` file. A move of the worktree root — the `.noindex` migration does
+    /// this — breaks the first link only, so the clone keeps listing the old path. A repair
+    /// rebuilds that link from the worktree side. Only a directory that is no worktree at all
+    /// stays unusable, and the caller must then remove it by hand.
+    private func adoptExistingDirectory(
+        clonePath: String,
+        worktreePath: String,
+        progress: @escaping @Sendable (String) async -> Void
+    ) async throws -> String {
+        if try await isRegisteredWorktree(clonePath: clonePath, worktreePath: worktreePath) {
+            await progress("Found existing worktree")
+            return worktreePath
+        }
+        await progress("Repairing worktree registration…")
+        if (try? await runGit(["-C", worktreePath, "worktree", "repair"])) != nil,
+           try await isRegisteredWorktree(clonePath: clonePath, worktreePath: worktreePath) {
+            await progress("Found existing worktree")
+            return worktreePath
+        }
+        throw WorktreeError.gitFailed(
+            arguments: ["worktree", "validate", worktreePath],
+            exitCode: 1,
+            message: "directory exists but is not a registered git worktree: \(worktreePath). Remove it with: rm -rf '\(worktreePath)'"
+        )
+    }
+
+    private func isRegisteredWorktree(clonePath: String, worktreePath: String) async throws -> Bool {
+        let listing = try await runGit(["-C", clonePath, "worktree", "list", "--porcelain"])
+        let wanted = WorktreeManager.canonicalPath(worktreePath)
+        for line in listing.split(separator: "\n", omittingEmptySubsequences: false) where line.hasPrefix("worktree ") {
+            let listed = String(line.dropFirst("worktree ".count))
+            if listed == worktreePath || WorktreeManager.canonicalPath(listed) == wanted { return true }
+        }
+        return false
+    }
+
+    /// Git reports the real path of a worktree. The managed root can hold a symlink component,
+    /// so compare the resolved forms as well as the literal strings.
+    private static func canonicalPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().path
     }
 
     func isManagedWorktreePath(_ path: String) -> Bool {
@@ -179,13 +215,7 @@ public struct WorktreeManager: Sendable {
         let worktreesDir = WorktreeLayout.directory(managedRoot: managedRoot)
         let worktreePath = worktreesDir + "/" + owner + "-" + repo + "-" + WorktreeManager.branchSlug(branch)
         if FileManager.default.fileExists(atPath: worktreePath) {
-            let listing = try await runGit(["-C", clonePath, "worktree", "list", "--porcelain"])
-            if listing.contains("worktree \(worktreePath)") {
-                await progress("Found existing worktree")
-                return worktreePath
-            }
-            throw WorktreeError.gitFailed(arguments: ["worktree", "validate", worktreePath], exitCode: 1,
-                message: "directory exists but is not a registered git worktree: \(worktreePath)")
+            return try await adoptExistingDirectory(clonePath: clonePath, worktreePath: worktreePath, progress: progress)
         }
         if let attached = try await worktreeForCheckedOutBranch(branch, clonePath: clonePath) {
             await progress("Branch already checked out — using \(attached)")
@@ -270,16 +300,7 @@ public struct WorktreeManager: Sendable {
         let worktreesDir = WorktreeLayout.directory(managedRoot: managedRoot)
         let worktreePath = worktreesDir + "/" + owner + "-" + repo + "-" + WorktreeManager.branchSlug(branch)
         if FileManager.default.fileExists(atPath: worktreePath) {
-            let listing = try await runGit(["-C", clonePath, "worktree", "list", "--porcelain"])
-            if listing.contains("worktree \(worktreePath)") {
-                await progress("Found existing worktree")
-                return worktreePath
-            }
-            throw WorktreeError.gitFailed(
-                arguments: ["worktree", "validate", worktreePath],
-                exitCode: 1,
-                message: "directory exists but is not a registered git worktree: \(worktreePath). Remove it with: rm -rf '\(worktreePath)'"
-            )
+            return try await adoptExistingDirectory(clonePath: clonePath, worktreePath: worktreePath, progress: progress)
         }
         await progress("Pruning stale worktrees…")
         try await runGit(["-C", clonePath, "worktree", "prune"])
