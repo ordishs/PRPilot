@@ -2460,6 +2460,136 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
 
 /// The distinction the Waiting chip depends on: the one-shot stamp must stay put while the
 /// latest-completion stamp moves.
+@Test @MainActor func queueIsEmptyWhenAutoLoadIsOff() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(cappedReview("q1", number: 1, openedMinutesAgo: 1))
+    let clone = try await registerExistingClone(in: store)
+    defer { try? FileManager.default.removeItem(at: clone) }
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    #expect(model.queuedReviewIDs.isEmpty)
+}
+
+@Test @MainActor func queueHoldsNeverReviewedItemsMostRecentFirst() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    for index in 1...3 {
+        try await store.upsertItem(cappedReview("q\(index)", number: index, openedMinutesAgo: index))
+    }
+    let clone = try await registerExistingClone(in: store)
+    defer { try? FileManager.default.removeItem(at: clone) }
+    var settings = await store.settings()
+    settings.autoLoad = true
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    #expect(model.queuedReviewIDs == ["item-q1", "item-q2", "item-q3"])
+}
+
+@Test @MainActor func queueExcludesReviewedDisabledAndCloneLessItems() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var reviewed = cappedReview("done", number: 1, openedMinutesAgo: 1)
+    reviewed.claudeReviewedAt = Date(timeIntervalSince1970: 500)
+    var disabled = cappedReview("off", number: 2, openedMinutesAgo: 2)
+    disabled.disabled = true
+    let plain = cappedReview("keep", number: 3, openedMinutesAgo: 3)
+    var otherRepo = cappedReview("noclone", number: 4, openedMinutesAgo: 4)
+    otherRepo.repoKey = "github.com/other/repo"
+    for item in [reviewed, disabled, plain, otherRepo] { try await store.upsertItem(item) }
+    let clone = try await registerExistingClone(in: store)
+    defer { try? FileManager.default.removeItem(at: clone) }
+    var settings = await store.settings()
+    settings.autoLoad = true
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    #expect(model.queuedReviewIDs == ["item-keep"])
+}
+
+@Test @MainActor func drainStartsAQueuedSessionWhenASlotIsFree() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    for index in 1...3 {
+        try await store.upsertItem(cappedReview("d\(index)", number: index, openedMinutesAgo: index))
+    }
+    let clone = try await registerExistingClone(in: store)
+    defer { try? FileManager.default.removeItem(at: clone) }
+    var settings = await store.settings()
+    settings.autoLoad = true
+    settings.maxLiveClaudeSessions = 2
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    await model.drainSessionQueue()
+
+    #expect(model.claudeSessions.count == 1)
+    #expect(model.claudeSessions["item-d1"] != nil)
+}
+
+/// One step per tick, so the backlog moves steadily rather than in a burst.
+@Test @MainActor func drainStartsOneSessionPerCall() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    for index in 1...3 {
+        try await store.upsertItem(cappedReview("d\(index)", number: index, openedMinutesAgo: index))
+    }
+    let clone = try await registerExistingClone(in: store)
+    defer { try? FileManager.default.removeItem(at: clone) }
+    var settings = await store.settings()
+    settings.autoLoad = true
+    settings.maxLiveClaudeSessions = 3
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    await model.drainSessionQueue()
+    await model.drainSessionQueue()
+
+    #expect(model.claudeSessions.count == 2)
+}
+
+@Test @MainActor func drainReleasesAnIdleSessionAtTheCapAndStartsTheNext() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    for index in 1...2 {
+        try await store.upsertItem(cappedReview("r\(index)", number: index, openedMinutesAgo: index))
+    }
+    let clone = try await registerExistingClone(in: store)
+    defer { try? FileManager.default.removeItem(at: clone) }
+    var settings = await store.settings()
+    settings.autoLoad = true
+    settings.maxLiveClaudeSessions = 1
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+    // load() selects the most recently opened item, and the selected session is never
+    // released. Clear it so this test exercises the release path rather than the
+    // selection exemption, which SessionQueueTests already covers.
+    model.selection = nil
+    await model.drainSessionQueue()
+    let firstStarted = model.claudeSessions["item-r1"] != nil
+
+    // ClaudeSession.start runs `cd <cwd> && exec <claude>`, and StubWorktreeProvider's
+    // /tmp/wt does not exist, so the shell exits and the status settles to .ready —
+    // releasable. The wait covers `zsh -l` sourcing a slow profile before it can fail.
+    try await Task.sleep(nanoseconds: 1_500_000_000)
+    model.recomputeStatus(for: "item-r1", now: Date())
+    #expect(model.claudeStatuses["item-r1"] != .working)
+
+    await model.drainSessionQueue()
+
+    #expect(firstStarted == true)
+    #expect(model.claudeSessions["item-r1"] == nil)
+    #expect(model.claudeSessions["item-r2"] != nil)
+    #expect(model.claudeSessions.count == 1)
+}
+
 @Test @MainActor func aSecondCompletedTurnMovesOnlyTheLatestStamp() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let item = cappedReview("turns", number: 1, openedMinutesAgo: 1)

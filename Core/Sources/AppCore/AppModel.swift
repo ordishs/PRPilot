@@ -36,6 +36,8 @@ public final class AppModel {
     public private(set) var claudePrepLog: [String: [PrepLogEntry]] = [:]
     public private(set) var claudeStatuses: [String: ClaudeStatus] = [:]
     public private(set) var prStatuses: [String: PRStatus] = [:]
+    /// Items autoLoad wants reviewed that have no session yet, most recently opened first.
+    public private(set) var queuedReviewIDs: [String] = []
 
     public enum RebaseState: Sendable, Equatable {
         case conflicted([String])
@@ -125,6 +127,7 @@ public final class AppModel {
                 .first?.id
         }
         startTickTimerIfNeeded()
+        recomputeReviewQueue()
     }
 
     private func startTickTimerIfNeeded() {
@@ -132,7 +135,9 @@ public final class AppModel {
         tickTask = Task { @MainActor in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: Self.tickIntervalNanoseconds)
+                // Statuses first, so the drain sees a session that has just finished.
                 self.tickAllActiveStatuses()
+                await self.drainSessionQueue()
             }
         }
     }
@@ -819,6 +824,54 @@ public final class AppModel {
         for id in victims {
             evictClaudeSession(for: id)
         }
+    }
+
+    /// Keyed on `claudeReviewedAt` being nil, which is what makes the queue finite: the
+    /// stamp survives a session ending, so a reviewed item leaves the queue for good.
+    func recomputeReviewQueue() {
+        guard settings.autoLoad else {
+            queuedReviewIDs = []
+            return
+        }
+        queuedReviewIDs = reviews
+            .filter { !$0.disabled }
+            .filter { $0.claudeReviewedAt == nil }
+            .filter { claudeSessions[$0.id] == nil }
+            .filter { review in
+                guard let clonePath = registeredClonePath(for: review) else { return false }
+                return FileManager.default.fileExists(atPath: clonePath)
+            }
+            .sorted { ($0.lastOpenedAt ?? $0.addedAt) > ($1.lastOpenedAt ?? $1.addedAt) }
+            .map(\.id)
+    }
+
+    /// One step per call. Starting a session does real work, so pacing it keeps the launch
+    /// path calm and lets a released slot settle before the next start.
+    func drainSessionQueue(now: Date = Date()) async {
+        recomputeReviewQueue()
+        let candidates: [SessionBudget.Candidate] = claudeSessions.keys.compactMap { id in
+            guard let review = reviews.first(where: { $0.id == id }) else { return nil }
+            return SessionBudget.Candidate(
+                id: id,
+                lastOpenedAt: review.lastOpenedAt ?? review.addedAt,
+                status: claudeStatuses[id] ?? .starting,
+                startedAt: sessionStartedAt[id] ?? now
+            )
+        }
+        let step = SessionQueue.nextStep(
+            queued: queuedReviewIDs,
+            live: candidates,
+            cap: settings.maxLiveClaudeSessions,
+            selectedID: selection,
+            now: now
+        )
+        if let release = step.release {
+            evictClaudeSession(for: release)
+        }
+        guard let start = step.start,
+              let review = reviews.first(where: { $0.id == start }) else { return }
+        await ensureClaudeSession(for: review)
+        recomputeReviewQueue()
     }
 
     func setPRStatusForTesting(_ status: PRStatus, for id: String) {
