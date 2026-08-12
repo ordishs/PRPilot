@@ -144,6 +144,10 @@ private actor StubWorktreeOps: WorktreeManaging {
         }
         return aheadBehindByUpstream[upstream] ?? aheadBehindDefaultResult
     }
+    private(set) var repairedWorktreePaths: [String] = []
+    func repairWorktree(worktreePath: String) async throws {
+        repairedWorktreePaths.append(worktreePath)
+    }
 }
 
 private let sampleReviewID = "AAAAAAAA-0000-0000-0000-000000000944"
@@ -2451,6 +2455,102 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     return clone
 }
 
+@Test @MainActor func migrationMovesTheWorktreeRootAndRewritesPaths() async throws {
+    let managedRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("wtmigrate-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: managedRoot.appendingPathComponent("worktrees/owner-repo-pr1"),
+        withIntermediateDirectories: true
+    )
+    defer { try? FileManager.default.removeItem(at: managedRoot) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var item = cappedReview("mig", number: 1, openedMinutesAgo: 1)
+    item.worktreePath = managedRoot.appendingPathComponent("worktrees/owner-repo-pr1").path
+    try await store.upsertItem(item)
+    var settings = await store.settings()
+    settings.managedRoot = managedRoot.path
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    await model.migrateWorktreeRoot()
+
+    let expected = managedRoot.appendingPathComponent("worktrees.noindex/owner-repo-pr1").path
+    let stored = await store.item(id: item.id)?.worktreePath
+
+    #expect(FileManager.default.fileExists(atPath: expected))
+    #expect(!FileManager.default.fileExists(atPath: managedRoot.appendingPathComponent("worktrees").path))
+    #expect(model.reviews.first { $0.id == item.id }?.worktreePath == expected)
+    #expect(stored == expected)
+}
+
+@Test @MainActor func migrationRepairsEachMovedWorktree() async throws {
+    let managedRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("wtmigrate3-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: managedRoot.appendingPathComponent("worktrees/owner-repo-pr1"),
+        withIntermediateDirectories: true
+    )
+    defer { try? FileManager.default.removeItem(at: managedRoot) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var item = cappedReview("mig", number: 1, openedMinutesAgo: 1)
+    item.worktreePath = managedRoot.appendingPathComponent("worktrees/owner-repo-pr1").path
+    try await store.upsertItem(item)
+    var settings = await store.settings()
+    settings.managedRoot = managedRoot.path
+    try await store.updateSettings(settings)
+
+    let ops = StubWorktreeOps()
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: ops,
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.migrateWorktreeRoot()
+
+    let expected = managedRoot.appendingPathComponent("worktrees.noindex/owner-repo-pr1").path
+    let repaired = await ops.repairedWorktreePaths
+
+    #expect(repaired == [expected])
+}
+
+@Test @MainActor func migrationIsANoOpOnASecondRun() async throws {
+    let managedRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("wtmigrate2-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: managedRoot.appendingPathComponent("worktrees/owner-repo-pr1"),
+        withIntermediateDirectories: true
+    )
+    defer { try? FileManager.default.removeItem(at: managedRoot) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var item = cappedReview("mig", number: 1, openedMinutesAgo: 1)
+    item.worktreePath = managedRoot.appendingPathComponent("worktrees/owner-repo-pr1").path
+    try await store.upsertItem(item)
+    var settings = await store.settings()
+    settings.managedRoot = managedRoot.path
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    await model.migrateWorktreeRoot()
+    let afterFirst = model.reviews.first { $0.id == item.id }?.worktreePath
+    await model.migrateWorktreeRoot()
+
+    #expect(model.reviews.first { $0.id == item.id }?.worktreePath == afterFirst)
+}
+
 @Test @MainActor func refreshCyclesThroughItemsInsteadOfRefreshingAll() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     for index in 1...10 {
@@ -2602,7 +2702,16 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     #expect(model.prStatuses[oldest.id] != nil)
 }
 
+/// The session must genuinely still be running for its status to read `.working`.
+/// `ClaudeSession.start()` runs `cd <cwd> && exec <claude> …`, so the default stub's
+/// non-existent `/tmp/wt` makes the shell exit at once and the status decays to `.ready`.
+/// `yes` ignores its arguments and never exits, which pins the status deterministically.
 @Test @MainActor func sessionBudgetProtectsAWorkingSession() async throws {
+    let cwd = FileManager.default.temporaryDirectory
+        .appendingPathComponent("livewt-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: cwd) }
+
     let store = try ReviewStore(fileURL: tempStoreURL())
     let newest = cappedReview("newest", number: 1, openedMinutesAgo: 1)
     let oldest = cappedReview("oldest", number: 2, openedMinutesAgo: 2)
@@ -2611,7 +2720,19 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     settings.maxLiveClaudeSessions = 1
     try await store.updateSettings(settings)
 
-    let model = cappedModel(store: store)
+    var provider = StubWorktreeProvider()
+    provider.result = WorktreeReady(clonePath: cwd.path, worktreePath: cwd.path, remoteName: "origin")
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: provider,
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/yes",
+        notificationPoster: StubNotificationPoster()
+    )
+    defer { model.terminateAllClaudeSessions() }
     await model.load()
     model.selection = newest.id
     for item in [oldest, newest] {
@@ -2621,7 +2742,9 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     model.handleTranscriptEvent(reviewID: oldest.id, at: now, snippet: "working", turnCompleted: false)
     model.recomputeStatus(for: oldest.id, now: now)
 
-    model.enforceSessionBudget(now: Date().addingTimeInterval(120))
+    #expect(model.claudeStatuses[oldest.id] == .working)
+
+    model.enforceSessionBudget(now: now.addingTimeInterval(120))
 
     #expect(model.claudeSessions[oldest.id] != nil)
 }

@@ -119,7 +119,7 @@ private func makeFixture(prNumber: Int) async throws -> GitFixture {
     let clone = try await manager.resolveClone(owner: "bsv-blockchain", repo: "teranode", remoteURL: fixture.remoteURL, registeredClonePath: nil)
     let worktree = try await manager.createWorktree(clonePath: clone, owner: "bsv-blockchain", repo: "teranode", number: 944)
 
-    #expect(worktree == fixture.managedRoot + "/worktrees/bsv-blockchain-teranode-pr944")
+    #expect(worktree == fixture.managedRoot + "/" + WorktreeLayout.directoryName + "/bsv-blockchain-teranode-pr944")
     #expect(FileManager.default.fileExists(atPath: worktree + "/feature.txt"))
     let head = try await git(["-C", worktree, "rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
     #expect(head == fixture.prHeadSha)
@@ -148,7 +148,7 @@ private func makeFixture(prNumber: Int) async throws -> GitFixture {
     let tmpRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("stale-wt-\(UUID().uuidString)", isDirectory: true).path
     let managedRoot = tmpRoot + "/managed"
-    let worktreesDir = managedRoot + "/worktrees"
+    let worktreesDir = WorktreeLayout.directory(managedRoot: managedRoot)
     let worktreePath = worktreesDir + "/o-r-pr1"
     try FileManager.default.createDirectory(atPath: worktreePath, withIntermediateDirectories: true)
 
@@ -184,7 +184,7 @@ private func makeFixture(prNumber: Int) async throws -> GitFixture {
     let tmpRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("existing-wt-\(UUID().uuidString)", isDirectory: true).path
     let managedRoot = tmpRoot + "/managed"
-    let worktreesDir = managedRoot + "/worktrees"
+    let worktreesDir = WorktreeLayout.directory(managedRoot: managedRoot)
     let worktreePath = worktreesDir + "/o-r-pr1"
     try FileManager.default.createDirectory(atPath: worktreePath, withIntermediateDirectories: true)
 
@@ -746,4 +746,38 @@ private func makeLocalRepo(root: String, name: String) async throws -> String {
     try "dirty\n".write(toFile: wtFeat + "/dirty.txt", atomically: true, encoding: .utf8)
     let cleanAfter = try await manager.isClean(worktreePath: wtFeat)
     #expect(cleanAfter == false)
+}
+
+/// Renaming the worktree root leaves each clone's `.git/worktrees/<name>/gitdir` pointing
+/// at the old path. Repair re-points it, and needs no clone path — git finds the clone from
+/// the worktree's own `.git` file, which the rename does not touch.
+@Test func repairWorktreeFixesAMovedWorktree() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("wtrepair-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let clone = root.appendingPathComponent("clone").path
+    let legacyRoot = root.appendingPathComponent("worktrees").path
+    let newRoot = root.appendingPathComponent("worktrees.noindex").path
+    try FileManager.default.createDirectory(atPath: clone, withIntermediateDirectories: true)
+
+    let runner = ProcessCommandRunner()
+    _ = try await runner.run(executable: gitPath, arguments: ["-C", clone, "init", "-q", "-b", "main"])
+    _ = try await runner.run(executable: gitPath, arguments: [
+        "-C", clone, "-c", "user.email=a@b", "-c", "user.name=a", "-c", "commit.gpgsign=false",
+        "commit", "-q", "--allow-empty", "-m", "init",
+    ])
+    _ = try await runner.run(executable: gitPath, arguments: [
+        "-C", clone, "worktree", "add", "-q", "-b", "feat", legacyRoot + "/wt1",
+    ])
+    try FileManager.default.moveItem(atPath: legacyRoot, toPath: newRoot)
+
+    let manager = WorktreeManager(runner: runner, gitPath: gitPath, managedRoot: root.path)
+    try await manager.repairWorktree(worktreePath: newRoot + "/wt1")
+
+    let listed = try await runner.run(executable: gitPath, arguments: ["-C", clone, "worktree", "list"])
+
+    #expect(listed.standardOutput.contains(newRoot + "/wt1"))
+    #expect(!listed.standardOutput.contains(legacyRoot + "/wt1"))
 }

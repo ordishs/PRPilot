@@ -45,7 +45,7 @@ public struct WorktreeManager: Sendable {
         remoteName: String = "origin",
         progress: @escaping @Sendable (String) async -> Void = { _ in }
     ) async throws -> String {
-        let worktreesDir = managedRoot + "/worktrees"
+        let worktreesDir = WorktreeLayout.directory(managedRoot: managedRoot)
         let worktreePath = worktreesDir + "/" + owner + "-" + repo + "-pr" + String(number)
         if FileManager.default.fileExists(atPath: worktreePath) {
             let listing = try await runGit(["-C", clonePath, "worktree", "list", "--porcelain"])
@@ -81,8 +81,14 @@ public struct WorktreeManager: Sendable {
         try await runGit(["-C", clonePath, "worktree", "remove", worktreePath])
     }
 
+    /// Re-points a clone's administrative link after its worktree moved on disk. Git finds
+    /// the clone from the worktree's own `.git` file, so no clone path is needed.
+    public func repairWorktree(worktreePath: String) async throws {
+        _ = try await runGit(["-C", worktreePath, "worktree", "repair"])
+    }
+
     func isManagedWorktreePath(_ path: String) -> Bool {
-        path.hasPrefix(managedRoot + "/worktrees/")
+        path.hasPrefix(WorktreeLayout.directory(managedRoot: managedRoot) + "/")
     }
 
     private func worktreeForCheckedOutBranch(_ branch: String, clonePath: String) async throws -> String? {
@@ -170,7 +176,7 @@ public struct WorktreeManager: Sendable {
         clonePath: String, owner: String, repo: String, branch: String, number: Int,
         remoteName: String = "origin", progress: @escaping @Sendable (String) async -> Void = { _ in }
     ) async throws -> String {
-        let worktreesDir = managedRoot + "/worktrees"
+        let worktreesDir = WorktreeLayout.directory(managedRoot: managedRoot)
         let worktreePath = worktreesDir + "/" + owner + "-" + repo + "-" + WorktreeManager.branchSlug(branch)
         if FileManager.default.fileExists(atPath: worktreePath) {
             let listing = try await runGit(["-C", clonePath, "worktree", "list", "--porcelain"])
@@ -261,7 +267,7 @@ public struct WorktreeManager: Sendable {
         remoteName: String = "origin",
         progress: @escaping @Sendable (String) async -> Void = { _ in }
     ) async throws -> String {
-        let worktreesDir = managedRoot + "/worktrees"
+        let worktreesDir = WorktreeLayout.directory(managedRoot: managedRoot)
         let worktreePath = worktreesDir + "/" + owner + "-" + repo + "-" + WorktreeManager.branchSlug(branch)
         if FileManager.default.fileExists(atPath: worktreePath) {
             let listing = try await runGit(["-C", clonePath, "worktree", "list", "--porcelain"])

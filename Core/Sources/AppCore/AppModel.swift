@@ -109,6 +109,7 @@ public final class AppModel {
         reviews = await store.allItems()
         registeredRepos = await store.allRepos()
         settings = await store.settings()
+        await migrateWorktreeRoot()
         switch settings.appearance {
         case .light: terminalIsDark = false
         case .dark: terminalIsDark = true
@@ -1065,6 +1066,38 @@ public final class AppModel {
 
     func refreshedIDsForTesting() -> Set<String> {
         Set(lastRefreshedAt.keys)
+    }
+
+    /// Moves the managed worktree root to a `.noindex` name so Spotlight stops indexing it,
+    /// then repairs each clone's link to its moved worktree.
+    ///
+    /// Idempotent by condition rather than by a schema flag: `ReviewStore.loadOrCreate`
+    /// bumps a stale `schemaVersion` during its own init, before this runs, so a flag would
+    /// already be consumed. Once the legacy directory is gone this does nothing.
+    func migrateWorktreeRoot() async {
+        let managedRoot = settings.managedRoot
+        let legacy = WorktreeLayout.legacyDirectory(managedRoot: managedRoot)
+        let destination = WorktreeLayout.directory(managedRoot: managedRoot)
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: legacy) else { return }
+        guard !fileManager.fileExists(atPath: destination) else { return }
+
+        do {
+            try fileManager.moveItem(atPath: legacy, toPath: destination)
+        } catch {
+            errorMessage = "Could not move the worktree directory: \(error)"
+            return
+        }
+
+        for review in reviews {
+            guard let old = review.worktreePath,
+                  let new = WorktreeLayout.migratedPath(old, managedRoot: managedRoot) else { continue }
+            var updated = review
+            updated.worktreePath = new
+            try? await store.upsertItem(updated)
+            try? await worktreeOps.repairWorktree(worktreePath: new)
+        }
+        reviews = await store.allItems()
     }
 
     public func rebase(id: String) async {
