@@ -30,6 +30,9 @@ public final class AppModel {
     /// The appearance each live session's `claude` process was launched under, so a
     /// background session can be relaunched on selection if it no longer matches.
     private var sessionLaunchedIsDark: [String: Bool] = [:]
+    /// When each live session's process was launched, so the budget can let a genuinely
+    /// starting session finish while still evicting one that went silent.
+    private var sessionStartedAt: [String: Date] = [:]
     public private(set) var claudePrepLog: [String: [PrepLogEntry]] = [:]
     public private(set) var claudeStatuses: [String: ClaudeStatus] = [:]
     public private(set) var prStatuses: [String: PRStatus] = [:]
@@ -661,9 +664,11 @@ public final class AppModel {
         claudePaneState[review.id] = .sessionLive
         session.applyAppearance(isDark: terminalIsDark)
         sessionLaunchedIsDark[review.id] = terminalIsDark
+        sessionStartedAt[review.id] = Date()
         session.start()
         attachTranscriptWatcher(reviewID: review.id, worktreePath: ready.worktreePath)
         recomputeStatus(for: review.id, now: Date())
+        enforceSessionBudget()
         if editable {
             await refreshPushability(for: review.id)
         }
@@ -760,6 +765,7 @@ public final class AppModel {
         transcriptWatchers.removeValue(forKey: id)
         claudeStatuses.removeValue(forKey: id)
         sessionLaunchedIsDark.removeValue(forKey: id)
+        sessionStartedAt.removeValue(forKey: id)
         prStatuses.removeValue(forKey: id)
         rebaseStates.removeValue(forKey: id)
         pushability.removeValue(forKey: id)
@@ -768,6 +774,52 @@ public final class AppModel {
         lastEventWasTurnCompletion.removeValue(forKey: id)
         workflowPendingForSession.removeValue(forKey: id)
         notifiedAwaitingForSession.remove(id)
+    }
+
+    /// Shuts a session down to reclaim its process, and nothing more. Unlike
+    /// `terminateClaudeSession`, this keeps `prStatuses`, `rebaseStates` and `pushability`,
+    /// which describe the PR on GitHub rather than the session, and keeps the persisted
+    /// `claudeSessionID` so the next open resumes instead of starting over.
+    private func evictClaudeSession(for id: String) {
+        claudeSessions[id]?.terminate()
+        claudeSessions.removeValue(forKey: id)
+        claudePreparing.remove(id)
+        claudePaneState.removeValue(forKey: id)
+        transcriptWatchers[id]?.stop()
+        transcriptWatchers.removeValue(forKey: id)
+        claudeStatuses.removeValue(forKey: id)
+        sessionLaunchedIsDark.removeValue(forKey: id)
+        sessionStartedAt.removeValue(forKey: id)
+        lastEventAt.removeValue(forKey: id)
+        lastVerdictSnippet.removeValue(forKey: id)
+        lastEventWasTurnCompletion.removeValue(forKey: id)
+        workflowPendingForSession.removeValue(forKey: id)
+        notifiedAwaitingForSession.remove(id)
+    }
+
+    func enforceSessionBudget(now: Date = Date()) {
+        let candidates: [SessionBudget.Candidate] = claudeSessions.keys.compactMap { id in
+            guard let review = reviews.first(where: { $0.id == id }) else { return nil }
+            return SessionBudget.Candidate(
+                id: id,
+                lastOpenedAt: review.lastOpenedAt ?? review.addedAt,
+                status: claudeStatuses[id] ?? .starting,
+                startedAt: sessionStartedAt[id] ?? now
+            )
+        }
+        let victims = SessionBudget.evictions(
+            candidates: candidates,
+            cap: settings.maxLiveClaudeSessions,
+            selectedID: selection,
+            now: now
+        )
+        for id in victims {
+            evictClaudeSession(for: id)
+        }
+    }
+
+    func setPRStatusForTesting(_ status: PRStatus, for id: String) {
+        prStatuses[id] = status
     }
 
     public func terminateAllClaudeSessions() {
@@ -841,6 +893,7 @@ public final class AppModel {
         do {
             try await store.upsertItem(review)
             reviews = await store.allItems()
+            enforceSessionBudget()
             await refreshReviewState(for: id)
         } catch {
             errorMessage = String(describing: error)

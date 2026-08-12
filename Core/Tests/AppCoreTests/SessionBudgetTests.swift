@@ -3,21 +3,38 @@ import Foundation
 import ClaudeSessionKit
 @testable import AppCore
 
+private let budgetNow = Date(timeIntervalSince1970: 1_000_000)
+
 private func candidate(
     _ id: String,
     minutesAgo: Int,
-    status: ClaudeStatus = .idle(since: Date(timeIntervalSince1970: 0), lastVerdictSnippet: nil)
+    status: ClaudeStatus = .idle(since: Date(timeIntervalSince1970: 0), lastVerdictSnippet: nil),
+    startedSecondsAgo: TimeInterval = 3600
 ) -> SessionBudget.Candidate {
     SessionBudget.Candidate(
         id: id,
-        lastOpenedAt: Date(timeIntervalSince1970: 1_000_000 - Double(minutesAgo) * 60),
-        status: status
+        lastOpenedAt: budgetNow.addingTimeInterval(-Double(minutesAgo) * 60),
+        status: status,
+        startedAt: budgetNow.addingTimeInterval(-startedSecondsAgo)
+    )
+}
+
+private func evictions(
+    _ candidates: [SessionBudget.Candidate],
+    cap: Int,
+    selectedID: String?
+) -> [String] {
+    SessionBudget.evictions(
+        candidates: candidates,
+        cap: cap,
+        selectedID: selectedID,
+        now: budgetNow
     )
 }
 
 @Test func budgetEvictsNothingUnderTheCap() {
-    let victims = SessionBudget.evictions(
-        candidates: [candidate("a", minutesAgo: 1), candidate("b", minutesAgo: 2)],
+    let victims = evictions(
+        [candidate("a", minutesAgo: 1), candidate("b", minutesAgo: 2)],
         cap: 5,
         selectedID: "a"
     )
@@ -26,8 +43,8 @@ private func candidate(
 }
 
 @Test func budgetEvictsTheOldestBeyondTheCap() {
-    let victims = SessionBudget.evictions(
-        candidates: [
+    let victims = evictions(
+        [
             candidate("newest", minutesAgo: 1),
             candidate("middle", minutesAgo: 2),
             candidate("oldest", minutesAgo: 3),
@@ -40,8 +57,8 @@ private func candidate(
 }
 
 @Test func budgetNeverEvictsTheSelectedItem() {
-    let victims = SessionBudget.evictions(
-        candidates: [
+    let victims = evictions(
+        [
             candidate("newest", minutesAgo: 1),
             candidate("middle", minutesAgo: 2),
             candidate("oldest", minutesAgo: 3),
@@ -54,8 +71,8 @@ private func candidate(
 }
 
 @Test func budgetSkipsAWorkingSessionAndTakesTheNextCandidate() {
-    let victims = SessionBudget.evictions(
-        candidates: [
+    let victims = evictions(
+        [
             candidate("newest", minutesAgo: 1),
             candidate("middle", minutesAgo: 2),
             candidate("oldest", minutesAgo: 3, status: .working),
@@ -67,11 +84,39 @@ private func candidate(
     #expect(victims == ["middle"])
 }
 
-@Test func budgetSkipsAStartingSession() {
-    let victims = SessionBudget.evictions(
-        candidates: [
+@Test func budgetSkipsASessionStillInsideItsStartupGrace() {
+    let victims = evictions(
+        [
             candidate("newest", minutesAgo: 1),
-            candidate("oldest", minutesAgo: 2, status: .starting),
+            candidate("oldest", minutesAgo: 2, status: .starting, startedSecondsAgo: 10),
+        ],
+        cap: 1,
+        selectedID: "newest"
+    )
+
+    #expect(victims.isEmpty)
+}
+
+/// A session whose process runs but writes no transcript reads `.starting` with no
+/// timeout of its own. Without the grace expiring it would hold its memory forever.
+@Test func budgetEvictsAStartingSessionPastItsStartupGrace() {
+    let victims = evictions(
+        [
+            candidate("newest", minutesAgo: 1),
+            candidate("silent", minutesAgo: 2, status: .starting, startedSecondsAgo: 61),
+        ],
+        cap: 1,
+        selectedID: "newest"
+    )
+
+    #expect(victims == ["silent"])
+}
+
+@Test func budgetTreatsTheGraceBoundaryAsStillProtected() {
+    let victims = evictions(
+        [
+            candidate("newest", minutesAgo: 1),
+            candidate("edge", minutesAgo: 2, status: .starting, startedSecondsAgo: 60),
         ],
         cap: 1,
         selectedID: "newest"
@@ -81,8 +126,8 @@ private func candidate(
 }
 
 @Test func budgetStaysOverTheCapWhenEveryCandidateIsProtected() {
-    let victims = SessionBudget.evictions(
-        candidates: [
+    let victims = evictions(
+        [
             candidate("a", minutesAgo: 1, status: .working),
             candidate("b", minutesAgo: 2, status: .working),
             candidate("c", minutesAgo: 3, status: .working),
@@ -95,8 +140,8 @@ private func candidate(
 }
 
 @Test func budgetEvictsAwaitingInputAndFailedSessions() {
-    let victims = SessionBudget.evictions(
-        candidates: [
+    let victims = evictions(
+        [
             candidate("newest", minutesAgo: 1),
             candidate("awaiting", minutesAgo: 2, status: .awaitingInput(since: Date(timeIntervalSince1970: 0), lastVerdictSnippet: nil)),
             candidate("failed", minutesAgo: 3, status: .failed(reason: "boom")),
@@ -109,8 +154,8 @@ private func candidate(
 }
 
 @Test func budgetEvictsNothingForANonPositiveCap() {
-    let victims = SessionBudget.evictions(
-        candidates: [candidate("a", minutesAgo: 1)],
+    let victims = evictions(
+        [candidate("a", minutesAgo: 1)],
         cap: 0,
         selectedID: nil
     )

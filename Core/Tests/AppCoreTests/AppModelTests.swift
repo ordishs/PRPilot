@@ -2403,3 +2403,138 @@ private func authorUpdateSnapshotJSON(committedDate: String) -> String {
     #expect(model.reviews.first?.authorUpdateSeenAt == nil)
     #expect(model.errorMessage == nil)
 }
+
+private func cappedReview(_ suffix: String, number: Int, openedMinutesAgo: Int) -> WorkItem {
+    WorkItem(
+        id: "item-\(suffix)",
+        title: "item \(suffix)",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        headBranch: "branch-\(suffix)",
+        prRef: PRRef(
+            owner: "bsv-blockchain", repo: "teranode", number: number,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/\(number)")!,
+            authorLogin: "icellan"
+        ),
+        prState: .open,
+        origin: .added,
+        addedAt: Date(timeIntervalSince1970: 1_700_000_000),
+        lastOpenedAt: Date(timeIntervalSince1970: 1_700_000_000 - Double(openedMinutesAgo) * 60)
+    )
+}
+
+@MainActor
+private func cappedModel(store: ReviewStore) -> AppModel {
+    AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+}
+
+@Test @MainActor func sessionBudgetEvictsTheOldestSessionBeyondTheCap() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let newest = cappedReview("newest", number: 1, openedMinutesAgo: 1)
+    let middle = cappedReview("middle", number: 2, openedMinutesAgo: 2)
+    let oldest = cappedReview("oldest", number: 3, openedMinutesAgo: 3)
+    for item in [newest, middle, oldest] { try await store.upsertItem(item) }
+    var settings = await store.settings()
+    settings.maxLiveClaudeSessions = 2
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+    model.selection = newest.id
+    for item in [oldest, middle, newest] {
+        await model.ensureClaudeSession(for: item)
+    }
+
+    model.enforceSessionBudget(now: Date().addingTimeInterval(120))
+
+    #expect(model.claudeSessions.count == 2)
+    #expect(model.claudeSessions[oldest.id] == nil)
+    #expect(model.claudeSessions[middle.id] != nil)
+    #expect(model.claudeSessions[newest.id] != nil)
+}
+
+@Test @MainActor func sessionEvictionKeepsThePersistedSessionIDForResume() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let newest = cappedReview("newest", number: 1, openedMinutesAgo: 1)
+    let oldest = cappedReview("oldest", number: 2, openedMinutesAgo: 2)
+    for item in [newest, oldest] { try await store.upsertItem(item) }
+    var settings = await store.settings()
+    settings.maxLiveClaudeSessions = 1
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+    model.selection = newest.id
+    for item in [oldest, newest] {
+        await model.ensureClaudeSession(for: item)
+    }
+    let persistedBefore = model.reviews.first { $0.id == oldest.id }?.claudeSessionID
+
+    model.enforceSessionBudget(now: Date().addingTimeInterval(120))
+
+    let stored = await store.item(id: oldest.id)?.claudeSessionID
+
+    #expect(persistedBefore != nil)
+    #expect(model.claudeSessions[oldest.id] == nil)
+    #expect(model.reviews.first { $0.id == oldest.id }?.claudeSessionID == persistedBefore)
+    #expect(stored == persistedBefore)
+}
+
+@Test @MainActor func sessionEvictionKeepsTheGitHubStatusChips() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let newest = cappedReview("newest", number: 1, openedMinutesAgo: 1)
+    let oldest = cappedReview("oldest", number: 2, openedMinutesAgo: 2)
+    for item in [newest, oldest] { try await store.upsertItem(item) }
+    var settings = await store.settings()
+    settings.maxLiveClaudeSessions = 1
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+    model.selection = newest.id
+    for item in [oldest, newest] {
+        await model.ensureClaudeSession(for: item)
+    }
+    model.setPRStatusForTesting(
+        PRStatus(ci: .passing, isBehind: false, readiness: .reviewRequired),
+        for: oldest.id
+    )
+
+    model.enforceSessionBudget(now: Date().addingTimeInterval(120))
+
+    #expect(model.claudeSessions[oldest.id] == nil)
+    #expect(model.prStatuses[oldest.id] != nil)
+}
+
+@Test @MainActor func sessionBudgetProtectsAWorkingSession() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let newest = cappedReview("newest", number: 1, openedMinutesAgo: 1)
+    let oldest = cappedReview("oldest", number: 2, openedMinutesAgo: 2)
+    for item in [newest, oldest] { try await store.upsertItem(item) }
+    var settings = await store.settings()
+    settings.maxLiveClaudeSessions = 1
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+    model.selection = newest.id
+    for item in [oldest, newest] {
+        await model.ensureClaudeSession(for: item)
+    }
+    let now = Date()
+    model.handleTranscriptEvent(reviewID: oldest.id, at: now, snippet: "working", turnCompleted: false)
+    model.recomputeStatus(for: oldest.id, now: now)
+
+    model.enforceSessionBudget(now: Date().addingTimeInterval(120))
+
+    #expect(model.claudeSessions[oldest.id] != nil)
+}

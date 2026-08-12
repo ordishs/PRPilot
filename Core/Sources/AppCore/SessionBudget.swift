@@ -7,15 +7,23 @@ import ClaudeSessionKit
 /// killed, because SIGTERM would throw away work the user is waiting for. When every
 /// candidate is protected the budget returns nothing and the session count stays high.
 public enum SessionBudget {
+    /// How long a session that has not reported yet is left alone. `ClaudeStatusReader`
+    /// reports `.starting` both for a launching process and for a running one that has
+    /// written no transcript, and it never times the second case out. Without this bound a
+    /// silent session would be protected forever, which is the leak the cap exists to stop.
+    public static let startupGraceSeconds: TimeInterval = 60
+
     public struct Candidate: Sendable, Equatable {
         public let id: String
         public let lastOpenedAt: Date
         public let status: ClaudeStatus
+        public let startedAt: Date
 
-        public init(id: String, lastOpenedAt: Date, status: ClaudeStatus) {
+        public init(id: String, lastOpenedAt: Date, status: ClaudeStatus, startedAt: Date) {
             self.id = id
             self.lastOpenedAt = lastOpenedAt
             self.status = status
+            self.startedAt = startedAt
         }
     }
 
@@ -23,7 +31,8 @@ public enum SessionBudget {
     public static func evictions(
         candidates: [Candidate],
         cap: Int,
-        selectedID: String?
+        selectedID: String?,
+        now: Date
     ) -> [String] {
         guard cap > 0, candidates.count > cap else { return [] }
 
@@ -37,16 +46,18 @@ public enum SessionBudget {
         for candidate in newestFirst.reversed() {
             if victims.count == overflow { break }
             if candidate.id == selectedID { continue }
-            if isProtected(candidate.status) { continue }
+            if isProtected(candidate, now: now) { continue }
             victims.append(candidate.id)
         }
         return victims
     }
 
-    private static func isProtected(_ status: ClaudeStatus) -> Bool {
-        switch status {
-        case .starting, .working:
+    private static func isProtected(_ candidate: Candidate, now: Date) -> Bool {
+        switch candidate.status {
+        case .working:
             return true
+        case .starting:
+            return now.timeIntervalSince(candidate.startedAt) <= startupGraceSeconds
         case .awaitingInput, .idle, .ready, .failed:
             return false
         }
