@@ -63,6 +63,8 @@ public final class AppModel {
     private var lastEventWasTurnCompletion: [String: Bool] = [:]
     private var workflowPendingForSession: [String: Bool] = [:]
     private var notifiedAwaitingForSession: Set<String> = []
+    private var lastRefreshedAt: [String: Date] = [:]
+    private static let refreshBatchSize = 4
     private var tickTask: Task<Void, Never>?
     private var discoveryTask: Task<Void, Never>?
     private static let tickIntervalNanoseconds: UInt64 = 5_000_000_000
@@ -769,6 +771,7 @@ public final class AppModel {
         prStatuses.removeValue(forKey: id)
         rebaseStates.removeValue(forKey: id)
         pushability.removeValue(forKey: id)
+        lastRefreshedAt.removeValue(forKey: id)
         lastEventAt.removeValue(forKey: id)
         lastVerdictSnippet.removeValue(forKey: id)
         lastEventWasTurnCompletion.removeValue(forKey: id)
@@ -1029,12 +1032,39 @@ public final class AppModel {
         if currentLogin == nil {
             currentLogin = try? await client.fetchCurrentLogin()
         }
+        let openIDs = reviews
+            .filter { $0.prState != .merged && $0.prState != .closed }
+            .map(\.id)
+        let ids = RefreshScheduler.itemsToRefresh(
+            openIDs: openIDs,
+            selectedID: selection,
+            lastRefreshedAt: lastRefreshedAt,
+            batchSize: Self.refreshBatchSize
+        )
+        for id in ids {
+            await refreshReviewState(for: id)
+            lastRefreshedAt[id] = Date()
+        }
+    }
+
+    /// Runs discovery and refreshes every open item, ignoring the staleness batching that
+    /// `refreshReviewStates` applies. This is the escape hatch for the poll cycle's lag.
+    public func refreshAllNow() async {
+        await discoverNow()
+        if currentLogin == nil {
+            currentLogin = try? await client.fetchCurrentLogin()
+        }
         let ids = reviews
             .filter { $0.prState != .merged && $0.prState != .closed }
             .map(\.id)
         for id in ids {
             await refreshReviewState(for: id)
+            lastRefreshedAt[id] = Date()
         }
+    }
+
+    func refreshedIDsForTesting() -> Set<String> {
+        Set(lastRefreshedAt.keys)
     }
 
     public func rebase(id: String) async {

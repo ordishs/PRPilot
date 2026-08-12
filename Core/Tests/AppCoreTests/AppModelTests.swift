@@ -2451,6 +2451,36 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     return clone
 }
 
+@Test @MainActor func refreshCyclesThroughItemsInsteadOfRefreshingAll() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    for index in 1...10 {
+        try await store.upsertItem(cappedReview("rf\(index)", number: index, openedMinutesAgo: index))
+    }
+
+    let model = cappedModel(store: store)
+    await model.load()
+    model.selection = "item-rf1"
+
+    await model.refreshReviewStates()
+
+    #expect(model.refreshedIDsForTesting().count == 5)
+    #expect(model.refreshedIDsForTesting().contains("item-rf1"))
+}
+
+@Test @MainActor func refreshAllNowRefreshesEveryOpenItem() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    for index in 1...10 {
+        try await store.upsertItem(cappedReview("ra\(index)", number: index, openedMinutesAgo: index))
+    }
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    await model.refreshAllNow()
+
+    #expect(model.refreshedIDsForTesting().count == 10)
+}
+
 @Test @MainActor func prewarmStopsAtTheSessionCap() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     for index in 1...5 {
