@@ -165,6 +165,8 @@ struct ContentView: View {
             guard let id = newSelection,
                   let review = model.reviews.first(where: { $0.id == id }) else { return }
             model.prefetch(for: review)
+            webViewCache.selectedID = id
+            webViewCache.cap = model.settings.maxLiveWebViews
             _ = webViewCache.ensure(for: review)
             Task { await model.markReviewOpened(id) }
         }

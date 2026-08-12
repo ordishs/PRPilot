@@ -1,4 +1,5 @@
 import AppKit
+import AppCore
 import SwiftUI
 import WebKit
 import PRPilotModels
@@ -64,6 +65,12 @@ final class WebViewCache {
     /// Per-item load progress, driving the GitHub pane's progress bar.
     private(set) var loadStates: [String: WebLoadState] = [:]
     private let configuration: WKWebViewConfiguration
+    /// Item ids, most recently activated first. Drives eviction.
+    private var activationOrder: [String] = []
+    /// Mirrors `Settings.maxLiveWebViews`. `ContentView` keeps it in step.
+    var cap: Int = 8
+    /// The selected item is never evicted. `ContentView` keeps it in step.
+    var selectedID: String?
 
     init() {
         let config = WKWebViewConfiguration()
@@ -132,6 +139,8 @@ final class WebViewCache {
     /// isn't already loaded or loading — which also recovers a view whose earlier
     /// load failed or whose web content process was killed.
     func activate(for review: WorkItem) {
+        recordActivation(review.id)
+        enforceBudget()
         guard let url = review.url, let webView = webViews[review.id] else { return }
         if webView.isLoading { return }
         // All webviews share the persistent .default() cookie store, so a session
@@ -141,6 +150,22 @@ final class WebViewCache {
         let landedOnLogin = Self.isGitHubAuthPage(webView.url)
         if trackers[review.id]?.didFinishLoad == true && !landedOnLogin { return }
         webView.load(URLRequest(url: url))
+    }
+
+    private func recordActivation(_ id: String) {
+        activationOrder.removeAll { $0 == id }
+        activationOrder.insert(id, at: 0)
+    }
+
+    private func enforceBudget() {
+        let victims = WebViewBudget.evictions(
+            activationOrder: activationOrder,
+            cap: cap,
+            selectedID: selectedID
+        )
+        for id in victims {
+            remove(reviewID: id)
+        }
     }
 
     /// Safety net for a view that is on screen with nothing loaded at all. Called
@@ -166,6 +191,7 @@ final class WebViewCache {
     }
 
     func remove(reviewID: String) {
+        activationOrder.removeAll { $0 == reviewID }
         trackers.removeValue(forKey: reviewID)?.progressObservation?.invalidate()
         loadStates.removeValue(forKey: reviewID)
         if let webView = webViews.removeValue(forKey: reviewID) {
@@ -175,6 +201,7 @@ final class WebViewCache {
     }
 
     func removeAll() {
+        activationOrder.removeAll()
         for tracker in trackers.values { tracker.progressObservation?.invalidate() }
         trackers.removeAll()
         loadStates.removeAll()

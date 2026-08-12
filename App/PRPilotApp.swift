@@ -37,9 +37,7 @@ struct PRPilotApp: App {
                     await created.load()
                     created.startDiscoveryPolling()
                     created.prewarmClaude()
-                    for review in created.reviews where !review.disabled {
-                        _ = webViewCache.ensure(for: review)
-                    }
+                    webViewCache.cap = created.settings.maxLiveWebViews
                     model = created
                     appDelegate.model = created
                 } catch {
