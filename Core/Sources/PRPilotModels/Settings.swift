@@ -28,6 +28,11 @@ public struct Settings: Codable, Sendable, Equatable {
     public var reviewPromptTemplate: String
     /// First prompt of an issue session.
     public var issuePromptTemplate: String
+    /// Live `claude` child processes allowed at once. Each costs roughly 550 MB, so an
+    /// uncapped one-per-item spread exhausts swap on a large work list.
+    public var maxLiveClaudeSessions: Int
+    /// Live web views allowed at once. Each holds its own WebContent process.
+    public var maxLiveWebViews: Int
 
     private enum LegacyKeys: String, CodingKey {
         case discoveryQueries
@@ -58,7 +63,9 @@ public struct Settings: Codable, Sendable, Equatable {
         issuesCollapsed: Bool = false,
         appearance: Appearance = .system,
         reviewPromptTemplate: String = Settings.defaultReviewPromptTemplate,
-        issuePromptTemplate: String = Settings.defaultIssuePromptTemplate
+        issuePromptTemplate: String = Settings.defaultIssuePromptTemplate,
+        maxLiveClaudeSessions: Int = 5,
+        maxLiveWebViews: Int = 8
     ) {
         self.managedRoot = managedRoot
         self.reviewRequestQueries = reviewRequestQueries
@@ -84,6 +91,8 @@ public struct Settings: Codable, Sendable, Equatable {
         self.appearance = appearance
         self.reviewPromptTemplate = reviewPromptTemplate
         self.issuePromptTemplate = issuePromptTemplate
+        self.maxLiveClaudeSessions = maxLiveClaudeSessions
+        self.maxLiveWebViews = maxLiveWebViews
     }
 
     public init(from decoder: Decoder) throws {
@@ -127,6 +136,8 @@ public struct Settings: Codable, Sendable, Equatable {
             ?? Settings.defaultReviewPromptTemplate
         issuePromptTemplate = try c.decodeIfPresent(String.self, forKey: .issuePromptTemplate)
             ?? Settings.defaultIssuePromptTemplate
+        maxLiveClaudeSessions = try c.decodeIfPresent(Int.self, forKey: .maxLiveClaudeSessions) ?? 5
+        maxLiveWebViews = try c.decodeIfPresent(Int.self, forKey: .maxLiveWebViews) ?? 8
 
         if let rrq = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .reviewRequestQueries) {
             reviewRequestQueries = rrq

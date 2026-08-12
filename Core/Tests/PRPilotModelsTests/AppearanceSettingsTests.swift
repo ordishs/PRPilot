@@ -43,6 +43,44 @@ import Foundation
     #expect(s.appearance == .dark)
 }
 
+@Test func settingsDefaultToDocumentedCaps() {
+    #expect(Settings.default.maxLiveClaudeSessions == 5)
+    #expect(Settings.default.maxLiveWebViews == 8)
+}
+
+@Test func settingsWithoutCapsDecodeToDefaults() throws {
+    let json = """
+    {
+      "managedRoot": "/tmp/prpilot",
+      "reviewRequestQueries": [],
+      "myPRQueries": [],
+      "pollIntervalSeconds": 120,
+      "notificationsEnabled": true,
+      "diffMode": "unified",
+      "diffIgnoreWhitespace": false
+    }
+    """
+    let decoded = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
+
+    #expect(decoded.maxLiveClaudeSessions == 5)
+    #expect(decoded.maxLiveWebViews == 8)
+}
+
+@Test func settingsRoundTripPreservesCaps() throws {
+    var settings = Settings.default
+    settings.maxLiveClaudeSessions = 2
+    settings.maxLiveWebViews = 3
+
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let decoded = try decoder.decode(Settings.self, from: encoder.encode(settings))
+
+    #expect(decoded.maxLiveClaudeSessions == 2)
+    #expect(decoded.maxLiveWebViews == 3)
+}
+
 @Test func appearanceCasesHaveDisplayNames() {
     #expect(Appearance.system.displayName == "System")
     #expect(Appearance.light.displayName == "Light")
