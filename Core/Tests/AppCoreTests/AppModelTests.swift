@@ -2455,6 +2455,49 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     return clone
 }
 
+@Test @MainActor func refreshPersistsMyReviewStateAndDate() async throws {
+    let snapshotJSON = """
+    {"data":{"repository":{"pullRequest":{
+      "state":"OPEN","isDraft":false,"reviewDecision":null,"mergeStateStatus":"CLEAN",
+      "author":{"login":"icellan"},
+      "commits":{"nodes":[]},
+      "reviews":{"nodes":[
+        {"author":{"login":"ordishs"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-04T10:00:00Z"}
+      ]},
+      "reviewThreads":{"nodes":[]},
+      "timelineItems":{"nodes":[]}
+    }}}}
+    """
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let item = cappedReview("rev", number: 1, openedMinutesAgo: 1)
+    try await store.upsertItem(item)
+
+    let client = GitHubClient(
+        runner: StubRunner(result: CommandResult(exitCode: 0, standardOutput: snapshotJSON, standardError: "")),
+        ghPath: "gh"
+    )
+    let model = AppModel(
+        store: store,
+        client: client,
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    model.setCurrentLoginForTesting("ordishs")
+
+    await model.refreshReviewState(for: item.id)
+
+    let stored = await store.item(id: item.id)
+
+    #expect(model.reviews.first { $0.id == item.id }?.myReviewState == .changesRequested)
+    #expect(stored?.myReviewState == .changesRequested)
+    #expect(stored?.myLastReviewAt == ISO8601DateFormatter().date(from: "2026-08-04T10:00:00Z"))
+}
+
 @Test @MainActor func pruneRemovesOnlyTheOrphanedWorktrees() async throws {
     let managedRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("wtprune-\(UUID().uuidString)", isDirectory: true)

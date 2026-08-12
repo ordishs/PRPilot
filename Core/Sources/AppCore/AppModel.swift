@@ -825,6 +825,10 @@ public final class AppModel {
         prStatuses[id] = status
     }
 
+    func setCurrentLoginForTesting(_ login: String) {
+        currentLogin = login
+    }
+
     public func terminateAllClaudeSessions() {
         tickTask?.cancel()
         tickTask = nil
@@ -1014,9 +1018,14 @@ public final class AppModel {
         guard let snapshot = try? await client.fetchPRSnapshot(for: ref, login: login) else { return }
 
         if var current = reviews.first(where: { $0.id == id }),
-           current.approvedByMe != snapshot.approvedByMe || current.prState != snapshot.prState {
+           current.approvedByMe != snapshot.approvedByMe
+            || current.prState != snapshot.prState
+            || current.myReviewState != snapshot.myReviewState
+            || current.myLastReviewAt != snapshot.myLastReviewAt {
             current.approvedByMe = snapshot.approvedByMe
             current.prState = snapshot.prState
+            current.myReviewState = snapshot.myReviewState
+            current.myLastReviewAt = snapshot.myLastReviewAt
             do {
                 try await store.upsertItem(current)
                 reviews = await store.allItems()
