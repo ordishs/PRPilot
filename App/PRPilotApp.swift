@@ -46,6 +46,14 @@ struct PRPilotApp: App {
             }
         }
         .commands {
+            CommandGroup(after: .toolbar) {
+                Button("Refresh All") {
+                    guard let model else { return }
+                    Task { await model.refreshAllNow() }
+                }
+                .keyboardShortcut("R", modifiers: [.command, .shift])
+                .disabled(model == nil)
+            }
             CommandMenu("Repositories") {
                 Button("Manage Local Clones…") {
                     showingManage = true
