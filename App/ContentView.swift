@@ -378,7 +378,7 @@ struct ContentView: View {
         if review.category(myLogin: model.currentLogin) == .issue {
             issueStatusBadge(for: review)
         } else {
-            switch review.sidebarStatus {
+            switch review.sidebarStatus(myLogin: model.currentLogin) {
             case .merged:
                 StateBadge(text: "Merged", color: .purple)
             case .closed:

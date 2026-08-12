@@ -4,11 +4,12 @@ import Foundation
 
 private func review(
     prState: PRState = .open,
+    authorLogin: String = "someone-else",
     lastOpenedAt: Date? = nil,
     claudeReviewedAt: Date? = nil,
-    approvedByMe: Bool = false
+    myReviewState: MyReviewState? = nil
 ) -> WorkItem {
-    WorkItem(
+    var item = WorkItem(
         title: "t",
         repoKey: "github.com/o/r",
         baseBranch: "main",
@@ -16,52 +17,96 @@ private func review(
         prRef: PRRef(
             owner: "o", repo: "r", number: 1,
             url: URL(string: "https://github.com/o/r/pull/1")!,
-            authorLogin: "a"
+            authorLogin: authorLogin
         ),
         prState: prState,
         origin: .added,
         addedAt: Date(timeIntervalSince1970: 0),
         lastOpenedAt: lastOpenedAt,
-        claudeReviewedAt: claudeReviewedAt,
-        approvedByMe: approvedByMe
+        claudeReviewedAt: claudeReviewedAt
     )
+    item.myReviewState = myReviewState
+    return item
 }
 
-private let opened = Date(timeIntervalSince1970: 100)
-private let claudeDone = Date(timeIntervalSince1970: 200)
+private let me = "ordishs"
 
 @Test func mergedBeatsEverything() {
-    #expect(review(prState: .merged, approvedByMe: true).sidebarStatus == .merged)
+    let item = review(prState: .merged, myReviewState: .approved)
+
+    #expect(item.sidebarStatus(myLogin: me) == .merged)
 }
 
 @Test func closedBeatsApproved() {
-    #expect(review(prState: .closed, approvedByMe: true).sidebarStatus == .closed)
+    let item = review(prState: .closed, myReviewState: .approved)
+
+    #expect(item.sidebarStatus(myLogin: me) == .closed)
 }
 
-@Test func approvedBeatsNew() {
-    #expect(review(lastOpenedAt: nil, approvedByMe: true).sidebarStatus == .approved)
+@Test func approvedBeatsReviewed() {
+    #expect(review(myReviewState: .approved).sidebarStatus(myLogin: me) == .approved)
 }
 
-@Test func unopenedIsNewEvenWhenClaudeReviewed() {
-    #expect(review(lastOpenedAt: nil, claudeReviewedAt: claudeDone).sidebarStatus == .new)
+@Test func aCommentedReviewIsReviewed() {
+    #expect(review(myReviewState: .commented).sidebarStatus(myLogin: me) == .reviewed)
 }
 
-@Test func openedAndClaudeReviewedIsReviewed() {
-    #expect(review(lastOpenedAt: opened, claudeReviewedAt: claudeDone).sidebarStatus == .reviewed)
+@Test func aChangeRequestIsReviewed() {
+    #expect(review(myReviewState: .changesRequested).sidebarStatus(myLogin: me) == .reviewed)
 }
 
-@Test func openedDraftWithoutReviewIsDraft() {
-    #expect(review(prState: .draft, lastOpenedAt: opened).sidebarStatus == .draft)
+/// The reported bug: clicking a row stamps lastOpenedAt, which used to clear NEW.
+@Test func openingTheRowDoesNotClearNew() {
+    let item = review(lastOpenedAt: Date(timeIntervalSince1970: 500))
+
+    #expect(item.sidebarStatus(myLogin: me) == .new)
 }
 
-@Test func unopenedDraftIsNew() {
-    #expect(review(prState: .draft, lastOpenedAt: nil).sidebarStatus == .new)
+/// The other half of the bug: a completed Claude turn used to read as REVIEWED.
+@Test func aCompletedClaudeReviewDoesNotMakeItReviewed() {
+    let item = review(
+        lastOpenedAt: Date(timeIntervalSince1970: 500),
+        claudeReviewedAt: Date(timeIntervalSince1970: 600)
+    )
+
+    #expect(item.sidebarStatus(myLogin: me) == .new)
 }
 
-@Test func openedNothingElseIsOpen() {
-    #expect(review(lastOpenedAt: opened).sidebarStatus == .open)
+@Test func approvalStaysApprovedAfterANewerClaudeReview() {
+    let item = review(
+        claudeReviewedAt: Date(timeIntervalSince1970: 9_000),
+        myReviewState: .approved
+    )
+
+    #expect(item.sidebarStatus(myLogin: me) == .approved)
+}
+
+@Test func anUnreviewedDraftIsDraft() {
+    #expect(review(prState: .draft).sidebarStatus(myLogin: me) == .draft)
 }
 
 @Test func approvedDraftIsApproved() {
-    #expect(review(prState: .draft, lastOpenedAt: opened, approvedByMe: true).sidebarStatus == .approved)
+    #expect(review(prState: .draft, myReviewState: .approved).sidebarStatus(myLogin: me) == .approved)
+}
+
+@Test func aNeverReviewedRequestIsNewIndefinitely() {
+    #expect(review().sidebarStatus(myLogin: me) == .new)
+}
+
+@Test func myOwnOpenPRIsOpenNotNew() {
+    let item = review(authorLogin: me)
+
+    #expect(item.sidebarStatus(myLogin: me) == .open)
+}
+
+@Test func myOwnDraftPRIsDraft() {
+    let item = review(prState: .draft, authorLogin: me)
+
+    #expect(item.sidebarStatus(myLogin: me) == .draft)
+}
+
+@Test func myOwnPRIgnoresMyReviewState() {
+    let item = review(authorLogin: me, myReviewState: .approved)
+
+    #expect(item.sidebarStatus(myLogin: me) == .open)
 }
