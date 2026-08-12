@@ -379,6 +379,10 @@ struct ContentView: View {
                 if review.awaitsMyResponse(myLogin: model.currentLogin) {
                     StateBadge(text: "Waiting", color: .yellow)
                 }
+
+                if model.queuedReviewIDs.contains(review.id) {
+                    StateBadge(text: "Queued", color: .gray)
+                }
             }
 
             if let status = model.prStatuses[review.id] {

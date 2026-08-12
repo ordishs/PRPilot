@@ -80,7 +80,7 @@ private struct DiscoverySettingsTab: View {
         Form {
             Section("Auto load") {
                 Toggle("Automatically start a Claude review for every PR", isOn: $autoLoad)
-                Text("Reviews each PR at least once: resumes its session, or starts a fresh review for a new one. Runs at launch and when a PR is added (manually or via discovery). Repos without a local clone are reviewed when first opened.")
+                Text("Reviews every PR at least once, up to the live session limit at a time. Items above the limit wait their turn and show a Queued badge; a finished review releases its slot to the next in line. Repos without a local clone are reviewed when first opened.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
