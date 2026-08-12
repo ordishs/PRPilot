@@ -139,3 +139,41 @@ private func at(_ seconds: TimeInterval) -> Date {
     #expect(item.sidebarStatus(myLogin: "ordishs") == .approved)
     #expect(item.awaitsMyResponse(myLogin: "ordishs") == true)
 }
+
+@Test func aHandClearSilencesTheCurrentClaudeOutput() {
+    let waiting = isAwaitingMyResponse(
+        category: .reviewRequest,
+        prState: .open,
+        claudeLastCompletedAt: at(200),
+        myLastReviewAt: nil,
+        waitingSeenAt: at(200)
+    )
+
+    #expect(waiting == false)
+}
+
+@Test func aNewerClaudeTurnReWaitsAfterAHandClear() {
+    let waiting = isAwaitingMyResponse(
+        category: .reviewRequest,
+        prState: .open,
+        claudeLastCompletedAt: at(300),
+        myLastReviewAt: nil,
+        waitingSeenAt: at(200)
+    )
+
+    #expect(waiting == true)
+}
+
+/// A poll rewrites `myLastReviewAt` from GitHub. An older value from that poll must not
+/// undo a hand clear, so the newer of the two watermarks wins.
+@Test func anOlderReviewStampDoesNotUndoAHandClear() {
+    let waiting = isAwaitingMyResponse(
+        category: .reviewRequest,
+        prState: .open,
+        claudeLastCompletedAt: at(200),
+        myLastReviewAt: at(50),
+        waitingSeenAt: at(200)
+    )
+
+    #expect(waiting == false)
+}

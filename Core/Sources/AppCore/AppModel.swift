@@ -995,6 +995,7 @@ public final class AppModel {
         review.claudeSessionID = nil
         review.claudeReviewedAt = nil
         review.claudeLastCompletedAt = nil
+        review.waitingSeenAt = nil
         do {
             try await store.upsertItem(review)
             reviews = await store.allItems()
@@ -1308,6 +1309,20 @@ public final class AppModel {
         guard var review = reviews.first(where: { $0.id == id }),
               let updatedAt = prStatuses[id]?.authorUpdatedAt else { return }
         review.authorUpdateSeenAt = updatedAt
+        do {
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    /// Clears the "Waiting" chip by hand. Records the timestamp of the Claude turn the user
+    /// waves off, not the wall clock, so the next completed turn raises the chip again.
+    public func clearWaiting(id: String) async {
+        guard var review = reviews.first(where: { $0.id == id }),
+              let completedAt = review.claudeLastCompletedAt else { return }
+        review.waitingSeenAt = completedAt
         do {
             try await store.upsertItem(review)
             reviews = await store.allItems()

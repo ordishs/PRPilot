@@ -39,13 +39,17 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
     /// and then frozen, this updates every time, so the Waiting chip can return after the
     /// user responds and Claude runs again.
     public var claudeLastCompletedAt: Date?
+    /// Claude output the user has waved off by hand, so the Waiting chip stays off until
+    /// Claude completes a newer turn. Kept apart from `myLastReviewAt`, which every poll
+    /// overwrites from GitHub.
+    public var waitingSeenAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case id, title, repoKey, baseBranch, headBranch, worktreePath, prRef, prState, issueRef
         case origin, closingIssueNumber, notes, claudeFlags, claudeSessionID, autoReview
         case addedAt, lastOpenedAt, disabled, viewedFiles, claudeReviewedAt, approvedByMe, manualIssueStatus
         case label, lastPane, authorUpdateSeenAt
-        case myReviewState, myLastReviewAt, claudeLastCompletedAt
+        case myReviewState, myLastReviewAt, claudeLastCompletedAt, waitingSeenAt
     }
 
     private enum LegacyKeys: String, CodingKey {
@@ -77,7 +81,8 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         manualIssueStatus: IssueWorkStatus? = nil,
         label: String? = nil,
         lastPane: PaneSelection? = nil,
-        authorUpdateSeenAt: Date? = nil
+        authorUpdateSeenAt: Date? = nil,
+        waitingSeenAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -104,6 +109,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.label = label
         self.lastPane = lastPane
         self.authorUpdateSeenAt = authorUpdateSeenAt
+        self.waitingSeenAt = waitingSeenAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -131,6 +137,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.myReviewState = try c.decodeIfPresent(MyReviewState.self, forKey: .myReviewState)
         self.myLastReviewAt = try c.decodeIfPresent(Date.self, forKey: .myLastReviewAt)
         self.claudeLastCompletedAt = try c.decodeIfPresent(Date.self, forKey: .claudeLastCompletedAt)
+        self.waitingSeenAt = try c.decodeIfPresent(Date.self, forKey: .waitingSeenAt)
 
         if c.contains(.repoKey) {
             self.id = try c.decode(String.self, forKey: .id)

@@ -2620,6 +2620,7 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     var item = cappedReview("clear", number: 1, openedMinutesAgo: 1)
     item.claudeReviewedAt = Date(timeIntervalSince1970: 1_000)
     item.claudeLastCompletedAt = Date(timeIntervalSince1970: 2_000)
+    item.waitingSeenAt = Date(timeIntervalSince1970: 2_000)
     try await store.upsertItem(item)
 
     let model = cappedModel(store: store)
@@ -2631,6 +2632,39 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
 
     #expect(stored?.claudeReviewedAt == nil)
     #expect(stored?.claudeLastCompletedAt == nil)
+    #expect(stored?.waitingSeenAt == nil)
+}
+
+@Test @MainActor func clearWaitingStampsTheCurrentClaudeCompletion() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var item = cappedReview("waiting", number: 1, openedMinutesAgo: 1)
+    item.claudeLastCompletedAt = Date(timeIntervalSince1970: 2_000)
+    try await store.upsertItem(item)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    await model.clearWaiting(id: item.id)
+
+    let stored = await store.item(id: item.id)
+
+    #expect(stored?.waitingSeenAt == Date(timeIntervalSince1970: 2_000))
+    #expect(stored?.claudeLastCompletedAt == Date(timeIntervalSince1970: 2_000))
+}
+
+@Test @MainActor func clearWaitingDoesNothingWithoutACompletedTurn() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let item = cappedReview("waiting-none", number: 2, openedMinutesAgo: 1)
+    try await store.upsertItem(item)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    await model.clearWaiting(id: item.id)
+
+    let stored = await store.item(id: item.id)
+
+    #expect(stored?.waitingSeenAt == nil)
 }
 
 @Test @MainActor func refreshPersistsMyReviewStateAndDate() async throws {

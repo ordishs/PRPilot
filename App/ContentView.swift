@@ -281,6 +281,13 @@ struct ContentView: View {
                     Label("Clear Label", systemImage: "bookmark.slash")
                 }
             }
+            if review.awaitsMyResponse(myLogin: model.currentLogin) {
+                Button {
+                    Task { await model.clearWaiting(id: review.id) }
+                } label: {
+                    Label("Clear Waiting", systemImage: "clock.badge.checkmark")
+                }
+            }
             Divider()
             if review.category(myLogin: model.currentLogin) == .issue {
                 Menu {

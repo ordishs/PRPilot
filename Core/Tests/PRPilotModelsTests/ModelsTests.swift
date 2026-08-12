@@ -54,13 +54,15 @@ import Foundation
         origin: .added,
         addedAt: Date(timeIntervalSince1970: 1_700_000_000),
         claudeReviewedAt: Date(timeIntervalSince1970: 1_700_000_500),
-        approvedByMe: true
+        approvedByMe: true,
+        waitingSeenAt: Date(timeIntervalSince1970: 1_700_000_600)
     )
     let data = try JSONEncoder().encode(workItem)
     let decoded = try JSONDecoder().decode(WorkItem.self, from: data)
     #expect(decoded == workItem)
     #expect(decoded.claudeReviewedAt == Date(timeIntervalSince1970: 1_700_000_500))
     #expect(decoded.approvedByMe == true)
+    #expect(decoded.waitingSeenAt == Date(timeIntervalSince1970: 1_700_000_600))
 }
 
 @Test func reviewDecodesLegacyJSONWithoutNewFields() throws {
