@@ -1,3 +1,5 @@
+import Foundation
+
 public enum SidebarStatus: Sendable, Equatable {
     case merged
     case closed
@@ -40,12 +42,42 @@ public func resolveSidebarStatus(
     return .new
 }
 
+/// Whether Claude has produced output on a review request that the user has not answered.
+///
+/// Independent of `resolveSidebarStatus` on purpose: "did I approve this" and "is there
+/// output I have not read" are different questions, and a PR can be both approved and
+/// waiting. Author activity is not considered here — the "Updated" chip already reports it.
+public func isAwaitingMyResponse(
+    category: WorkItemCategory,
+    prState: PRState?,
+    claudeLastCompletedAt: Date?,
+    myLastReviewAt: Date?
+) -> Bool {
+    guard category == .reviewRequest else { return false }
+    guard prState != .merged, prState != .closed else { return false }
+    guard let claudeLastCompletedAt else { return false }
+    guard let myLastReviewAt else { return true }
+    return claudeLastCompletedAt > myLastReviewAt
+}
+
 extension WorkItem {
     public func sidebarStatus(myLogin: String?) -> SidebarStatus {
         resolveSidebarStatus(
             category: category(myLogin: myLogin),
             prState: prState,
             myReviewState: myReviewState
+        )
+    }
+
+    /// Named differently from the free function on purpose. `Schema.swift` declares a
+    /// `PRPilotModels` enum that shadows the module name, so the usual
+    /// `PRPilotModels.isAwaitingMyResponse(...)` disambiguation does not compile here.
+    public func awaitsMyResponse(myLogin: String?) -> Bool {
+        isAwaitingMyResponse(
+            category: category(myLogin: myLogin),
+            prState: prState,
+            claudeLastCompletedAt: claudeLastCompletedAt,
+            myLastReviewAt: myLastReviewAt
         )
     }
 }
