@@ -394,6 +394,10 @@ struct ContentView: View {
             case .open:
                 EmptyView()
             }
+
+            if review.awaitsMyResponse(myLogin: model.currentLogin) {
+                StateBadge(text: "Waiting", color: .yellow)
+            }
         }
     }
 
