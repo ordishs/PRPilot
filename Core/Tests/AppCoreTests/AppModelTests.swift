@@ -2557,6 +2557,63 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     #expect(repaired == [expected])
 }
 
+/// A half-finished migration must be recoverable. If the directory move landed but the
+/// path rewrite did not, the next run has no legacy directory to key off, so a guard on
+/// that alone would strand every stale path forever.
+@Test @MainActor func migrationRewritesStalePathsAfterTheDirectoryAlreadyMoved() async throws {
+    let managedRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("wtresume-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: managedRoot.appendingPathComponent("worktrees.noindex/owner-repo-pr1"),
+        withIntermediateDirectories: true
+    )
+    defer { try? FileManager.default.removeItem(at: managedRoot) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var item = cappedReview("stale", number: 1, openedMinutesAgo: 1)
+    item.worktreePath = managedRoot.appendingPathComponent("worktrees/owner-repo-pr1").path
+    try await store.upsertItem(item)
+    var settings = await store.settings()
+    settings.managedRoot = managedRoot.path
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    await model.migrateWorktreeRoot()
+
+    let expected = managedRoot.appendingPathComponent("worktrees.noindex/owner-repo-pr1").path
+    let stored = await store.item(id: item.id)?.worktreePath
+
+    #expect(stored == expected)
+    #expect(model.reviews.first { $0.id == item.id }?.worktreePath == expected)
+}
+
+/// `load()` must never touch the filesystem outside the store. A test that does not
+/// override `managedRoot` inherits `Settings.default`, which points at the user's real
+/// Application Support directory — running the suite once moved 11 GB of live checkouts.
+@Test @MainActor func loadDoesNotMigrateTheWorktreeRoot() async throws {
+    let managedRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("wtnoload-\(UUID().uuidString)", isDirectory: true)
+    let legacy = managedRoot.appendingPathComponent("worktrees/owner-repo-pr1")
+    try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: managedRoot) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var item = cappedReview("noload", number: 1, openedMinutesAgo: 1)
+    item.worktreePath = legacy.path
+    try await store.upsertItem(item)
+    var settings = await store.settings()
+    settings.managedRoot = managedRoot.path
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+
+    #expect(FileManager.default.fileExists(atPath: legacy.path))
+    #expect(!FileManager.default.fileExists(atPath: managedRoot.appendingPathComponent("worktrees.noindex").path))
+}
+
 @Test @MainActor func migrationIsANoOpOnASecondRun() async throws {
     let managedRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("wtmigrate2-\(UUID().uuidString)", isDirectory: true)
