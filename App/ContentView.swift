@@ -240,12 +240,11 @@ struct ContentView: View {
     private func sidebarRow(for review: WorkItem) -> some View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(review.number.map { "#\($0) · \(review.title)" } ?? review.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .lineLimit(1)
-                    statusBadge(for: review)
-                }
+                Text(review.number.map { "#\($0) · \(review.title)" } ?? review.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .lineLimit(1)
+
+                badgeLine(for: review)
                 if let label = review.label {
                     HStack(spacing: 3) {
                         Image(systemName: "bookmark.fill").font(.system(size: 9))
@@ -260,25 +259,6 @@ struct ContentView: View {
                 Text("\(review.owner)/\(review.repo) · \(review.author ?? "")")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
-                if let status = model.prStatuses[review.id] {
-                    HStack(spacing: 4) {
-                        switch status.ci {
-                        case .passing: StateBadge(text: "✓ CI", color: .green)
-                        case .failing: StateBadge(text: "✗ CI", color: .red)
-                        case .pending: StateBadge(text: "◷ CI", color: .orange)
-                        case .none: EmptyView()
-                        }
-                        if status.isBehind { StateBadge(text: "behind", color: .orange) }
-                        if status.readiness == .changesRequested { StateBadge(text: "changes", color: .red) }
-                        if model.hasUnseenAuthorUpdate(review) { StateBadge(text: "Updated", color: .teal) }
-                    }
-                }
-                if let push = model.pushability[review.id], push.ahead > 0 || push.behind > 0 {
-                    HStack(spacing: 4) {
-                        if push.ahead > 0 { StateBadge(text: "↑\(push.ahead)", color: .green) }
-                        if push.behind > 0 { StateBadge(text: "↓\(push.behind)", color: .orange) }
-                    }
-                }
                 Text(relativeDateLabel(for: review.addedAt))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -374,29 +354,48 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func statusBadge(for review: WorkItem) -> some View {
-        if review.category(myLogin: model.currentLogin) == .issue {
-            issueStatusBadge(for: review)
-        } else {
-            switch review.sidebarStatus(myLogin: model.currentLogin) {
-            case .merged:
-                StateBadge(text: "Merged", color: .purple)
-            case .closed:
-                StateBadge(text: "Closed", color: .red)
-            case .approved:
-                StateBadge(text: "Approved", color: .green)
-            case .new:
-                StateBadge(text: "New", color: .orange)
-            case .reviewed:
-                StateBadge(text: "Reviewed", color: .blue)
-            case .draft:
-                StateBadge(text: "Draft", color: .gray)
-            case .open:
-                EmptyView()
+    private func badgeLine(for review: WorkItem) -> some View {
+        WrappingHStack(spacing: 4, lineSpacing: 4) {
+            if review.category(myLogin: model.currentLogin) == .issue {
+                issueStatusBadge(for: review)
+            } else {
+                switch review.sidebarStatus(myLogin: model.currentLogin) {
+                case .merged:
+                    StateBadge(text: "Merged", color: .purple)
+                case .closed:
+                    StateBadge(text: "Closed", color: .red)
+                case .approved:
+                    StateBadge(text: "Approved", color: .green)
+                case .new:
+                    StateBadge(text: "New", color: .orange)
+                case .reviewed:
+                    StateBadge(text: "Reviewed", color: .blue)
+                case .draft:
+                    StateBadge(text: "Draft", color: .gray)
+                case .open:
+                    EmptyView()
+                }
+
+                if review.awaitsMyResponse(myLogin: model.currentLogin) {
+                    StateBadge(text: "Waiting", color: .yellow)
+                }
             }
 
-            if review.awaitsMyResponse(myLogin: model.currentLogin) {
-                StateBadge(text: "Waiting", color: .yellow)
+            if let status = model.prStatuses[review.id] {
+                switch status.ci {
+                case .passing: StateBadge(text: "✓ CI", color: .green)
+                case .failing: StateBadge(text: "✗ CI", color: .red)
+                case .pending: StateBadge(text: "◷ CI", color: .orange)
+                case .none: EmptyView()
+                }
+                if status.isBehind { StateBadge(text: "behind", color: .orange) }
+                if status.readiness == .changesRequested { StateBadge(text: "changes", color: .red) }
+                if model.hasUnseenAuthorUpdate(review) { StateBadge(text: "Updated", color: .teal) }
+            }
+
+            if let push = model.pushability[review.id] {
+                if push.ahead > 0 { StateBadge(text: "↑\(push.ahead)", color: .green) }
+                if push.behind > 0 { StateBadge(text: "↓\(push.behind)", color: .orange) }
             }
         }
     }
