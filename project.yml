@@ -22,6 +22,8 @@ targets:
         product: DiffKit
       - package: PRPilotCore
         product: ClaudeSessionKit
+      - package: PRPilotCore
+        product: CommandSupport
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ordishs.PRPilot

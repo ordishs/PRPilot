@@ -3,6 +3,7 @@ import SwiftUI
 import PRPilotModels
 import AppCore
 import ClaudeSessionKit
+import CommandSupport
 
 struct ContentView: View {
     @Bindable var model: AppModel
@@ -325,7 +326,7 @@ struct ContentView: View {
             Button {
                 if let worktreePath = review.worktreePath {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(worktreePath, forType: .string)
+                    NSPasteboard.general.setString(ShellQuoting.quote(worktreePath), forType: .string)
                 }
             } label: {
                 Label("Copy Worktree Path", systemImage: "folder")
