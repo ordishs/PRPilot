@@ -585,27 +585,31 @@ private struct StateBadge: View {
     }
 }
 
+/// Bridges `StatusDotView` into SwiftUI. The pulse lives in Core Animation, so a working
+/// session no longer holds the sidebar in a per-frame render and layout cycle.
+private struct PulsingStatusDot: NSViewRepresentable {
+    let color: Color
+    let isPulsing: Bool
+
+    func makeNSView(context: Context) -> StatusDotView {
+        let view = StatusDotView()
+        view.dotColor = NSColor(color)
+        view.isPulsing = isPulsing
+        return view
+    }
+
+    func updateNSView(_ view: StatusDotView, context: Context) {
+        view.dotColor = NSColor(color)
+        view.isPulsing = isPulsing
+    }
+}
+
 private struct StatusDot: View {
     let status: ClaudeStatus?
-    @State private var pulse = false
 
     var body: some View {
-        Circle()
-            .fill(color)
+        PulsingStatusDot(color: color, isPulsing: isWorking)
             .frame(width: 8, height: 8)
-            .opacity(isWorking && pulse ? 0.3 : 1.0)
-            .onAppear {
-                if isWorking {
-                    withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { pulse = true }
-                }
-            }
-            .onChange(of: isWorking) { _, working in
-                if working {
-                    withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { pulse = true }
-                } else {
-                    withAnimation(.default) { pulse = false }
-                }
-            }
     }
 
     private var isWorking: Bool { status == .working }
