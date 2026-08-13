@@ -3267,3 +3267,114 @@ private func agentSwitchModel(store: ReviewStore) -> AppModel {
     #expect(cleared?.claudeSessionID != "claude-session")
     #expect(cleared?.piSessionID == "pi-session")
 }
+
+/// Quitting must not leave agent processes behind, and the window that reports the wait needs
+/// something to report. `/usr/bin/yes` never exits on its own, so the only thing that can stop
+/// these agents is the shutdown itself.
+@Test @MainActor func shutdownStopsEveryAgentProcessBeforeItReturns() async throws {
+    let cwd = FileManager.default.temporaryDirectory
+        .appendingPathComponent("shutdownwt-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: cwd) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let first = cappedReview("first", number: 1, openedMinutesAgo: 1)
+    let second = cappedReview("second", number: 2, openedMinutesAgo: 2)
+    for item in [first, second] { try await store.upsertItem(item) }
+
+    var provider = StubWorktreeProvider()
+    provider.result = WorktreeReady(clonePath: cwd.path, worktreePath: cwd.path, remoteName: "origin")
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: provider,
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/yes",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    for item in [first, second] { await model.ensureAgentSession(for: item) }
+
+    let pids = model.claudeSessions.values.map(\.terminalView.process.shellPid)
+    #expect(pids.count == 2)
+    #expect(pids.allSatisfy { $0 > 0 })
+    try await Task.sleep(nanoseconds: 300_000_000)
+    #expect(pids.allSatisfy { kill($0, 0) == 0 })
+
+    await model.shutdownAgentSessions()
+
+    #expect(pids.allSatisfy { kill($0, 0) != 0 })
+    #expect(model.claudeSessions.isEmpty)
+}
+
+/// The quit window reads this state. It has to exist before the first suspension point, or the
+/// window opens on an empty model and shows nothing while the agents are still dying.
+@Test @MainActor func shutdownPublishesProgressBeforeItAwaitsAnything() async throws {
+    let cwd = FileManager.default.temporaryDirectory
+        .appendingPathComponent("shutdownwt-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: cwd) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let first = cappedReview("first", number: 1, openedMinutesAgo: 1)
+    let second = cappedReview("second", number: 2, openedMinutesAgo: 2)
+    for item in [first, second] { try await store.upsertItem(item) }
+
+    var provider = StubWorktreeProvider()
+    provider.result = WorktreeReady(clonePath: cwd.path, worktreePath: cwd.path, remoteName: "origin")
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: provider,
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/yes",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    for item in [first, second] { await model.ensureAgentSession(for: item) }
+    #expect(model.shutdown == nil)
+
+    let progress = model.beginShutdown()
+
+    #expect(progress.total == 2)
+    #expect(progress.remaining == 2)
+    #expect(progress.isFinished == false)
+    #expect(model.shutdown === progress)
+    #expect(progress.stopping.sorted() == ["item first", "item second"])
+
+    await model.shutdownAgentSessions()
+
+    #expect(progress.remaining == 0)
+    #expect(progress.isFinished)
+    #expect(progress.fraction == 1)
+}
+
+/// `beginShutdown` names the agents so the window can list what it is waiting for, and the wait
+/// must clear every one of them even when the quit is driven straight from the async call.
+@Test @MainActor func shutdownWithoutABeginStillPublishesProgress() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let model = cappedModel(store: store)
+    await model.load()
+
+    await model.shutdownAgentSessions()
+
+    #expect(model.shutdown?.total == 0)
+    #expect(model.shutdown?.isFinished == true)
+}
+
+/// Quitting with nothing running must not put a window on screen at all.
+@Test @MainActor func shutdownReportsNothingToWaitForWhenNoAgentRuns() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let model = cappedModel(store: store)
+    await model.load()
+
+    #expect(model.hasLiveAgentSessions == false)
+
+    await model.shutdownAgentSessions()
+
+    #expect(model.claudeSessions.isEmpty)
+}

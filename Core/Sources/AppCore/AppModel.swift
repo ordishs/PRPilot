@@ -26,6 +26,9 @@ public final class AppModel {
     public private(set) var registeredRepos: [RegisteredRepo] = []
     public private(set) var claudeSessions: [String: AgentSession] = [:]
     public private(set) var claudePaneState: [String: ClaudePaneState] = [:]
+    /// Non-nil only while the app is quitting and waiting for agent processes to exit. The quit
+    /// window observes this; `nil` means no shutdown is in flight.
+    public private(set) var shutdown: ShutdownProgress?
     public private(set) var terminalIsDark: Bool = true
     /// The appearance each live session's `claude` process was launched under, so a
     /// background session can be relaunched on selection if it no longer matches.
@@ -927,6 +930,12 @@ public final class AppModel {
         discoveryTask = nil
         for session in claudeSessions.values { session.terminate() }
         for watcher in transcriptWatchers.values { watcher.stop() }
+        clearSessionState()
+    }
+
+    /// Drops everything keyed by session id. Shared by the fire-and-forget teardown and the
+    /// awaited shutdown, so the two cannot drift apart as new per-session state is added.
+    private func clearSessionState() {
         claudeSessions.removeAll()
         claudePaneState.removeAll()
         transcriptWatchers.removeAll()
@@ -939,6 +948,62 @@ public final class AppModel {
         lastEventWasTurnCompletion.removeAll()
         workflowPendingForSession.removeAll()
         notifiedAwaitingForSession.removeAll()
+    }
+
+    /// True while any agent is running, so the quit path can skip the window when there is
+    /// nothing to wait for.
+    public var hasLiveAgentSessions: Bool { !claudeSessions.isEmpty }
+
+    /// Publishes what the quit is about to wait for, and stops the background work that would
+    /// otherwise start new sessions while the shutdown runs.
+    ///
+    /// Separate from `shutdownAgentSessions` so the quit window has its contents before the first
+    /// suspension point. A window opened after the wait started would race it and could show an
+    /// empty list while agents are still dying.
+    @discardableResult
+    public func beginShutdown() -> ShutdownProgress {
+        if let shutdown { return shutdown }
+        tickTask?.cancel()
+        tickTask = nil
+        discoveryTask?.cancel()
+        discoveryTask = nil
+        for watcher in transcriptWatchers.values { watcher.stop() }
+
+        let progress = ShutdownProgress(titles: claudeSessions.keys.map { title(forSessionID: $0) })
+        shutdown = progress
+        return progress
+    }
+
+    /// Stops every agent and returns only once their processes are gone.
+    ///
+    /// `applicationWillTerminate` cannot do this: it is synchronous, and AppKit exits as soon as
+    /// it returns, so any detached task is lost. The quit path calls this instead, holds the quit
+    /// open with `.terminateLater`, and shows `shutdown` while it runs.
+    ///
+    /// Agents stop concurrently. Waiting for them one after another would multiply the timeout by
+    /// the number of open sessions.
+    public func shutdownAgentSessions() async {
+        let progress = shutdown ?? beginShutdown()
+        let running = claudeSessions.map { (id: $0.key, session: $0.value) }
+        let titles = running.map { title(forSessionID: $0.id) }
+
+        let stops = running.enumerated().map { offset, entry in
+            let session = entry.session
+            let title = titles[offset]
+            return Task { @MainActor in
+                await session.terminateAndWait()
+                progress.markStopped(title)
+            }
+        }
+        for stop in stops { await stop.value }
+
+        clearSessionState()
+    }
+
+    /// The label the quit window shows for one agent. Falls back to the session id so a session
+    /// whose work item has already gone still appears in the count.
+    private func title(forSessionID id: String) -> String {
+        reviews.first(where: { $0.id == id })?.title ?? id
     }
 
     public func prefetch(for review: WorkItem) {
