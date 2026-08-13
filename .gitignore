@@ -26,3 +26,6 @@ build/
 .env
 
 .worktrees/
+
+# Worktrees created inside the repo by agent sessions
+.claude/
