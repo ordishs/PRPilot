@@ -116,9 +116,25 @@ Consequences for the design:
 - `AgentBackend` gains `prependsExecutableDirectoryToPath: Bool` — `true` for pi, `false` for
   Claude Code. Making it unconditional would alter the PATH that Claude Code's own child
   processes see, and this design promises Claude Code stays bit-for-bit unchanged.
-- `settings.piPath` is effectively **required**, because `LoginShellResolver.resolve("pi")`
-  cannot find pi from a GUI-launched app. When resolution fails the pane must show the
-  existing unavailable state with pi-specific text naming **Settings ▸ Tools ▸ pi**.
+- `settings.piPath` follows the existing `ghPath` / `gitPath` / `claudePath` convention: blank
+  means auto-detect from the login PATH. It is simply worth setting more often, because the
+  same `.zshrc` problem defeats auto-detection.
+
+  The user can also fix it at the shell instead, which makes auto-detection work and lets the
+  setting stay empty. Verified on 2026-08-13 — moving the two nvm lines from `.zshrc` into
+  `.zprofile` resolves both `node` and `pi` in a stripped login shell:
+
+  ```sh
+  export NVM_DIR="$HOME/.nvm"
+  export PATH="$NVM_DIR/versions/node/$(cat "$NVM_DIR/alias/default" 2>/dev/null)/bin:$PATH"
+  ```
+
+  This does **not** remove the need for `prependsExecutableDirectoryToPath`. That covers a
+  machine whose shell has not been fixed, and it pins the `node` sibling of the exact `pi`
+  binary that was resolved rather than whatever `nvm alias default` says later.
+
+  When resolution does fail, the unavailable state names the likely cause — `which pi` working
+  in a terminal but not in the app — rather than only pointing at the setting.
 
 ### pi's stop reasons
 

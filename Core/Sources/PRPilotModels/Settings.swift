@@ -14,9 +14,13 @@ public struct Settings: Codable, Sendable, Equatable {
     public var claudeEnv: String
     /// Agent used by a work item that has made no explicit choice of its own.
     public var defaultAgent: AgentKind
-    /// Path to the `pi` executable. Effectively required to use pi at all: a GUI-launched
-    /// login shell has no nvm PATH, so `pi` cannot be resolved automatically the way `claude`
-    /// can. See the pi agent backend design doc.
+    /// Path to the `pi` executable. Nil means find it on the login PATH, the same convention as
+    /// `ghPath`, `gitPath` and `claudePath`.
+    ///
+    /// Worth setting more often than the others: pi is usually installed by a node version
+    /// manager, and those put their bin directory on PATH from the interactive startup file
+    /// (`.zshrc`), which a login shell never reads. Moving that line to `.zprofile` makes
+    /// auto-detection work and lets this stay empty.
     public var piPath: String?
     public var piLaunchArgs: String
     public var piEnv: String

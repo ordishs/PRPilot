@@ -558,14 +558,15 @@ public final class AppModel {
             Open a terminal and run `which \(name)`, then paste that path into Settings ▸ Tools ▸ \(name).
             """
         case .pi:
-            // pi is usually installed by a node version manager, which puts it on the PATH from
-            // `.zshrc`. A login shell never reads that file, so PR Pilot cannot resolve pi on
-            // its own and the explicit setting is the only reliable route.
+            // Worth naming the usual cause, because `which pi` in a terminal succeeds while the
+            // app's login shell fails: node version managers export their PATH from `.zshrc`,
+            // which a login shell never reads.
             return """
             Couldn't find the `\(name)` command on your login PATH.
 
-            pi is normally installed through a node version manager, which PR Pilot cannot see.
-            Open a terminal and run `which \(name)`, then paste that path into Settings ▸ Tools ▸ \(name).
+            If `which \(name)` works in your terminal but not here, your node version manager
+            sets PATH in ~/.zshrc, which login shells don't read. Move that line to ~/.zprofile,
+            or paste the path into Settings ▸ Claude ▸ Agent binaries ▸ \(name).
             """
         }
     }

@@ -219,39 +219,42 @@ private struct ToolsSettingsTab: View {
         .onChange(of: gitPath) { _, _ in commit() }
     }
 
-    @ViewBuilder
-    private func pathRow(label: String, binding: Binding<String>) -> some View {
-        HStack {
-            Text(label)
-                .frame(width: 60, alignment: .trailing)
-                .foregroundStyle(.secondary)
-                .font(.system(.body, design: .monospaced))
-            TextField("", text: binding)
-                .textFieldStyle(.roundedBorder)
-                .labelsHidden()
-                .multilineTextAlignment(.leading)
-            Button("Choose…") {
-                pickFile(into: binding)
-            }
-        }
-    }
-
-    private func pickFile(into binding: Binding<String>) {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.directoryURL = URL(fileURLWithPath: "/usr/local/bin")
-        if panel.runModal() == .OK, let url = panel.url {
-            binding.wrappedValue = url.path
-        }
-    }
-
     private func commit() {
         var updated = model.settings
         updated.ghPath = ghPath.isEmpty ? nil : ghPath
         updated.gitPath = gitPath.isEmpty ? nil : gitPath
         Task { await model.updateSettings(updated) }
+    }
+}
+
+/// One executable path row: monospaced label, field, and a file picker. Every binary the app
+/// shells out to uses this, so they all read and behave the same — blank means "find it on the
+/// login PATH".
+@ViewBuilder
+private func pathRow(label: String, binding: Binding<String>) -> some View {
+    HStack {
+        Text(label)
+            .frame(width: 60, alignment: .trailing)
+            .foregroundStyle(.secondary)
+            .font(.system(.body, design: .monospaced))
+        TextField("", text: binding)
+            .textFieldStyle(.roundedBorder)
+            .labelsHidden()
+            .multilineTextAlignment(.leading)
+        Button("Choose…") {
+            pickFile(into: binding)
+        }
+    }
+}
+
+private func pickFile(into binding: Binding<String>) {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = false
+    panel.canChooseFiles = true
+    panel.allowsMultipleSelection = false
+    panel.directoryURL = URL(fileURLWithPath: "/usr/local/bin")
+    if panel.runModal() == .OK, let url = panel.url {
+        binding.wrappedValue = url.path
     }
 }
 
@@ -297,14 +300,12 @@ private struct ClaudeSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Claude Code binary (uses PATH if not set)") {
-                HStack {
-                    TextField("", text: $claudePath)
-                        .textFieldStyle(.roundedBorder)
-                        .labelsHidden()
-                        .multilineTextAlignment(.leading)
-                    Button("Choose…") { pickClaude() }
-                }
+            Section("Agent binaries") {
+                pathRow(label: "claude", binding: $claudePath)
+                pathRow(label: "pi", binding: $piPath)
+                Text("Leave empty to auto-detect from your shell PATH — matches what `which claude` returns in your terminal.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Claude arguments") {
@@ -330,19 +331,6 @@ private struct ClaudeSettingsTab: View {
                     defaultValue: Settings.defaultIssuePromptTemplate
                 )
                 Text("The first prompt sent when a session starts. Placeholders: {url}, {number}, {owner}, {repo}, {title}. Add your own instructions on the lines below the command — they are passed through to the review. Leave a prompt empty to start the session without one.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("pi binary") {
-                HStack {
-                    TextField("", text: $piPath)
-                        .textFieldStyle(.roundedBorder)
-                        .labelsHidden()
-                        .multilineTextAlignment(.leading)
-                    Button("Choose…") { pick(into: $piPath) }
-                }
-                Text("Usually required, unlike the Claude Code path. pi is normally installed by a node version manager, which puts it on the PATH from your shell's interactive startup file — a file the app's login shell never reads. Run `which pi` in a terminal and paste the result here.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -434,21 +422,6 @@ private struct ClaudeSettingsTab: View {
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(Color.secondary.opacity(0.3))
                 )
-        }
-    }
-
-    private func pickClaude() {
-        pick(into: $claudePath)
-    }
-
-    private func pick(into path: Binding<String>) {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.directoryURL = URL(fileURLWithPath: "/usr/local/bin")
-        if panel.runModal() == .OK, let url = panel.url {
-            path.wrappedValue = url.path
         }
     }
 
