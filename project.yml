@@ -29,7 +29,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.ordishs.PRPilot
         PRODUCT_NAME: "PR Pilot"
         INFOPLIST_KEY_CFBundleDisplayName: "PR Pilot"
-        MARKETING_VERSION: "0.3.3"
+        MARKETING_VERSION: "0.3.4"
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "6.0"
