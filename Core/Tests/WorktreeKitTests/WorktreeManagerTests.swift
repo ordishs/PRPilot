@@ -771,6 +771,59 @@ private func makeLocalRepo(root: String, name: String) async throws -> String {
     #expect(fileManager.fileExists(atPath: wt + "/feat-y.txt"))
 }
 
+/// A user can delete a worktree directory by hand. Git keeps listing that path as `prunable`,
+/// and keeps the branch marked as checked out there. So the branch lookup must run after the
+/// prune, or prepare hands back a path that no longer exists.
+@Test func checkoutBranchWorktreeRecreatesAWorktreeDeletedFromDisk() async throws {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent("cbw-gone-\(UUID().uuidString)", isDirectory: true).path
+    try fileManager.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(atPath: root) }
+
+    let bareDir = root + "/bare.git"
+    try await git(["init", "--bare", "-b", "main", bareDir])
+
+    let clonePath = root + "/clone"
+    try await git(["clone", bareDir, clonePath])
+    try await git(["-C", clonePath, "config", "user.email", "test@example.com"])
+    try await git(["-C", clonePath, "config", "user.name", "Test User"])
+    try await git(["-C", clonePath, "config", "commit.gpgsign", "false"])
+    try "base\n".write(toFile: clonePath + "/README.md", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "base"])
+    try await git(["-C", clonePath, "push", "origin", "main"])
+
+    try await git(["-C", clonePath, "checkout", "-b", "feat/gone"])
+    try "gone\n".write(toFile: clonePath + "/gone.txt", atomically: true, encoding: .utf8)
+    try await git(["-C", clonePath, "add", "."])
+    try await git(["-C", clonePath, "commit", "-m", "gone-commit"])
+    let sha = (try await git(["-C", clonePath, "rev-parse", "HEAD"])).trimmingCharacters(in: .whitespacesAndNewlines)
+    try await git(["-C", clonePath, "push", "origin", "feat/gone"])
+    try await git(["-C", bareDir, "update-ref", "refs/pull/11/head", sha])
+    try await git(["-C", clonePath, "checkout", "main"])
+
+    let managedRoot = root + "/managed"
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: managedRoot)
+
+    let created = try await manager.checkoutBranchWorktree(
+        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/gone", number: 11, remoteName: "origin"
+    )
+    #expect(fileManager.fileExists(atPath: created + "/gone.txt"))
+
+    try fileManager.removeItem(atPath: created)
+
+    let recovered = try await manager.checkoutBranchWorktree(
+        clonePath: clonePath, owner: "o", repo: "r", branch: "feat/gone", number: 11, remoteName: "origin"
+    )
+
+    #expect(recovered == created)
+    #expect(fileManager.fileExists(atPath: recovered + "/gone.txt"))
+    let branch = try await manager.currentBranch(worktreePath: recovered)
+    #expect(branch == "feat/gone")
+    let listing = try await git(["-C", clonePath, "worktree", "list", "--porcelain"])
+    #expect(!listing.contains("prunable"))
+}
+
 @Test func isCleanReflectsWorktreeState() async throws {
     let fileManager = FileManager.default
     let root = fileManager.temporaryDirectory.appendingPathComponent("clean-\(UUID().uuidString)", isDirectory: true).path

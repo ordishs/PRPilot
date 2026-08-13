@@ -217,11 +217,13 @@ public struct WorktreeManager: Sendable {
         if FileManager.default.fileExists(atPath: worktreePath) {
             return try await adoptExistingDirectory(clonePath: clonePath, worktreePath: worktreePath, progress: progress)
         }
+        // Prune first. A worktree the user deleted by hand stays in the listing as `prunable`,
+        // and still holds the branch, so an un-pruned lookup returns a path that is gone.
+        try await runGit(["-C", clonePath, "worktree", "prune"])
         if let attached = try await worktreeForCheckedOutBranch(branch, clonePath: clonePath) {
             await progress("Branch already checked out — using \(attached)")
             return attached
         }
-        try await runGit(["-C", clonePath, "worktree", "prune"])
         // Fetch the PR head via refs/pull/N/head — always present on the base repo, even for
         // fork heads, unlike the branch name which may live on a remote we don't have.
         await progress("Fetching PR #\(number)…")
