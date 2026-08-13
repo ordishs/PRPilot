@@ -87,15 +87,23 @@ public final class AgentSession {
         start()
     }
 
+    /// Signals the agent's whole process group, not just the agent, and closes the pty.
+    ///
+    /// `forkpty` makes the child a session leader, so the agent and the MCP servers it spawns
+    /// share one process group. Signalling the agent alone leaves those servers alive, holding
+    /// the slave side open, so the master never reaches EOF. `LocalProcess.terminate()` then
+    /// closes the DispatchIO channel, which closes the master. Without both halves the pty
+    /// stays allocated for the life of the app, and the machine runs out of ptys at
+    /// `kern.tty.ptmx_max`.
     public func terminate() {
         let pid = terminalView.process.shellPid
         guard pid > 0 else { return }
-        kill(pid, SIGTERM)
-        let process = terminalView.process
+        killpg(pid, SIGTERM)
+        terminalView.process.terminate()
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
-            if process?.running == true {
-                kill(pid, SIGKILL)
+            if killpg(pid, 0) == 0 {
+                killpg(pid, SIGKILL)
             }
         }
     }
