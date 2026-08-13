@@ -5,7 +5,7 @@ import SwiftTerm
 /// directly to the terminal view so the chrome (background/foreground/cursor/selection
 /// and the 16 ANSI colors) deterministically follows the app appearance — we never rely
 /// on SwiftTerm's defaults or on a relaunch to change the colors.
-public enum ClaudeTerminalTheme {
+public enum AgentTerminalTheme {
     // MARK: Light
 
     public static let lightBackground = NSColor(srgbRed: 250 / 255, green: 250 / 255, blue: 250 / 255, alpha: 1)

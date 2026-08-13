@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import PRPilotModels
 import AppCore
-import ClaudeSessionKit
+import AgentKit
 import CommandSupport
 
 struct ContentView: View {
@@ -333,7 +333,7 @@ struct ContentView: View {
             }
             .disabled(review.worktreePath == nil)
             Button {
-                Task { await model.clearClaudeSession(for: review.id) }
+                Task { await model.clearAgentSession(for: review.id) }
             } label: {
                 Label("Clear Claude Session", systemImage: "xmark.circle")
             }
@@ -606,7 +606,7 @@ private struct PulsingStatusDot: NSViewRepresentable {
 }
 
 private struct StatusDot: View {
-    let status: ClaudeStatus?
+    let status: AgentStatus?
 
     var body: some View {
         PulsingStatusDot(color: color, isPulsing: isWorking)
@@ -633,7 +633,7 @@ private struct StatusDot: View {
     }
 }
 
-private func statusTooltip(_ status: ClaudeStatus?) -> String {
+private func statusTooltip(_ status: AgentStatus?) -> String {
     switch status {
     case .working:
         return "Working"

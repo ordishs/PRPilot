@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ClaudeStatus: Sendable, Equatable {
+public enum AgentStatus: Sendable, Equatable {
     case starting
     case working
     case awaitingInput(since: Date, lastVerdictSnippet: String?)

@@ -21,7 +21,7 @@ targets:
       - package: PRPilotCore
         product: DiffKit
       - package: PRPilotCore
-        product: ClaudeSessionKit
+        product: AgentKit
       - package: PRPilotCore
         product: CommandSupport
     settings:

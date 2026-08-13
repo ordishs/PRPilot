@@ -1,8 +1,8 @@
 import Testing
 import Foundation
-@testable import ClaudeSessionKit
+@testable import AgentKit
 
-private let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+private let reader = AgentStatusReader(idleThresholdSeconds: 30)
 
 @Test func startingWhenProcessNotYetRunning() {
     let status = reader.status(processState: .starting, lastEventAt: nil, lastVerdictSnippet: nil)
@@ -52,7 +52,7 @@ private let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
 }
 
 @Test func completedTurnYieldsAwaitingInputEvenWhenStale() {
-    let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+    let reader = AgentStatusReader(idleThresholdSeconds: 30)
     let t = Date(timeIntervalSince1970: 1000)
     let s = reader.status(processState: .running, lastEventAt: t, lastVerdictSnippet: "done",
                           now: t.addingTimeInterval(600), lastEventWasTurnCompletion: true)
@@ -60,7 +60,7 @@ private let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
 }
 
 @Test func recentNonCompletedIsWorking() {
-    let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+    let reader = AgentStatusReader(idleThresholdSeconds: 30)
     let t = Date(timeIntervalSince1970: 1000)
     let s = reader.status(processState: .running, lastEventAt: t, lastVerdictSnippet: nil,
                           now: t.addingTimeInterval(5), lastEventWasTurnCompletion: false)
@@ -68,7 +68,7 @@ private let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
 }
 
 @Test func staleNonCompletedIsIdle() {
-    let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+    let reader = AgentStatusReader(idleThresholdSeconds: 30)
     let t = Date(timeIntervalSince1970: 1000)
     let s = reader.status(processState: .running, lastEventAt: t, lastVerdictSnippet: "x",
                           now: t.addingTimeInterval(60), lastEventWasTurnCompletion: false)
@@ -78,7 +78,7 @@ private let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
 @Test func pendingWorkflowKeepsSessionWorkingWhileTranscriptIsSilent() {
     // A background code-review workflow emits nothing to the transcript for many
     // minutes. The session is working, not idle.
-    let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+    let reader = AgentStatusReader(idleThresholdSeconds: 30)
     let t = Date(timeIntervalSince1970: 1000)
     let s = reader.status(processState: .running, lastEventAt: t, lastVerdictSnippet: "workflow running",
                           now: t.addingTimeInterval(900), lastEventWasTurnCompletion: false,
@@ -89,7 +89,7 @@ private let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
 @Test func pendingWorkflowNeverReportsAwaitingInput() {
     // Even if a turn completion slips through, a pending workflow means Claude is not
     // waiting on the user — so the "review ready" notification must not be armed.
-    let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+    let reader = AgentStatusReader(idleThresholdSeconds: 30)
     let t = Date(timeIntervalSince1970: 1000)
     let s = reader.status(processState: .running, lastEventAt: t, lastVerdictSnippet: "done",
                           now: t.addingTimeInterval(600), lastEventWasTurnCompletion: true,
@@ -98,14 +98,14 @@ private let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
 }
 
 @Test func pendingWorkflowDoesNotMaskProcessExit() {
-    let reader = ClaudeStatusReader(idleThresholdSeconds: 30)
+    let reader = AgentStatusReader(idleThresholdSeconds: 30)
     let s = reader.status(processState: .exited(code: 0), lastEventAt: Date(), lastVerdictSnippet: nil,
                          now: Date(), lastEventWasTurnCompletion: false, workflowPending: true)
     #expect(s == .ready(exitCode: 0))
 }
 
 @Test func runningWithNoEventIsStartingEvenIfCompletionFlagSet() {
-    let reader = ClaudeStatusReader()
+    let reader = AgentStatusReader()
     let s = reader.status(processState: .running, lastEventAt: nil, lastVerdictSnippet: nil,
                           now: Date(), lastEventWasTurnCompletion: true)
     #expect(s == .starting)

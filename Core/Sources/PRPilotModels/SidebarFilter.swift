@@ -7,7 +7,7 @@ public enum SidebarFilter: Sendable, Equatable, CaseIterable {
 }
 
 /// Pure sidebar match predicate. The caller supplies the live Claude session
-/// booleans, so this stays free of any ClaudeSessionKit dependency.
+/// booleans, so this stays free of any AgentKit dependency.
 public func sidebarItemMatches(
     _ item: WorkItem,
     query: String,

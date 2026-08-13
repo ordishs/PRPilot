@@ -1,7 +1,7 @@
 import Testing
 import AppKit
 import QuartzCore
-@testable import ClaudeSessionKit
+@testable import AgentKit
 
 @Test @MainActor func aDotThatIsNotWorkingCarriesNoAnimation() {
     let dot = StatusDotView()

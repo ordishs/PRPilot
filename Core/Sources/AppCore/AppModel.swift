@@ -3,7 +3,7 @@ import Observation
 import PRPilotModels
 import ReviewStore
 import GitHubKit
-import ClaudeSessionKit
+import AgentKit
 import CommandSupport
 import WorktreeKit
 
@@ -24,7 +24,7 @@ public final class AppModel {
     public private(set) var isAdding = false
     public private(set) var diffStates: [String: DiffLoadState] = [:]
     public private(set) var registeredRepos: [RegisteredRepo] = []
-    public private(set) var claudeSessions: [String: ClaudeSession] = [:]
+    public private(set) var claudeSessions: [String: AgentSession] = [:]
     public private(set) var claudePaneState: [String: ClaudePaneState] = [:]
     public private(set) var terminalIsDark: Bool = true
     /// The appearance each live session's `claude` process was launched under, so a
@@ -34,7 +34,7 @@ public final class AppModel {
     /// starting session finish while still evicting one that went silent.
     private var sessionStartedAt: [String: Date] = [:]
     public private(set) var claudePrepLog: [String: [PrepLogEntry]] = [:]
-    public private(set) var claudeStatuses: [String: ClaudeStatus] = [:]
+    public private(set) var claudeStatuses: [String: AgentStatus] = [:]
     public private(set) var prStatuses: [String: PRStatus] = [:]
     /// Items autoLoad wants reviewed that have no session yet, most recently opened first.
     public private(set) var queuedReviewIDs: [String] = []
@@ -79,7 +79,7 @@ public final class AppModel {
     private let worktreeOps: WorktreeManaging
     private let claudePath: String
     private let notificationPoster: NotificationPosting
-    private let statusReader: ClaudeStatusReader
+    private let statusReader: AgentStatusReader
     private let commandRunner: CommandRunner
     private var resolvedClaudePath: String?
 
@@ -92,7 +92,7 @@ public final class AppModel {
         worktreeOps: WorktreeManaging,
         claudePath: String,
         notificationPoster: NotificationPosting,
-        statusReader: ClaudeStatusReader = ClaudeStatusReader(),
+        statusReader: AgentStatusReader = AgentStatusReader(),
         commandRunner: CommandRunner = ProcessCommandRunner()
     ) {
         self.store = store
@@ -277,7 +277,7 @@ public final class AppModel {
 
     private func issueAutoStart(_ item: WorkItem) {
         guard !item.disabled else { return }
-        Task { await ensureClaudeSession(for: item) }
+        Task { await ensureAgentSession(for: item) }
         webPreloadHandler?(item)
     }
 
@@ -426,7 +426,7 @@ public final class AppModel {
             reviews = await store.allItems()
             selection = task.id
             errorMessage = nil
-            await ensureClaudeSession(for: task)
+            await ensureAgentSession(for: task)
         } catch {
             errorMessage = String(describing: error)
         }
@@ -483,7 +483,7 @@ public final class AppModel {
 
     public func removeReview(id: String) async {
         guard let review = reviews.first(where: { $0.id == id }) else { return }
-        terminateClaudeSession(for: id)
+        terminateAgentSession(for: id)
         diffStates.removeValue(forKey: id)
         var preservedClonePath: String?
         if let worktreePath = review.worktreePath, FileManager.default.fileExists(atPath: worktreePath) {
@@ -576,7 +576,7 @@ public final class AppModel {
         claudePrepLog[id, default: []].append(PrepLogEntry(date: Date(), message: message))
     }
 
-    public func ensureClaudeSession(for review: WorkItem, forceFresh: Bool = false) async {
+    public func ensureAgentSession(for review: WorkItem, forceFresh: Bool = false) async {
         guard !review.disabled else { return }
         if claudeSessions[review.id] != nil {
             claudePaneState[review.id] = .sessionLive
@@ -634,7 +634,7 @@ public final class AppModel {
             // Resume the persisted session only if its transcript still exists. If it was
             // archived or pruned, `claude --resume` would exit 256 ("No conversation found"),
             // so fall back to a fresh review instead.
-            if ClaudeTranscriptPath.transcriptExists(forWorktreePath: ready.worktreePath, sessionID: existing) {
+            if AgentTranscriptPath.transcriptExists(forWorktreePath: ready.worktreePath, sessionID: existing) {
                 sessionID = existing
                 resume = true
                 appendPrepLog("Resuming session \(existing)", for: review.id)
@@ -643,7 +643,7 @@ public final class AppModel {
                 resume = false
                 appendPrepLog("Previous session not found; starting fresh /review", for: review.id)
             }
-        } else if let latest = ClaudeTranscriptPath.latestSessionID(forWorktreePath: ready.worktreePath) {
+        } else if let latest = AgentTranscriptPath.latestSessionID(forWorktreePath: ready.worktreePath) {
             sessionID = latest
             resume = true
             appendPrepLog("Resuming session \(latest)", for: review.id)
@@ -658,7 +658,7 @@ public final class AppModel {
             try? await store.upsertItem(updated)
             reviews = await store.allItems()
         }
-        let spec = ClaudeLaunchBuilder.build(
+        let spec = AgentLaunchBuilder.build(
             settings: settings,
             review: updated,
             worktreePath: ready.worktreePath,
@@ -666,7 +666,7 @@ public final class AppModel {
             sessionID: sessionID,
             resume: resume
         )
-        let session = ClaudeSession(spec: spec)
+        let session = AgentSession(spec: spec)
         claudeSessions[review.id] = session
         claudePaneState[review.id] = .sessionLive
         session.applyAppearance(isDark: terminalIsDark)
@@ -683,7 +683,7 @@ public final class AppModel {
 
     private func attachTranscriptWatcher(reviewID: String, worktreePath: String) {
         if transcriptWatchers[reviewID] != nil { return }
-        let dir = ClaudeTranscriptPath.directoryURL(forWorktreePath: worktreePath)
+        let dir = AgentTranscriptPath.directoryURL(forWorktreePath: worktreePath)
         let watcher = TranscriptWatcher(transcriptDir: dir)
         watcher.start { [weak self] event in
             guard let self else { return }
@@ -745,13 +745,13 @@ public final class AppModel {
         }
     }
 
-    private func shouldFireReviewReady(old: ClaudeStatus?, new: ClaudeStatus, reviewID: String) -> Bool {
+    private func shouldFireReviewReady(old: AgentStatus?, new: AgentStatus, reviewID: String) -> Bool {
         guard !notifiedAwaitingForSession.contains(reviewID) else { return false }
         guard case .awaitingInput = new else { return false }
         return true
     }
 
-    private func postReviewReadyNotification(for reviewID: String, status: ClaudeStatus) {
+    private func postReviewReadyNotification(for reviewID: String, status: AgentStatus) {
         guard let review = reviews.first(where: { $0.id == reviewID }) else { return }
         var snippet: String? = nil
         if case .awaitingInput(_, let s) = status { snippet = s }
@@ -763,7 +763,7 @@ public final class AppModel {
         }
     }
 
-    func terminateClaudeSession(for id: String) {
+    func terminateAgentSession(for id: String) {
         claudeSessions[id]?.terminate()
         claudeSessions.removeValue(forKey: id)
         claudePreparing.remove(id)
@@ -785,10 +785,10 @@ public final class AppModel {
     }
 
     /// Shuts a session down to reclaim its process, and nothing more. Unlike
-    /// `terminateClaudeSession`, this keeps `prStatuses`, `rebaseStates` and `pushability`,
+    /// `terminateAgentSession`, this keeps `prStatuses`, `rebaseStates` and `pushability`,
     /// which describe the PR on GitHub rather than the session, and keeps the persisted
     /// `claudeSessionID` so the next open resumes instead of starting over.
-    private func evictClaudeSession(for id: String) {
+    private func evictAgentSession(for id: String) {
         claudeSessions[id]?.terminate()
         claudeSessions.removeValue(forKey: id)
         claudePreparing.remove(id)
@@ -817,12 +817,12 @@ public final class AppModel {
         }
         let victims = SessionBudget.evictions(
             candidates: candidates,
-            cap: settings.maxLiveClaudeSessions,
+            cap: settings.maxLiveAgentSessions,
             selectedID: selection,
             now: now
         )
         for id in victims {
-            evictClaudeSession(for: id)
+            evictAgentSession(for: id)
         }
     }
 
@@ -861,16 +861,16 @@ public final class AppModel {
         let step = SessionQueue.nextStep(
             queued: queuedReviewIDs,
             live: candidates,
-            cap: settings.maxLiveClaudeSessions,
+            cap: settings.maxLiveAgentSessions,
             selectedID: selection,
             now: now
         )
         if let release = step.release {
-            evictClaudeSession(for: release)
+            evictAgentSession(for: release)
         }
         guard let start = step.start,
               let review = reviews.first(where: { $0.id == start }) else { return }
-        await ensureClaudeSession(for: review)
+        await ensureAgentSession(for: review)
         recomputeReviewQueue()
     }
 
@@ -882,7 +882,7 @@ public final class AppModel {
         currentLogin = login
     }
 
-    public func terminateAllClaudeSessions() {
+    public func terminateAllAgentSessions() {
         tickTask?.cancel()
         tickTask = nil
         discoveryTask?.cancel()
@@ -905,12 +905,12 @@ public final class AppModel {
 
     public func prefetch(for review: WorkItem) {
         guard !review.disabled else { return }
-        Task { await ensureClaudeSession(for: review) }
+        Task { await ensureAgentSession(for: review) }
     }
 
     private func autoLoadIfEnabled(_ review: WorkItem) {
         guard settings.autoLoad, !review.disabled else { return }
-        Task { await ensureClaudeSession(for: review) }
+        Task { await ensureAgentSession(for: review) }
         webPreloadHandler?(review)
     }
 
@@ -942,8 +942,8 @@ public final class AppModel {
             if settings.autoLoad {
                 // The cap check sits inside this branch on purpose. The other branch only
                 // creates worktrees, which start no process, so the cap must not cut it short.
-                if claudeSessions.count >= settings.maxLiveClaudeSessions { continue }
-                await ensureClaudeSession(for: review)
+                if claudeSessions.count >= settings.maxLiveAgentSessions { continue }
+                await ensureAgentSession(for: review)
             } else {
                 let editable = review.category(myLogin: currentLogin) != .reviewRequest
                 _ = try? await worktreeProvider.ensureWorktree(
@@ -981,16 +981,16 @@ public final class AppModel {
     /// terminates the live process/watcher, clears the persisted session id and the
     /// "reviewed" stamp, archives the prior transcripts, then relaunches a clean
     /// /review (no resume). Restarting here is what makes the open pane recover —
-    /// ClaudePaneView only auto-triggers ensureClaudeSession when review.id changes,
+    /// ClaudePaneView only auto-triggers ensureAgentSession when review.id changes,
     /// so a cleared-but-not-restarted session would leave the pane stuck on the
     /// "Preparing worktree…" placeholder.
-    public func clearClaudeSession(for id: String) async {
-        terminateClaudeSession(for: id)
+    public func clearAgentSession(for id: String) async {
+        terminateAgentSession(for: id)
         guard var review = reviews.first(where: { $0.id == id }) else { return }
-        // Archive the prior transcripts so ensureClaudeSession can't re-discover and
+        // Archive the prior transcripts so ensureAgentSession can't re-discover and
         // --resume the old session; the relaunch below starts a fresh /review instead.
         if let worktreePath = review.worktreePath {
-            ClaudeTranscriptPath.archiveTranscripts(forWorktreePath: worktreePath)
+            AgentTranscriptPath.archiveTranscripts(forWorktreePath: worktreePath)
         }
         review.claudeSessionID = nil
         review.claudeReviewedAt = nil
@@ -1004,7 +1004,7 @@ public final class AppModel {
             return
         }
         guard let refreshed = reviews.first(where: { $0.id == id }) else { return }
-        await ensureClaudeSession(for: refreshed, forceFresh: true)
+        await ensureAgentSession(for: refreshed, forceFresh: true)
     }
 
     /// Updates the terminal appearance. On a real change, immediately re-themes the chrome
@@ -1025,11 +1025,11 @@ public final class AppModel {
               let review = reviews.first(where: { $0.id == id }),
               let worktreePath = review.worktreePath,
               let sessionID = review.claudeSessionID,
-              ClaudeTranscriptPath.transcriptExists(forWorktreePath: worktreePath, sessionID: sessionID)
+              AgentTranscriptPath.transcriptExists(forWorktreePath: worktreePath, sessionID: sessionID)
         else { return }
 
-        terminateClaudeSession(for: id)
-        await ensureClaudeSession(for: review)
+        terminateAgentSession(for: id)
+        await ensureAgentSession(for: review)
     }
 
     /// Called when a review becomes the visible/selected one. If its live session's
@@ -1043,11 +1043,11 @@ public final class AppModel {
               launchedIsDark != terminalIsDark,
               let worktreePath = review.worktreePath,
               let sessionID = review.claudeSessionID,
-              ClaudeTranscriptPath.transcriptExists(forWorktreePath: worktreePath, sessionID: sessionID)
+              AgentTranscriptPath.transcriptExists(forWorktreePath: worktreePath, sessionID: sessionID)
         else { return }
 
-        terminateClaudeSession(for: review.id)
-        await ensureClaudeSession(for: review)
+        terminateAgentSession(for: review.id)
+        await ensureAgentSession(for: review)
     }
 
     /// `claudeReviewedAt` records the *first* completion and then stays put; other code

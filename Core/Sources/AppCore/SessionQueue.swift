@@ -1,11 +1,11 @@
 import Foundation
-import ClaudeSessionKit
+import AgentKit
 
 /// Decides one step of draining the review backlog: which finished session gives up its
 /// slot, and which queued item takes it.
 ///
 /// A finished review releases its process before the user has read it. Nothing is lost —
-/// the transcript survives and `ensureClaudeSession` resumes it — and holding the slot
+/// the transcript survives and `ensureAgentSession` resumes it — and holding the slot
 /// would stall the backlog behind whatever the user has not got round to reading.
 public enum SessionQueue {
     public struct Step: Sendable, Equatable {

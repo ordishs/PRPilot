@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ClaudeTranscriptPath {
+public enum AgentTranscriptPath {
     public static func directoryURL(forWorktreePath path: String) -> URL {
         // Claude Code derives the transcript folder name from the working directory by
         // replacing every character that is not ASCII-alphanumeric or '-' with '-'.

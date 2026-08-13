@@ -92,6 +92,34 @@ import Foundation
     #expect(decoded.reviewsCollapsed == false)
 }
 
+@Test func settingsSessionCapKeepsItsShippedKeyAfterTheAgentRename() throws {
+    // The property became `maxLiveAgentSessions` when the session layer stopped being
+    // Claude-specific. The persisted key must still be `maxLiveClaudeSessions`, or every
+    // existing store silently loses the user's cap and falls back to the default of 5.
+    let json = """
+    {
+      "managedRoot": "/tmp",
+      "reviewRequestQueries": [],
+      "myPRQueries": [],
+      "pollIntervalSeconds": 120,
+      "claudeLaunchArgs": "",
+      "notificationsEnabled": true,
+      "diffMode": "unified",
+      "diffIgnoreWhitespace": false,
+      "maxLiveClaudeSessions": 9
+    }
+    """
+    let decoded = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
+    #expect(decoded.maxLiveAgentSessions == 9)
+
+    let reencoded = try JSONEncoder().encode(decoded)
+    let object = try #require(
+        try JSONSerialization.jsonObject(with: reencoded) as? [String: Any]
+    )
+    #expect(object["maxLiveClaudeSessions"] as? Int == 9)
+    #expect(object["maxLiveAgentSessions"] == nil)
+}
+
 @Test func settingsMigratesLegacySidebarGroupingByStatus() throws {
     let json = """
     {

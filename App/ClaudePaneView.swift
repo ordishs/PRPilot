@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import PRPilotModels
 import AppCore
-import ClaudeSessionKit
+import AgentKit
 import SwiftTerm
 
 private let prepLogTimeFormatter: DateFormatter = {
@@ -48,7 +48,7 @@ struct ClaudePaneView: View {
         }
         .task(id: review.id) {
             await model.reconcileTerminalAppearance(for: review)
-            await model.ensureClaudeSession(for: review)
+            await model.ensureAgentSession(for: review)
         }
         .onChange(of: review.id) {
             showPrepDetails = false
@@ -56,7 +56,7 @@ struct ClaudePaneView: View {
         }
         .onChange(of: review.disabled) {
             if !review.disabled {
-                Task { await model.ensureClaudeSession(for: review) }
+                Task { await model.ensureAgentSession(for: review) }
             }
         }
     }
@@ -156,7 +156,7 @@ struct ClaudePaneView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             Button("Retry") {
-                Task { await model.ensureClaudeSession(for: review) }
+                Task { await model.ensureAgentSession(for: review) }
             }
         }
         .padding()
@@ -174,7 +174,7 @@ struct ClaudePaneView: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button("Retry") {
-                Task { await model.ensureClaudeSession(for: review) }
+                Task { await model.ensureAgentSession(for: review) }
             }
         }
         .padding()
@@ -182,7 +182,7 @@ struct ClaudePaneView: View {
     }
 
     @ViewBuilder
-    private func exitOverlay(for session: ClaudeSession) -> some View {
+    private func exitOverlay(for session: AgentSession) -> some View {
         switch session.state {
         case .exited(let code):
             ExitBanner(
@@ -236,7 +236,7 @@ private struct ExitBanner: View {
 }
 
 private struct TerminalHost: NSViewRepresentable {
-    let session: ClaudeSession
+    let session: AgentSession
 
     func makeNSView(context: Context) -> NSView {
         let container = NSView()

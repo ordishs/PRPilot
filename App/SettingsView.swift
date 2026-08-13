@@ -67,7 +67,7 @@ private struct DiscoverySettingsTab: View {
     @State private var issuesEnabled = true
     @State private var pollIntervalSeconds = 120
     @State private var autoLoad = false
-    @State private var maxLiveClaudeSessions = 5
+    @State private var maxLiveAgentSessions = 5
     @State private var maxLiveWebViews = 8
 
     private struct QueryRow: Identifiable, Equatable {
@@ -104,8 +104,8 @@ private struct DiscoverySettingsTab: View {
             }
 
             Section("Resource limits") {
-                Stepper(value: $maxLiveClaudeSessions, in: 1...20) {
-                    Text("\(maxLiveClaudeSessions) live Claude sessions")
+                Stepper(value: $maxLiveAgentSessions, in: 1...20) {
+                    Text("\(maxLiveAgentSessions) live Claude sessions")
                 }
                 Stepper(value: $maxLiveWebViews, in: 1...30) {
                     Text("\(maxLiveWebViews) live GitHub pages")
@@ -124,7 +124,7 @@ private struct DiscoverySettingsTab: View {
             issuesEnabled = model.settings.issuesEnabled
             pollIntervalSeconds = model.settings.pollIntervalSeconds
             autoLoad = model.settings.autoLoad
-            maxLiveClaudeSessions = model.settings.maxLiveClaudeSessions
+            maxLiveAgentSessions = model.settings.maxLiveAgentSessions
             maxLiveWebViews = model.settings.maxLiveWebViews
         }
         .onChange(of: reviewRows) { _, _ in commit() }
@@ -135,7 +135,7 @@ private struct DiscoverySettingsTab: View {
         .onChange(of: issuesEnabled) { _, _ in commit() }
         .onChange(of: pollIntervalSeconds) { _, _ in commit() }
         .onChange(of: autoLoad) { _, _ in commit() }
-        .onChange(of: maxLiveClaudeSessions) { _, _ in commit() }
+        .onChange(of: maxLiveAgentSessions) { _, _ in commit() }
         .onChange(of: maxLiveWebViews) { _, _ in commit() }
     }
 
@@ -188,7 +188,7 @@ private struct DiscoverySettingsTab: View {
         updated.issuesEnabled = issuesEnabled
         updated.pollIntervalSeconds = pollIntervalSeconds
         updated.autoLoad = autoLoad
-        updated.maxLiveClaudeSessions = maxLiveClaudeSessions
+        updated.maxLiveAgentSessions = maxLiveAgentSessions
         updated.maxLiveWebViews = maxLiveWebViews
         Task { await model.updateSettings(updated) }
     }

@@ -30,13 +30,46 @@ public struct Settings: Codable, Sendable, Equatable {
     public var issuePromptTemplate: String
     /// Live `claude` child processes allowed at once. Each costs roughly 550 MB, so an
     /// uncapped one-per-item spread exhausts swap on a large work list.
-    public var maxLiveClaudeSessions: Int
+    public var maxLiveAgentSessions: Int
     /// Live web views allowed at once. Each holds its own WebContent process.
     public var maxLiveWebViews: Int
 
     private enum LegacyKeys: String, CodingKey {
         case discoveryQueries
         case sidebarGrouping
+    }
+
+    /// Spelled out rather than synthesised, because `maxLiveAgentSessions` must keep the
+    /// key it shipped under. The property was renamed when the session layer stopped being
+    /// Claude-specific; the stored JSON was not, so a synthesised key would silently reset
+    /// every existing user's cap to the default.
+    enum CodingKeys: String, CodingKey {
+        case managedRoot
+        case reviewRequestQueries
+        case myPRQueries
+        case reviewRequestsEnabled
+        case myPRsEnabled
+        case pollIntervalSeconds
+        case ghPath
+        case gitPath
+        case claudePath
+        case claudeLaunchArgs
+        case claudeEnv
+        case autoLoad
+        case notificationsEnabled
+        case diffMode
+        case diffIgnoreWhitespace
+        case sidebarSort
+        case issueQueries
+        case issuesEnabled
+        case myWorkCollapsed
+        case reviewsCollapsed
+        case issuesCollapsed
+        case appearance
+        case reviewPromptTemplate
+        case issuePromptTemplate
+        case maxLiveAgentSessions = "maxLiveClaudeSessions"
+        case maxLiveWebViews
     }
 
     public init(
@@ -64,7 +97,7 @@ public struct Settings: Codable, Sendable, Equatable {
         appearance: Appearance = .system,
         reviewPromptTemplate: String = Settings.defaultReviewPromptTemplate,
         issuePromptTemplate: String = Settings.defaultIssuePromptTemplate,
-        maxLiveClaudeSessions: Int = 5,
+        maxLiveAgentSessions: Int = 5,
         maxLiveWebViews: Int = 8
     ) {
         self.managedRoot = managedRoot
@@ -91,7 +124,7 @@ public struct Settings: Codable, Sendable, Equatable {
         self.appearance = appearance
         self.reviewPromptTemplate = reviewPromptTemplate
         self.issuePromptTemplate = issuePromptTemplate
-        self.maxLiveClaudeSessions = maxLiveClaudeSessions
+        self.maxLiveAgentSessions = maxLiveAgentSessions
         self.maxLiveWebViews = maxLiveWebViews
     }
 
@@ -136,7 +169,7 @@ public struct Settings: Codable, Sendable, Equatable {
             ?? Settings.defaultReviewPromptTemplate
         issuePromptTemplate = try c.decodeIfPresent(String.self, forKey: .issuePromptTemplate)
             ?? Settings.defaultIssuePromptTemplate
-        maxLiveClaudeSessions = try c.decodeIfPresent(Int.self, forKey: .maxLiveClaudeSessions) ?? 5
+        maxLiveAgentSessions = try c.decodeIfPresent(Int.self, forKey: .maxLiveAgentSessions) ?? 5
         maxLiveWebViews = try c.decodeIfPresent(Int.self, forKey: .maxLiveWebViews) ?? 8
 
         if let rrq = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .reviewRequestQueries) {

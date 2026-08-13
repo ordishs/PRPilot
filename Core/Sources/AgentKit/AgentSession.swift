@@ -5,15 +5,15 @@ import SwiftTerm
 
 @MainActor
 @Observable
-public final class ClaudeSession {
-    public private(set) var state: ClaudeSessionState = .starting
-    public let spec: ClaudeLaunchSpec
+public final class AgentSession {
+    public private(set) var state: AgentSessionState = .starting
+    public let spec: AgentLaunchSpec
     public let terminalView: LocalProcessTerminalView
 
     private let delegateBridge: DelegateBridge
     @ObservationIgnored nonisolated(unsafe) private var shiftReturnMonitor: Any?
 
-    public init(spec: ClaudeLaunchSpec) {
+    public init(spec: AgentLaunchSpec) {
         self.spec = spec
         let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         self.terminalView = view
@@ -79,7 +79,7 @@ public final class ClaudeSession {
     /// a running terminal's chrome immediately; call before `start()` so Claude detects
     /// the background on launch.
     public func applyAppearance(isDark: Bool) {
-        ClaudeTerminalTheme.apply(isDark: isDark, to: terminalView)
+        AgentTerminalTheme.apply(isDark: isDark, to: terminalView)
     }
 
     public func restart() {

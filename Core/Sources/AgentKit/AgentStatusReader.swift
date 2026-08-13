@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ClaudeStatusReader: Sendable {
+public struct AgentStatusReader: Sendable {
     public let idleThresholdSeconds: TimeInterval
 
     public init(idleThresholdSeconds: TimeInterval = 30) {
@@ -8,13 +8,13 @@ public struct ClaudeStatusReader: Sendable {
     }
 
     public func status(
-        processState: ClaudeSessionState,
+        processState: AgentSessionState,
         lastEventAt: Date?,
         lastVerdictSnippet: String?,
         now: Date = Date(),
         lastEventWasTurnCompletion: Bool = false,
         workflowPending: Bool = false
-    ) -> ClaudeStatus {
+    ) -> AgentStatus {
         switch processState {
         case .failedToLaunch(let reason):
             return .failed(reason: reason)

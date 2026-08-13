@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-import ClaudeSessionKit
+import AgentKit
 @testable import AppCore
 
 private let budgetNow = Date(timeIntervalSince1970: 1_000_000)
@@ -8,7 +8,7 @@ private let budgetNow = Date(timeIntervalSince1970: 1_000_000)
 private func candidate(
     _ id: String,
     minutesAgo: Int,
-    status: ClaudeStatus = .idle(since: Date(timeIntervalSince1970: 0), lastVerdictSnippet: nil),
+    status: AgentStatus = .idle(since: Date(timeIntervalSince1970: 0), lastVerdictSnippet: nil),
     startedSecondsAgo: TimeInterval = 3600
 ) -> SessionBudget.Candidate {
     SessionBudget.Candidate(

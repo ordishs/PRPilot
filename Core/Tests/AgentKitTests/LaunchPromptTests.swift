@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 import PRPilotModels
-@testable import ClaudeSessionKit
+@testable import AgentKit
 
 private let prURL = URL(string: "https://github.com/bsv-blockchain/teranode/pull/944")!
 

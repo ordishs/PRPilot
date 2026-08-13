@@ -1,9 +1,9 @@
 import Testing
 import Foundation
-@testable import ClaudeSessionKit
+@testable import AgentKit
 
 @Test func encodesSlashesToHyphens() {
-    let url = ClaudeTranscriptPath.directoryURL(forWorktreePath: "/Users/me/dev/foo")
+    let url = AgentTranscriptPath.directoryURL(forWorktreePath: "/Users/me/dev/foo")
     #expect(url.lastPathComponent == "-Users-me-dev-foo")
 }
 
@@ -11,22 +11,22 @@ import Foundation
     // Must match Claude Code's own encoding: a space in the path (e.g. the macOS
     // "Application Support" directory) becomes '-', not a preserved space. Otherwise
     // the transcript watcher tails the wrong directory.
-    let url = ClaudeTranscriptPath.directoryURL(forWorktreePath: "/Users/me/Application Support/foo")
+    let url = AgentTranscriptPath.directoryURL(forWorktreePath: "/Users/me/Application Support/foo")
     #expect(url.lastPathComponent == "-Users-me-Application-Support-foo")
 }
 
 @Test func encodesDotsToHyphens() {
-    let url = ClaudeTranscriptPath.directoryURL(forWorktreePath: "/Users/me/masa.gi/code-reviewer")
+    let url = AgentTranscriptPath.directoryURL(forWorktreePath: "/Users/me/masa.gi/code-reviewer")
     #expect(url.lastPathComponent == "-Users-me-masa-gi-code-reviewer")
 }
 
 @Test func preservesExistingHyphensAndAlphanumerics() {
-    let url = ClaudeTranscriptPath.directoryURL(forWorktreePath: "/x/bsv-blockchain-teranode-pr990")
+    let url = AgentTranscriptPath.directoryURL(forWorktreePath: "/x/bsv-blockchain-teranode-pr990")
     #expect(url.lastPathComponent == "-x-bsv-blockchain-teranode-pr990")
 }
 
 @Test func sitsUnderClaudeProjectsDir() {
-    let url = ClaudeTranscriptPath.directoryURL(forWorktreePath: "/x")
+    let url = AgentTranscriptPath.directoryURL(forWorktreePath: "/x")
     let path = url.path
     #expect(path.contains(".claude/projects/"))
     #expect(path.hasSuffix("/-x"))
@@ -42,13 +42,13 @@ import Foundation
     try "{}".write(to: a, atomically: true, encoding: .utf8)
     try "{}".write(to: b, atomically: true, encoding: .utf8)
 
-    #expect(ClaudeTranscriptPath.latestSessionID(in: dir) != nil)
+    #expect(AgentTranscriptPath.latestSessionID(in: dir) != nil)
 
-    let moved = ClaudeTranscriptPath.archiveTranscripts(in: dir)
+    let moved = AgentTranscriptPath.archiveTranscripts(in: dir)
     #expect(moved == 2)
 
     // No longer discoverable as a resumable session.
-    #expect(ClaudeTranscriptPath.latestSessionID(in: dir) == nil)
+    #expect(AgentTranscriptPath.latestSessionID(in: dir) == nil)
     // Preserved under archived/.
     let archived = dir.appendingPathComponent("archived")
     let names = (try? FileManager.default.contentsOfDirectory(atPath: archived.path)) ?? []
@@ -59,19 +59,19 @@ import Foundation
     let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
-    #expect(ClaudeTranscriptPath.archiveTranscripts(in: dir) == 0)
+    #expect(AgentTranscriptPath.archiveTranscripts(in: dir) == 0)
 }
 
 @Test func latestSessionIDReturnsNilWhenDirectoryMissing() {
     let url = URL(fileURLWithPath: "/tmp/does-not-exist-\(UUID().uuidString)")
-    #expect(ClaudeTranscriptPath.latestSessionID(in: url) == nil)
+    #expect(AgentTranscriptPath.latestSessionID(in: url) == nil)
 }
 
 @Test func latestSessionIDReturnsNilWhenDirectoryEmpty() throws {
     let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: url) }
-    #expect(ClaudeTranscriptPath.latestSessionID(in: url) == nil)
+    #expect(AgentTranscriptPath.latestSessionID(in: url) == nil)
 }
 
 @Test func latestSessionIDPicksNewestJSONLByModificationTime() throws {
@@ -92,6 +92,6 @@ import Foundation
     try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: older.path)
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: newer.path)
 
-    let id = ClaudeTranscriptPath.latestSessionID(in: url)
+    let id = AgentTranscriptPath.latestSessionID(in: url)
     #expect(id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 }

@@ -1,7 +1,7 @@
 import Foundation
 import PRPilotModels
 
-public struct ClaudeLaunchSpec: Sendable, Equatable {
+public struct AgentLaunchSpec: Sendable, Equatable {
     public let executable: String
     public let cwd: String
     public let arguments: [String]
@@ -17,7 +17,7 @@ public struct ClaudeLaunchSpec: Sendable, Equatable {
     }
 }
 
-public enum ClaudeLaunchBuilder {
+public enum AgentLaunchBuilder {
     public static func build(
         settings: Settings,
         review: WorkItem,
@@ -25,7 +25,7 @@ public enum ClaudeLaunchBuilder {
         resolvedClaudePath: String,
         sessionID: String,
         resume: Bool
-    ) -> ClaudeLaunchSpec {
+    ) -> AgentLaunchSpec {
         var args: [String] = []
         args.append(contentsOf: review.claudeFlags ?? [])
         args.append("--name")
@@ -47,7 +47,7 @@ public enum ClaudeLaunchBuilder {
                 args.append(prompt)
             }
         }
-        return ClaudeLaunchSpec(
+        return AgentLaunchSpec(
             executable: resolvedClaudePath,
             cwd: worktreePath,
             arguments: args,

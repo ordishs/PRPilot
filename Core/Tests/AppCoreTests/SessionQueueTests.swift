@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-import ClaudeSessionKit
+import AgentKit
 @testable import AppCore
 
 private let queueNow = Date(timeIntervalSince1970: 1_000_000)
@@ -8,7 +8,7 @@ private let queueNow = Date(timeIntervalSince1970: 1_000_000)
 private func live(
     _ id: String,
     minutesAgo: Int,
-    status: ClaudeStatus = .idle(since: Date(timeIntervalSince1970: 0), lastVerdictSnippet: nil),
+    status: AgentStatus = .idle(since: Date(timeIntervalSince1970: 0), lastVerdictSnippet: nil),
     startedSecondsAgo: TimeInterval = 3600
 ) -> SessionBudget.Candidate {
     SessionBudget.Candidate(
@@ -121,7 +121,7 @@ private func step(
 }
 
 @Test func queueReleasesAnAwaitingInputSessionEvenThoughItIsUnread() {
-    let unread = ClaudeStatus.awaitingInput(since: Date(timeIntervalSince1970: 0), lastVerdictSnippet: "verdict")
+    let unread = AgentStatus.awaitingInput(since: Date(timeIntervalSince1970: 0), lastVerdictSnippet: "verdict")
     let result = step(
         queued: ["next"],
         live: [live("unread", minutesAgo: 5, status: unread)],

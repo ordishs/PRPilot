@@ -7,7 +7,7 @@ import ReviewStore
 import DiffKit
 import WorktreeKit
 @testable import AppCore
-import ClaudeSessionKit
+import AgentKit
 
 private actor StubRunner: CommandRunner {
     private var results: [CommandResult]
@@ -484,7 +484,7 @@ private func stubClient() -> GitHubClient {
     )
     await model.load()
 
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
 
     if case .worktreeFailed = model.claudePaneState[review.id] {} else {
         Issue.record("expected .worktreeFailed, got \(String(describing: model.claudePaneState[review.id]))")
@@ -494,7 +494,7 @@ private func stubClient() -> GitHubClient {
     #expect(messages.contains("Fetching PR #944…"))
 }
 
-@Test @MainActor func ensureClaudeSessionStartsFreshWhenPersistedTranscriptMissing() async throws {
+@Test @MainActor func ensureAgentSessionStartsFreshWhenPersistedTranscriptMissing() async throws {
     // A persisted session whose transcript no longer exists (archived/pruned) must not be
     // resumed — `claude --resume` would exit "No conversation found". The model should
     // assign a fresh session id instead. The stub worktree path points at /tmp/wt, whose
@@ -515,7 +515,7 @@ private func stubClient() -> GitHubClient {
     )
     await model.load()
 
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
 
     let refreshed = model.reviews.first(where: { $0.id == review.id })
     #expect(refreshed?.claudeSessionID != nil)
@@ -538,7 +538,7 @@ private func stubClient() -> GitHubClient {
     )
     await model.load()
 
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
 
     // The prep log persists after the session goes live so the pane can re-open it
     // on demand; it is reset at the start of the next prep run, not cleared here.
@@ -548,7 +548,7 @@ private func stubClient() -> GitHubClient {
     #expect(messages.contains("Starting fresh /review"))
 }
 
-@Test @MainActor func ensureClaudeSessionFlagsWorktreeFailure() async throws {
+@Test @MainActor func ensureAgentSessionFlagsWorktreeFailure() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let model = AppModel(
         store: store,
@@ -562,7 +562,7 @@ private func stubClient() -> GitHubClient {
     )
     let review = sampleReview()
 
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
 
     let state = model.claudePaneState[review.id]
     if case .worktreeFailed(let message) = state {
@@ -573,7 +573,7 @@ private func stubClient() -> GitHubClient {
     #expect(model.claudeSessions[review.id] == nil)
 }
 
-@Test @MainActor func ensureClaudeSessionInitializesStatus() async throws {
+@Test @MainActor func ensureAgentSessionInitializesStatus() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let review = sampleReview()
     try await store.upsertItem(review)
@@ -589,7 +589,7 @@ private func stubClient() -> GitHubClient {
     )
     await model.load()
 
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
 
     let status = model.claudeStatuses[review.id]
     #expect(status == .starting)
@@ -608,10 +608,10 @@ private func stubClient() -> GitHubClient {
         worktreeOps: StubWorktreeOps(),
         claudePath: "/usr/bin/true",
         notificationPoster: StubNotificationPoster(),
-        statusReader: ClaudeStatusReader(idleThresholdSeconds: 0.1)
+        statusReader: AgentStatusReader(idleThresholdSeconds: 0.1)
     )
     await model.load()
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
 
     model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: "Hello")
     model.recomputeStatus(for: review.id, now: Date())
@@ -630,7 +630,7 @@ private func stubClient() -> GitHubClient {
     }
 }
 
-@Test @MainActor func clearClaudeSessionResetsSessionAndReviewedState() async throws {
+@Test @MainActor func clearAgentSessionResetsSessionAndReviewedState() async throws {
     let url = tempStoreURL()
     let store = try ReviewStore(fileURL: url)
     var review = sampleReview()
@@ -649,7 +649,7 @@ private func stubClient() -> GitHubClient {
     )
     await model.load()
 
-    await model.clearClaudeSession(for: review.id)
+    await model.clearAgentSession(for: review.id)
 
     let cleared = model.reviews.first(where: { $0.id == review.id })
     // Clearing archives the old session and starts a fresh one (new id), and
@@ -659,9 +659,9 @@ private func stubClient() -> GitHubClient {
     #expect(cleared?.claudeReviewedAt == nil)
 }
 
-@Test @MainActor func clearClaudeSessionStartsFreshSessionForOpenPane() async throws {
+@Test @MainActor func clearAgentSessionStartsFreshSessionForOpenPane() async throws {
     // Clearing the session for the currently-open PR must immediately start a fresh
-    // session. The pane only re-triggers ensureClaudeSession when review.id changes,
+    // session. The pane only re-triggers ensureAgentSession when review.id changes,
     // so if clear left the pane state nil it would hang on "Preparing worktree…".
     let store = try ReviewStore(fileURL: tempStoreURL())
     var review = sampleReview()
@@ -678,9 +678,9 @@ private func stubClient() -> GitHubClient {
         notificationPoster: StubNotificationPoster()
     )
     await model.load()
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
 
-    await model.clearClaudeSession(for: review.id)
+    await model.clearAgentSession(for: review.id)
 
     #expect(model.claudePaneState[review.id] == .sessionLive)
     let refreshed = model.reviews.first(where: { $0.id == review.id })
@@ -718,10 +718,10 @@ private func stubClient() -> GitHubClient {
         worktreeOps: StubWorktreeOps(),
         claudePath: "/usr/bin/true",
         notificationPoster: StubNotificationPoster(),
-        statusReader: ClaudeStatusReader(idleThresholdSeconds: 0.1)
+        statusReader: AgentStatusReader(idleThresholdSeconds: 0.1)
     )
     await model.load()
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
 
     let staleEvent = Date().addingTimeInterval(-3600)
     model.handleTranscriptEvent(reviewID: review.id, at: staleEvent, snippet: "Gathering details", turnCompleted: false)
@@ -751,10 +751,10 @@ private func stubClient() -> GitHubClient {
         worktreeOps: StubWorktreeOps(),
         claudePath: "/usr/bin/true",
         notificationPoster: poster,
-        statusReader: ClaudeStatusReader(idleThresholdSeconds: 0.1)
+        statusReader: AgentStatusReader(idleThresholdSeconds: 0.1)
     )
     await model.load()
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
 
     model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: "Review complete", turnCompleted: true)
 
@@ -781,10 +781,10 @@ private func stubClient() -> GitHubClient {
         worktreeOps: StubWorktreeOps(),
         claudePath: "/usr/bin/true",
         notificationPoster: poster,
-        statusReader: ClaudeStatusReader(idleThresholdSeconds: 0.1)
+        statusReader: AgentStatusReader(idleThresholdSeconds: 0.1)
     )
     await model.load()
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
 
     // All transitions run synchronously (no await) so the stub process cannot
     // exit mid-sequence; the single sleep at the end flushes the notification Tasks.
@@ -1898,7 +1898,7 @@ private func editableItem(worktreePath: String = "/tmp/wt", headBranch: String =
     #expect(model.pushability[item.id]?.canPush == false)
 }
 
-@Test @MainActor func ensureClaudeSessionPopulatesPushabilityForEditableItem() async throws {
+@Test @MainActor func ensureAgentSessionPopulatesPushabilityForEditableItem() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let item = editableItem()
     try await store.upsertItem(item)
@@ -1917,7 +1917,7 @@ private func editableItem(worktreePath: String = "/tmp/wt", headBranch: String =
     )
     await model.load()
 
-    await model.ensureClaudeSession(for: item)
+    await model.ensureAgentSession(for: item)
 
     #expect(model.pushability[item.id]?.canPush == true)
     #expect(model.pushability[item.id]?.needsForce == false)
@@ -2105,7 +2105,7 @@ private let issueSearchHitJSON = """
         notificationPoster: StubNotificationPoster()
     )
     await model.load()
-    await model.ensureClaudeSession(for: review)   // sets worktreePath via the stub provider
+    await model.ensureAgentSession(for: review)   // sets worktreePath via the stub provider
     await model.refreshPushability(for: review.id)
 
     let p = model.pushability[review.id]
@@ -2134,7 +2134,7 @@ private let issueSearchHitJSON = """
         notificationPoster: StubNotificationPoster()
     )
     await model.load()
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
     await model.refreshPushability(for: review.id)
 
     let p = model.pushability[review.id]
@@ -2233,10 +2233,10 @@ private let issueSearchHitJSON = """
         worktreeOps: StubWorktreeOps(),
         claudePath: "/usr/bin/true",
         notificationPoster: poster,
-        statusReader: ClaudeStatusReader(idleThresholdSeconds: 0.1)
+        statusReader: AgentStatusReader(idleThresholdSeconds: 0.1)
     )
     await model.load()
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
 
     let launchedAt = Date().addingTimeInterval(-600)
     model.handleTranscriptEvent(
@@ -2271,10 +2271,10 @@ private let issueSearchHitJSON = """
         worktreeOps: StubWorktreeOps(),
         claudePath: "/usr/bin/true",
         notificationPoster: poster,
-        statusReader: ClaudeStatusReader(idleThresholdSeconds: 0.1)
+        statusReader: AgentStatusReader(idleThresholdSeconds: 0.1)
     )
     await model.load()
-    await model.ensureClaudeSession(for: review)
+    await model.ensureAgentSession(for: review)
 
     model.handleTranscriptEvent(
         reviewID: review.id,
@@ -2520,7 +2520,7 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     defer { try? FileManager.default.removeItem(at: clone) }
     var settings = await store.settings()
     settings.autoLoad = true
-    settings.maxLiveClaudeSessions = 2
+    settings.maxLiveAgentSessions = 2
     try await store.updateSettings(settings)
 
     let model = cappedModel(store: store)
@@ -2542,7 +2542,7 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     defer { try? FileManager.default.removeItem(at: clone) }
     var settings = await store.settings()
     settings.autoLoad = true
-    settings.maxLiveClaudeSessions = 3
+    settings.maxLiveAgentSessions = 3
     try await store.updateSettings(settings)
 
     let model = cappedModel(store: store)
@@ -2563,7 +2563,7 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     defer { try? FileManager.default.removeItem(at: clone) }
     var settings = await store.settings()
     settings.autoLoad = true
-    settings.maxLiveClaudeSessions = 1
+    settings.maxLiveAgentSessions = 1
     try await store.updateSettings(settings)
 
     let model = cappedModel(store: store)
@@ -2575,7 +2575,7 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     await model.drainSessionQueue()
     let firstStarted = model.claudeSessions["item-r1"] != nil
 
-    // ClaudeSession.start runs `cd <cwd> && exec <claude>`, and StubWorktreeProvider's
+    // AgentSession.start runs `cd <cwd> && exec <claude>`, and StubWorktreeProvider's
     // /tmp/wt does not exist, so the shell exits and the status settles to .ready —
     // releasable. The wait covers `zsh -l` sourcing a slow profile before it can fail.
     try await Task.sleep(nanoseconds: 1_500_000_000)
@@ -2597,7 +2597,7 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
 
     let model = cappedModel(store: store)
     await model.load()
-    await model.ensureClaudeSession(for: item)
+    await model.ensureAgentSession(for: item)
 
     let first = Date(timeIntervalSince1970: 1_000)
     model.handleTranscriptEvent(reviewID: item.id, at: first, snippet: "done", turnCompleted: true)
@@ -2626,7 +2626,7 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     let model = cappedModel(store: store)
     await model.load()
 
-    await model.clearClaudeSession(for: item.id)
+    await model.clearAgentSession(for: item.id)
 
     let stored = await store.item(id: item.id)
 
@@ -2935,7 +2935,7 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     defer { try? FileManager.default.removeItem(at: clone) }
     var settings = await store.settings()
     settings.autoLoad = true
-    settings.maxLiveClaudeSessions = 2
+    settings.maxLiveAgentSessions = 2
     try await store.updateSettings(settings)
 
     let model = cappedModel(store: store)
@@ -2955,7 +2955,7 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     defer { try? FileManager.default.removeItem(at: clone) }
     var settings = await store.settings()
     settings.autoLoad = true
-    settings.maxLiveClaudeSessions = 2
+    settings.maxLiveAgentSessions = 2
     try await store.updateSettings(settings)
 
     let model = cappedModel(store: store)
@@ -2976,14 +2976,14 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     let oldest = cappedReview("oldest", number: 3, openedMinutesAgo: 3)
     for item in [newest, middle, oldest] { try await store.upsertItem(item) }
     var settings = await store.settings()
-    settings.maxLiveClaudeSessions = 2
+    settings.maxLiveAgentSessions = 2
     try await store.updateSettings(settings)
 
     let model = cappedModel(store: store)
     await model.load()
     model.selection = newest.id
     for item in [oldest, middle, newest] {
-        await model.ensureClaudeSession(for: item)
+        await model.ensureAgentSession(for: item)
     }
 
     model.enforceSessionBudget(now: Date().addingTimeInterval(120))
@@ -3000,14 +3000,14 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     let oldest = cappedReview("oldest", number: 2, openedMinutesAgo: 2)
     for item in [newest, oldest] { try await store.upsertItem(item) }
     var settings = await store.settings()
-    settings.maxLiveClaudeSessions = 1
+    settings.maxLiveAgentSessions = 1
     try await store.updateSettings(settings)
 
     let model = cappedModel(store: store)
     await model.load()
     model.selection = newest.id
     for item in [oldest, newest] {
-        await model.ensureClaudeSession(for: item)
+        await model.ensureAgentSession(for: item)
     }
     let persistedBefore = model.reviews.first { $0.id == oldest.id }?.claudeSessionID
 
@@ -3027,14 +3027,14 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     let oldest = cappedReview("oldest", number: 2, openedMinutesAgo: 2)
     for item in [newest, oldest] { try await store.upsertItem(item) }
     var settings = await store.settings()
-    settings.maxLiveClaudeSessions = 1
+    settings.maxLiveAgentSessions = 1
     try await store.updateSettings(settings)
 
     let model = cappedModel(store: store)
     await model.load()
     model.selection = newest.id
     for item in [oldest, newest] {
-        await model.ensureClaudeSession(for: item)
+        await model.ensureAgentSession(for: item)
     }
     model.setPRStatusForTesting(
         PRStatus(ci: .passing, isBehind: false, readiness: .reviewRequired),
@@ -3048,7 +3048,7 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
 }
 
 /// The session must genuinely still be running for its status to read `.working`.
-/// `ClaudeSession.start()` runs `cd <cwd> && exec <claude> …`, so the default stub's
+/// `AgentSession.start()` runs `cd <cwd> && exec <claude> …`, so the default stub's
 /// non-existent `/tmp/wt` makes the shell exit at once and the status decays to `.ready`.
 /// `yes` ignores its arguments and never exits, which pins the status deterministically.
 @Test @MainActor func sessionBudgetProtectsAWorkingSession() async throws {
@@ -3062,7 +3062,7 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     let oldest = cappedReview("oldest", number: 2, openedMinutesAgo: 2)
     for item in [newest, oldest] { try await store.upsertItem(item) }
     var settings = await store.settings()
-    settings.maxLiveClaudeSessions = 1
+    settings.maxLiveAgentSessions = 1
     try await store.updateSettings(settings)
 
     var provider = StubWorktreeProvider()
@@ -3077,11 +3077,11 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
         claudePath: "/usr/bin/yes",
         notificationPoster: StubNotificationPoster()
     )
-    defer { model.terminateAllClaudeSessions() }
+    defer { model.terminateAllAgentSessions() }
     await model.load()
     model.selection = newest.id
     for item in [oldest, newest] {
-        await model.ensureClaudeSession(for: item)
+        await model.ensureAgentSession(for: item)
     }
     let now = Date()
     model.handleTranscriptEvent(reviewID: oldest.id, at: now, snippet: "working", turnCompleted: false)

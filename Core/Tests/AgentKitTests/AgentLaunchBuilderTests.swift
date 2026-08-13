@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 import PRPilotModels
-@testable import ClaudeSessionKit
+@testable import AgentKit
 
 private func sampleReview() -> WorkItem {
     WorkItem(
@@ -21,7 +21,7 @@ private func sampleReview() -> WorkItem {
 }
 
 @Test func launchBuilderFreshSessionUsesSessionIDAndReviewSlashCommand() {
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: .default,
         review: sampleReview(),
         worktreePath: "/tmp/wt",
@@ -41,7 +41,7 @@ private func sampleReview() -> WorkItem {
 }
 
 @Test func launchBuilderResumeEmitsResumeFlagAndOmitsReview() {
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: .default,
         review: sampleReview(),
         worktreePath: "/tmp/wt",
@@ -64,7 +64,7 @@ private func nameArg(_ args: [String]) -> String? {
 }
 
 @Test func launchBuilderNamesPRSessionWithNumberAndTitle() {
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: .default, review: sampleReview(), worktreePath: "/tmp/wt",
         resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
     )
@@ -72,7 +72,7 @@ private func nameArg(_ args: [String]) -> String? {
 }
 
 @Test func launchBuilderNamesSessionOnResumeToo() {
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: .default, review: sampleReview(), worktreePath: "/tmp/wt",
         resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: true
     )
@@ -85,7 +85,7 @@ private func nameArg(_ args: [String]) -> String? {
         headBranch: "feat/parallel-validation", prRef: nil, prState: nil,
         origin: .added, addedAt: Date(timeIntervalSince1970: 0)
     )
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: .default, review: item, worktreePath: "/tmp/wt",
         resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
     )
@@ -110,7 +110,7 @@ private func sampleIssueItem() -> WorkItem {
 }
 
 @Test func launchBuilderIssueUsesStartIssueCommand() {
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: .default,
         review: sampleIssueItem(),
         worktreePath: "/tmp/wt",
@@ -128,7 +128,7 @@ private func sampleIssueItem() -> WorkItem {
 }
 
 @Test func launchBuilderIssueResumeOmitsStartIssue() {
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: .default,
         review: sampleIssueItem(),
         worktreePath: "/tmp/wt",
@@ -146,7 +146,7 @@ private func sampleIssueItem() -> WorkItem {
         headBranch: "feat/spike", prRef: nil, prState: nil,
         origin: .added, addedAt: Date(timeIntervalSince1970: 0)
     )
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: .default, review: item, worktreePath: "/tmp/wt",
         resolvedClaudePath: "/usr/bin/claude", sessionID: "sid", resume: false
     )
@@ -185,7 +185,7 @@ private func settings(review: String? = nil, issue: String? = nil) -> Settings {
 
     End with a single line: VERDICT: APPROVE | REQUEST CHANGES | COMMENT.
     """
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: settings(review: template), review: sampleReview(), worktreePath: "/tmp/wt",
         resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
     )
@@ -197,7 +197,7 @@ private func settings(review: String? = nil, issue: String? = nil) -> Settings {
 }
 
 @Test func launchBuilderUsesDefaultIssueTemplate() {
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: .default, review: issueItem(), worktreePath: "/tmp/wt",
         resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
     )
@@ -205,7 +205,7 @@ private func settings(review: String? = nil, issue: String? = nil) -> Settings {
 }
 
 @Test func launchBuilderUsesCustomIssueTemplate() {
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: settings(issue: "/start-issue {number} in {owner}/{repo}"),
         review: issueItem(), worktreePath: "/tmp/wt",
         resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
@@ -215,7 +215,7 @@ private func settings(review: String? = nil, issue: String? = nil) -> Settings {
 
 @Test func launchBuilderAppendsNoPromptWhenTemplateIsBlank() {
     // A deliberately empty template opens the session with no prompt at all.
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: settings(review: "   "), review: sampleReview(), worktreePath: "/tmp/wt",
         resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
     )
@@ -224,7 +224,7 @@ private func settings(review: String? = nil, issue: String? = nil) -> Settings {
 }
 
 @Test func launchBuilderIgnoresTemplatesOnResume() {
-    let spec = ClaudeLaunchBuilder.build(
+    let spec = AgentLaunchBuilder.build(
         settings: settings(review: "/review {url} and be brief"), review: sampleReview(),
         worktreePath: "/tmp/wt", resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: true
     )

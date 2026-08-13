@@ -44,7 +44,7 @@ import Foundation
 }
 
 @Test func settingsDefaultToDocumentedCaps() {
-    #expect(Settings.default.maxLiveClaudeSessions == 5)
+    #expect(Settings.default.maxLiveAgentSessions == 5)
     #expect(Settings.default.maxLiveWebViews == 8)
 }
 
@@ -62,13 +62,13 @@ import Foundation
     """
     let decoded = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
 
-    #expect(decoded.maxLiveClaudeSessions == 5)
+    #expect(decoded.maxLiveAgentSessions == 5)
     #expect(decoded.maxLiveWebViews == 8)
 }
 
 @Test func settingsRoundTripPreservesCaps() throws {
     var settings = Settings.default
-    settings.maxLiveClaudeSessions = 2
+    settings.maxLiveAgentSessions = 2
     settings.maxLiveWebViews = 3
 
     let encoder = JSONEncoder()
@@ -77,7 +77,7 @@ import Foundation
     decoder.dateDecodingStrategy = .iso8601
     let decoded = try decoder.decode(Settings.self, from: encoder.encode(settings))
 
-    #expect(decoded.maxLiveClaudeSessions == 2)
+    #expect(decoded.maxLiveAgentSessions == 2)
     #expect(decoded.maxLiveWebViews == 3)
 }
 

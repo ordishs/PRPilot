@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ClaudeSessionKit
+@testable import AgentKit
 
 private func makeTempDir() throws -> URL {
     let dir = FileManager.default.temporaryDirectory

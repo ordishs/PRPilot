@@ -1,5 +1,5 @@
 import Foundation
-import ClaudeSessionKit
+import AgentKit
 
 /// Chooses which live Claude sessions to shut down once the cap is exceeded.
 ///
@@ -7,7 +7,7 @@ import ClaudeSessionKit
 /// killed, because SIGTERM would throw away work the user is waiting for. When every
 /// candidate is protected the budget returns nothing and the session count stays high.
 public enum SessionBudget {
-    /// How long a session that has not reported yet is left alone. `ClaudeStatusReader`
+    /// How long a session that has not reported yet is left alone. `AgentStatusReader`
     /// reports `.starting` both for a launching process and for a running one that has
     /// written no transcript, and it never times the second case out. Without this bound a
     /// silent session would be protected forever, which is the leak the cap exists to stop.
@@ -16,10 +16,10 @@ public enum SessionBudget {
     public struct Candidate: Sendable, Equatable {
         public let id: String
         public let lastOpenedAt: Date
-        public let status: ClaudeStatus
+        public let status: AgentStatus
         public let startedAt: Date
 
-        public init(id: String, lastOpenedAt: Date, status: ClaudeStatus, startedAt: Date) {
+        public init(id: String, lastOpenedAt: Date, status: AgentStatus, startedAt: Date) {
             self.id = id
             self.lastOpenedAt = lastOpenedAt
             self.status = status
