@@ -82,6 +82,44 @@ generating and owning session IDs exactly as it does now.
 a PR Pilot pane it would hang forever. `pi --session <id>` resumes directly and is the flag
 to use.
 
+### pi will not launch without a PATH fix
+
+This was found by the spike and is the one finding that changed the design.
+
+`claude` is a native Mach-O binary. `pi` is a node script whose first line is
+`#!/usr/bin/env node`. PR Pilot launches through `/bin/zsh -l -c` with
+`environment: nil`, so the child inherits the app's launchd environment. A login shell reads
+`.zprofile` and `.zlogin` but **not** `.zshrc`, and nvm sets its PATH in `.zshrc`. Two
+consequences, both reproduced:
+
+```
+$ env -i HOME=/Users/ordishs /bin/zsh -l -c 'which pi'
+pi not found
+
+$ env -i /bin/zsh -l -c "exec /Users/…/v24.14.1/bin/pi --version"
+env: node: No such file or directory        # exits 127
+```
+
+In the harness this surfaced as an immediate `processTerminated` with raw status 32512, which
+is exit 127. pi never drew a single character.
+
+Both are fixed by prepending the resolved pi binary's own directory to PATH. nvm installs
+`node` and `pi` as siblings in the same bin directory, so the interpreter is guaranteed to be
+there:
+
+```
+cd <worktree> && export PATH='<dir of pi>':$PATH && exec '<pi>' …    # works
+```
+
+Consequences for the design:
+
+- `AgentBackend` gains `prependsExecutableDirectoryToPath: Bool` — `true` for pi, `false` for
+  Claude Code. Making it unconditional would alter the PATH that Claude Code's own child
+  processes see, and this design promises Claude Code stays bit-for-bit unchanged.
+- `settings.piPath` is effectively **required**, because `LoginShellResolver.resolve("pi")`
+  cannot find pi from a GUI-launched app. When resolution fails the pane must show the
+  existing unavailable state with pi-specific text naming **Settings ▸ Tools ▸ pi**.
+
 ### pi's stop reasons
 
 Counted across existing local sessions: `toolUse` 390, `stop` 19, `aborted` 2, `error` 4.
@@ -138,6 +176,11 @@ public protocol AgentBackend: Sendable {
     var kind: AgentKind { get }
     var displayName: String { get }            // "Claude Code" | "pi"
     var defaultExecutableName: String { get }  // "claude" | "pi"
+
+    /// pi is a node script with an `env node` shebang, and a GUI-launched login shell has no
+    /// nvm PATH. Prepending pi's own bin directory supplies the sibling `node`. False for
+    /// Claude Code, which is a native binary — see "pi will not launch without a PATH fix".
+    var prependsExecutableDirectoryToPath: Bool { get }
 
     func transcriptDirectory(forWorktreePath path: String) -> URL
     func sessionID(fromTranscriptFilename name: String) -> String?
@@ -291,7 +334,8 @@ conversation.
 The spike gates everything. After it, the rename lands alone so its large mechanical diff
 never mixes with behavioural change.
 
-1. Throwaway spike — prove pi renders and accepts input in SwiftTerm. Revert it.
+1. ~~Throwaway spike — prove pi renders in SwiftTerm.~~ **Done 2026-08-13, passed.** It also
+   forced the PATH fix above. Harness discarded; it lived outside the repo.
 2. Rename `ClaudeSessionKit` to `AgentKit` and its types, keeping every JSON key. Full suite
    green with no behavioural change.
 3. Introduce `AgentBackend` plus `ClaudeCodeBackend`, moving the launch and parse logic
@@ -332,19 +376,36 @@ regression.
 
 ## Risks
 
-### pi's TUI may not render in SwiftTerm — spike this first
+### pi's TUI in SwiftTerm — RESOLVED, spike passed
 
-Claude Code works in `AgentSession` today. pi is a different TUI. Observed on launch, it
-emits Kitty keyboard protocol sequences (`ESC [ > 7 u`, `ESC [ ? u`) and a terminal size
-query (`ESC [ 16 t`). `AgentSession.installShiftReturnMonitor` (`ClaudeSession.swift:47`)
-already special-cases exactly this negotiation for Claude Code, and pi may need different
-handling — or none.
+Retired as a risk on 2026-08-13. A throwaway SwiftTerm harness reproduced
+`AgentSession.start()` exactly — `/bin/zsh -l -c "cd <wt> && exec pi …"`, `environment: nil`,
+the same theme colours — and ran pi inside the real
+`bsv-blockchain-teranode-issue-4459-limit-transactions-in-ram` worktree.
 
-If pi is unusable inside SwiftTerm, nothing else in this design is worth building.
+pi rendered correctly: coloured context banner, box drawing, the tool-call result block, the
+bottom status line, and a live cursor. It executed a bash tool call and answered the prompt.
+No layout corruption.
 
-**Therefore the first task is a throwaway spike:** hardcode `pi` as the executable in the
-existing launch builder, run the app, and look at the pane. Ten minutes, and it gates a
-refactor of roughly five hundred lines. Revert the spike before starting the real work.
+The spike also confirmed the directory encoding rule against a real PR Pilot worktree, space
+and dot intact:
+
+```
+--Users-ordishs-Library-Application Support-PRPilot-worktrees.noindex-bsv-blockchain-teranode-issue-4459-limit-transactions-in-ram--
+```
+
+**Still unproven:** keyboard handling. `installShiftReturnMonitor` is already conditional on
+`view.terminal.keyboardEnhancementFlags.isEmpty`, and pi negotiates the Kitty keyboard
+protocol (`ESC [ > 7 u` observed at launch), so the monitor should stand down on its own and
+`AgentSession` should need no change. Confirming that needs a human pressing Shift+Return in a
+pi pane. It is a step in the end-to-end verification, not a design question.
+
+### pi bills as extra usage
+
+Observed at launch: pi runs through the local `pi-claude-auth` extension on Anthropic
+subscription auth, and warns that third-party harness usage draws from extra usage rather than
+Claude plan limits. Not a code risk. It is a cost risk worth knowing before running pi across
+a full sidebar.
 
 ### Directory encoding is reverse-engineered
 
