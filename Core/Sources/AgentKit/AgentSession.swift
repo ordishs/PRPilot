@@ -95,6 +95,10 @@ public final class AgentSession {
     /// closes the DispatchIO channel, which closes the master. Without both halves the pty
     /// stays allocated for the life of the app, and the machine runs out of ptys at
     /// `kern.tty.ptmx_max`.
+    ///
+    /// Closing the terminal also cancels the SwiftTerm process monitor whose handler calls
+    /// `waitpid`, so this reaps the agent itself. Otherwise every terminated session leaves a
+    /// zombie in the process table for as long as the app runs.
     public func terminate() {
         let pid = terminalView.process.shellPid
         guard pid > 0 else { return }
@@ -105,8 +109,18 @@ public final class AgentSession {
             if killpg(pid, 0) == 0 {
                 killpg(pid, SIGKILL)
             }
+            for _ in 0..<Self.reapAttempts {
+                var status: Int32 = 0
+                if waitpid(pid, &status, WNOHANG) != 0 { return }
+                try? await Task.sleep(nanoseconds: Self.reapPollNanoseconds)
+            }
         }
     }
+
+    /// Two seconds of polling after the SIGKILL. `waitpid` answers 0 only while the agent is
+    /// still alive, so the loop ends as soon as it exits.
+    private static let reapAttempts = 40
+    private static let reapPollNanoseconds: UInt64 = 50_000_000
 
     /// Internal rather than private so the launch command can be asserted directly. The
     /// PATH prefix it builds is what makes an interpreted agent launch at all.

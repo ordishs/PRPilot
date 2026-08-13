@@ -70,4 +70,26 @@ struct AgentSessionPtyTests {
     @Test func terminateReleasesThePtyWhenAGrandchildInheritsIt() async throws {
         #expect(try await ptysHeldAfterTerminate(command: "sleep 30 & exec cat") == 0)
     }
+
+    /// Closing the terminal cancels the SwiftTerm process monitor whose handler calls `waitpid`,
+    /// so the session has to reap the agent itself. An unreaped agent stays in the process table
+    /// as a zombie until the app exits.
+    ///
+    /// `waitpid` here is the assertion: `ECHILD` means the session already reaped the agent, and
+    /// any other answer means the test reaped a zombie the session left behind.
+    @Test func terminateReapsTheAgentInsteadOfLeavingAZombie() async throws {
+        let session = AgentSession(spec: spec(command: "exec cat"))
+        session.start()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let pid = session.terminalView.process.shellPid
+        #expect(pid > 0)
+
+        session.terminate()
+        try await Task.sleep(nanoseconds: 2_500_000_000)
+
+        var status: Int32 = 0
+        let reaped = waitpid(pid, &status, WNOHANG)
+        #expect(reaped == -1)
+        #expect(errno == ECHILD)
+    }
 }
