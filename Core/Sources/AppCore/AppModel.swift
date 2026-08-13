@@ -81,7 +81,9 @@ public final class AppModel {
     private let notificationPoster: NotificationPosting
     private let statusReader: AgentStatusReader
     private let commandRunner: CommandRunner
-    private var resolvedClaudePath: String?
+    /// Resolved executable path per agent. Resolution shells out to a login shell, so the
+    /// result is cached for the app's lifetime.
+    private var resolvedAgentPaths: [AgentKind: String] = [:]
 
     public init(
         store: ReviewStore,
@@ -546,27 +548,51 @@ public final class AppModel {
         }
     }
 
-    static let claudeNotFoundMessage = """
-    Couldn't find the `claude` command on your login PATH.
+    static func notFoundMessage(for kind: AgentKind) -> String {
+        let name = kind.defaultExecutableName
+        switch kind {
+        case .claudeCode:
+            return """
+            Couldn't find the `\(name)` command on your login PATH.
 
-    Open a terminal and run `which claude`, then paste that path into Settings ▸ Tools ▸ claude.
-    """
+            Open a terminal and run `which \(name)`, then paste that path into Settings ▸ Tools ▸ \(name).
+            """
+        case .pi:
+            // pi is usually installed by a node version manager, which puts it on the PATH from
+            // `.zshrc`. A login shell never reads that file, so PR Pilot cannot resolve pi on
+            // its own and the explicit setting is the only reliable route.
+            return """
+            Couldn't find the `\(name)` command on your login PATH.
 
-    private func claudeExecutable() async -> String? {
-        if let override = explicitClaudeOverride() {
+            pi is normally installed through a node version manager, which PR Pilot cannot see.
+            Open a terminal and run `which \(name)`, then paste that path into Settings ▸ Tools ▸ \(name).
+            """
+        }
+    }
+
+    private func agentExecutable(for kind: AgentKind) async -> String? {
+        if let override = explicitOverride(for: kind) {
             return override
         }
-        if let cached = resolvedClaudePath {
+        if let cached = resolvedAgentPaths[kind] {
             return cached
         }
-        let resolved = await LoginShellResolver.resolve("claude", runner: commandRunner)
-        resolvedClaudePath = resolved
+        let resolved = await LoginShellResolver.resolve(kind.defaultExecutableName, runner: commandRunner)
+        if let resolved {
+            resolvedAgentPaths[kind] = resolved
+        }
         return resolved
     }
 
-    private func explicitClaudeOverride() -> String? {
-        for candidate in [settings.claudePath, claudePath] {
-            guard let candidate, !candidate.isEmpty, candidate != "claude" else { continue }
+    private func explicitOverride(for kind: AgentKind) -> String? {
+        let name = kind.defaultExecutableName
+        let candidates: [String?]
+        switch kind {
+        case .claudeCode: candidates = [settings.claudePath, claudePath]
+        case .pi: candidates = [settings.piPath]
+        }
+        for candidate in candidates {
+            guard let candidate, !candidate.isEmpty, candidate != name else { continue }
             return (candidate as NSString).expandingTildeInPath
         }
         return nil
@@ -586,11 +612,12 @@ public final class AppModel {
         claudePreparing.insert(review.id)
         defer { claudePreparing.remove(review.id) }
 
+        let kind = review.effectiveAgent(default: settings.defaultAgent)
         claudePaneState[review.id] = .preparingWorktree
         claudePrepLog[review.id] = []
-        appendPrepLog("Locating claude…", for: review.id)
-        guard let executable = await claudeExecutable() else {
-            claudePaneState[review.id] = .claudeUnavailable(Self.claudeNotFoundMessage)
+        appendPrepLog("Locating \(kind.defaultExecutableName)…", for: review.id)
+        guard let executable = await agentExecutable(for: kind) else {
+            claudePaneState[review.id] = .claudeUnavailable(Self.notFoundMessage(for: kind))
             claudePrepLog[review.id] = nil
             return
         }
@@ -629,30 +656,30 @@ public final class AppModel {
         if forceFresh {
             sessionID = UUID().uuidString.lowercased()
             resume = false
-            appendPrepLog("Starting fresh /review", for: review.id)
-        } else if let existing = updated.claudeSessionID {
+            appendPrepLog("Starting fresh session", for: review.id)
+        } else if let existing = updated.sessionID(for: kind) {
             // Resume the persisted session only if its transcript still exists. If it was
-            // archived or pruned, `claude --resume` would exit 256 ("No conversation found"),
-            // so fall back to a fresh review instead.
-            if AgentTranscriptPath.transcriptExists(forWorktreePath: ready.worktreePath, sessionID: existing) {
+            // archived or pruned, resuming would exit with "No conversation found", so fall
+            // back to a fresh session instead.
+            if AgentTranscriptPath.transcriptExists(for: kind, worktreePath: ready.worktreePath, sessionID: existing) {
                 sessionID = existing
                 resume = true
                 appendPrepLog("Resuming session \(existing)", for: review.id)
             } else {
                 sessionID = UUID().uuidString.lowercased()
                 resume = false
-                appendPrepLog("Previous session not found; starting fresh /review", for: review.id)
+                appendPrepLog("Previous session not found; starting fresh session", for: review.id)
             }
-        } else if let latest = AgentTranscriptPath.latestSessionID(forWorktreePath: ready.worktreePath) {
+        } else if let latest = AgentTranscriptPath.latestSessionID(for: kind, worktreePath: ready.worktreePath) {
             sessionID = latest
             resume = true
             appendPrepLog("Resuming session \(latest)", for: review.id)
         } else {
             sessionID = UUID().uuidString.lowercased()
             resume = false
-            appendPrepLog("Starting fresh /review", for: review.id)
+            appendPrepLog("Starting fresh session", for: review.id)
         }
-        updated.claudeSessionID = sessionID
+        updated.setSessionID(sessionID, for: kind)
 
         if updated != review {
             try? await store.upsertItem(updated)
@@ -662,7 +689,8 @@ public final class AppModel {
             settings: settings,
             review: updated,
             worktreePath: ready.worktreePath,
-            resolvedClaudePath: executable,
+            kind: kind,
+            resolvedExecutablePath: executable,
             sessionID: sessionID,
             resume: resume
         )
@@ -673,7 +701,7 @@ public final class AppModel {
         sessionLaunchedIsDark[review.id] = terminalIsDark
         sessionStartedAt[review.id] = Date()
         session.start()
-        attachTranscriptWatcher(reviewID: review.id, worktreePath: ready.worktreePath)
+        attachTranscriptWatcher(reviewID: review.id, worktreePath: ready.worktreePath, kind: kind)
         recomputeStatus(for: review.id, now: Date())
         enforceSessionBudget()
         if editable {
@@ -681,10 +709,10 @@ public final class AppModel {
         }
     }
 
-    private func attachTranscriptWatcher(reviewID: String, worktreePath: String) {
+    private func attachTranscriptWatcher(reviewID: String, worktreePath: String, kind: AgentKind) {
         if transcriptWatchers[reviewID] != nil { return }
-        let dir = AgentTranscriptPath.directoryURL(forWorktreePath: worktreePath)
-        let watcher = TranscriptWatcher(transcriptDir: dir)
+        let dir = AgentTranscriptPath.directoryURL(for: kind, worktreePath: worktreePath)
+        let watcher = TranscriptWatcher(transcriptDir: dir, kind: kind)
         watcher.start { [weak self] event in
             guard let self else { return }
             self.handleTranscriptEvent(
@@ -929,7 +957,7 @@ public final class AppModel {
     /// Warms the most recently opened items up to the session cap. Warming every item
     /// starts one `claude` process per item, which exhausts memory on a large work list.
     func prewarmClaudeAndWait() async {
-        _ = await claudeExecutable()
+        _ = await agentExecutable(for: settings.defaultAgent)
         let ordered = reviews
             .filter { !$0.disabled }
             .sorted { left, right in
@@ -987,12 +1015,15 @@ public final class AppModel {
     public func clearAgentSession(for id: String) async {
         terminateAgentSession(for: id)
         guard var review = reviews.first(where: { $0.id == id }) else { return }
-        // Archive the prior transcripts so ensureAgentSession can't re-discover and
-        // --resume the old session; the relaunch below starts a fresh /review instead.
+        // Archive the prior transcripts so ensureAgentSession can't re-discover and resume the
+        // old session; the relaunch below starts a fresh session instead. Only this agent's
+        // transcripts are archived — the other agent's conversation for the same item is
+        // untouched, so switching back still resumes it.
+        let kind = review.effectiveAgent(default: settings.defaultAgent)
         if let worktreePath = review.worktreePath {
-            AgentTranscriptPath.archiveTranscripts(forWorktreePath: worktreePath)
+            AgentTranscriptPath.archiveTranscripts(for: kind, worktreePath: worktreePath)
         }
-        review.claudeSessionID = nil
+        review.setSessionID(nil, for: kind)
         review.claudeReviewedAt = nil
         review.claudeLastCompletedAt = nil
         review.waitingSeenAt = nil
@@ -1024,8 +1055,9 @@ public final class AppModel {
               claudeSessions[id] != nil,
               let review = reviews.first(where: { $0.id == id }),
               let worktreePath = review.worktreePath,
-              let sessionID = review.claudeSessionID,
-              AgentTranscriptPath.transcriptExists(forWorktreePath: worktreePath, sessionID: sessionID)
+              case let kind = review.effectiveAgent(default: settings.defaultAgent),
+              let sessionID = review.sessionID(for: kind),
+              AgentTranscriptPath.transcriptExists(for: kind, worktreePath: worktreePath, sessionID: sessionID)
         else { return }
 
         terminateAgentSession(for: id)
@@ -1042,8 +1074,9 @@ public final class AppModel {
               let launchedIsDark = sessionLaunchedIsDark[review.id],
               launchedIsDark != terminalIsDark,
               let worktreePath = review.worktreePath,
-              let sessionID = review.claudeSessionID,
-              AgentTranscriptPath.transcriptExists(forWorktreePath: worktreePath, sessionID: sessionID)
+              case let kind = review.effectiveAgent(default: settings.defaultAgent),
+              let sessionID = review.sessionID(for: kind),
+              AgentTranscriptPath.transcriptExists(for: kind, worktreePath: worktreePath, sessionID: sessionID)
         else { return }
 
         terminateAgentSession(for: review.id)

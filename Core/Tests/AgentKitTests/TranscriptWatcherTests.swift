@@ -62,7 +62,7 @@ private let turnDurationSettledLine = """
     let lines = [workflowLaunchLine, workflowLaunchedEndTurnLine, turnDurationPendingLine]
     try (lines.joined(separator: "\n") + "\n").write(to: jsonl, atomically: true, encoding: .utf8)
 
-    let watcher = TranscriptWatcher(transcriptDir: tempDir)
+    let watcher = TranscriptWatcher(transcriptDir: tempDir, kind: .claudeCode)
     var received: [TranscriptEvent] = []
     watcher.start { received.append($0) }
     try await Task.sleep(nanoseconds: 300_000_000)
@@ -89,7 +89,7 @@ private let turnDurationSettledLine = """
     ]
     try (lines.joined(separator: "\n") + "\n").write(to: jsonl, atomically: true, encoding: .utf8)
 
-    let watcher = TranscriptWatcher(transcriptDir: tempDir)
+    let watcher = TranscriptWatcher(transcriptDir: tempDir, kind: .claudeCode)
     var received: [TranscriptEvent] = []
     watcher.start { received.append($0) }
     try await Task.sleep(nanoseconds: 300_000_000)
@@ -120,7 +120,7 @@ private let turnDurationSettledLine = """
     ]
     try (lines.joined(separator: "\n") + "\n").write(to: jsonl, atomically: true, encoding: .utf8)
 
-    let watcher = TranscriptWatcher(transcriptDir: tempDir)
+    let watcher = TranscriptWatcher(transcriptDir: tempDir, kind: .claudeCode)
     var received: [TranscriptEvent] = []
     watcher.start { received.append($0) }
     try await Task.sleep(nanoseconds: 300_000_000)
@@ -138,7 +138,7 @@ private let turnDurationSettledLine = """
     let jsonl = tempDir.appendingPathComponent("session.jsonl")
     try (toolUseLine + "\n" + endTurnLine + "\n").write(to: jsonl, atomically: true, encoding: .utf8)
 
-    let watcher = TranscriptWatcher(transcriptDir: tempDir)
+    let watcher = TranscriptWatcher(transcriptDir: tempDir, kind: .claudeCode)
     var received: [TranscriptEvent] = []
     watcher.start { received.append($0) }
     try await Task.sleep(nanoseconds: 300_000_000)
@@ -156,7 +156,7 @@ private let turnDurationSettledLine = """
     let jsonl = tempDir.appendingPathComponent("session.jsonl")
     try (sampleAssistantLine + "\n").write(to: jsonl, atomically: true, encoding: .utf8)
 
-    let watcher = TranscriptWatcher(transcriptDir: tempDir)
+    let watcher = TranscriptWatcher(transcriptDir: tempDir, kind: .claudeCode)
     var received: [TranscriptEvent] = []
     watcher.start { received.append($0) }
 
@@ -174,7 +174,7 @@ private let turnDurationSettledLine = """
     let jsonl = tempDir.appendingPathComponent("session.jsonl")
     try (sampleAssistantLine + "\n").write(to: jsonl, atomically: true, encoding: .utf8)
 
-    let watcher = TranscriptWatcher(transcriptDir: tempDir)
+    let watcher = TranscriptWatcher(transcriptDir: tempDir, kind: .claudeCode)
     var received: [TranscriptEvent] = []
     watcher.start { received.append($0) }
     try await Task.sleep(nanoseconds: 300_000_000)
@@ -199,7 +199,7 @@ private let turnDurationSettledLine = """
     let jsonl = tempDir.appendingPathComponent("session.jsonl")
     try (sampleAssistantLine + "\n").write(to: jsonl, atomically: true, encoding: .utf8)
 
-    let watcher = TranscriptWatcher(transcriptDir: tempDir)
+    let watcher = TranscriptWatcher(transcriptDir: tempDir, kind: .claudeCode)
     var received: [TranscriptEvent] = []
     watcher.start { received.append($0) }
     try await Task.sleep(nanoseconds: 300_000_000)
@@ -224,7 +224,7 @@ private let turnDurationSettledLine = """
     let mixed = "{not json}\n" + sampleAssistantLine + "\n{\"type\":\"unknown\"}\n"
     try mixed.write(to: jsonl, atomically: true, encoding: .utf8)
 
-    let watcher = TranscriptWatcher(transcriptDir: tempDir)
+    let watcher = TranscriptWatcher(transcriptDir: tempDir, kind: .claudeCode)
     var received: [TranscriptEvent] = []
     watcher.start { received.append($0) }
     try await Task.sleep(nanoseconds: 300_000_000)

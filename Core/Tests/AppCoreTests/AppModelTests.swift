@@ -545,7 +545,10 @@ private func stubClient() -> GitHubClient {
     #expect(model.claudePaneState[review.id] == .sessionLive)
     let messages = (model.claudePrepLog[review.id] ?? []).map(\.message)
     #expect(messages.contains("Fetching PR #944…"))
-    #expect(messages.contains("Starting fresh /review"))
+    // Agent-neutral wording: the same log serves pi, which has no `/review` command. The
+    // "Locating" line names the agent's own binary rather than hardcoding claude.
+    #expect(messages.contains("Starting fresh session"))
+    #expect(messages.contains("Locating claude…"))
 }
 
 @Test @MainActor func ensureAgentSessionFlagsWorktreeFailure() async throws {

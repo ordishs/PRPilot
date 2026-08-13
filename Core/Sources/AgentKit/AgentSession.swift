@@ -60,7 +60,7 @@ public final class AgentSession {
     public func start() {
         if spec.executable.hasPrefix("/") {
             guard FileManager.default.isExecutableFile(atPath: spec.executable) else {
-                state = .failedToLaunch("claude not found at \(spec.executable)")
+                state = .failedToLaunch("\(spec.executableName) not found at \(spec.executable)")
                 return
             }
         }
@@ -100,7 +100,9 @@ public final class AgentSession {
         }
     }
 
-    private func makeShellCommand() -> String {
+    /// Internal rather than private so the launch command can be asserted directly. The
+    /// PATH prefix it builds is what makes an interpreted agent launch at all.
+    func makeShellCommand() -> String {
         let escapedCwd = shellEscape(spec.cwd)
         let escapedExec = shellEscape(spec.executable)
         let escapedArgs = spec.arguments.map(shellEscape).joined(separator: " ")
@@ -109,7 +111,19 @@ public final class AgentSession {
         let envPrefix = env.isEmpty ? "" : "env " + env + " "
         let extra = spec.extraArgs.trimmingCharacters(in: .whitespacesAndNewlines)
         let extraPrefix = extra.isEmpty ? "" : " " + extra
-        return "cd \(escapedCwd) && exec \(envPrefix)\(escapedExec)\(extraPrefix)\(argsSuffix)"
+        return "cd \(escapedCwd) && \(pathPrefix())exec \(envPrefix)\(escapedExec)\(extraPrefix)\(argsSuffix)"
+    }
+
+    /// An agent that is an interpreted script cannot rely on the login shell to find its
+    /// interpreter: `zsh -l` reads `.zprofile` but not `.zshrc`, and version managers such as
+    /// nvm set their PATH in `.zshrc`. pi ships as a node script with an `env node` shebang, so
+    /// without this it exits 127 before drawing anything. Its own bin directory holds the
+    /// sibling `node`, which is why prepending that directory is enough.
+    private func pathPrefix() -> String {
+        guard spec.prependExecutableDirectoryToPath else { return "" }
+        let binDir = (spec.executable as NSString).deletingLastPathComponent
+        guard !binDir.isEmpty, binDir != "/" else { return "" }
+        return "export PATH=\(shellEscape(binDir)):$PATH && "
     }
 
     private func shellEscape(_ s: String) -> String {

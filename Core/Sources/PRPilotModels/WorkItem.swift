@@ -13,8 +13,16 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
     public var origin: ReviewOrigin
     public var closingIssueNumber: Int?
     public var notes: String?
-    public var claudeFlags: [String]?
+    /// Extra arguments for this item's session, whichever agent runs it. The stored key is
+    /// still `claudeFlags` because it shipped that way.
+    public var agentFlags: [String]?
+    /// Claude Code's session for this item. pi keeps its own in `piSessionID`, so switching an
+    /// item between agents resumes each conversation instead of destroying one.
     public var claudeSessionID: String?
+    public var piSessionID: String?
+    /// Agent this item uses. Nil means follow `Settings.defaultAgent`, so changing the global
+    /// default moves every item that has made no choice of its own.
+    public var agent: AgentKind?
     public var autoReview: Bool
     public var addedAt: Date
     public var lastOpenedAt: Date?
@@ -46,10 +54,35 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, title, repoKey, baseBranch, headBranch, worktreePath, prRef, prState, issueRef
-        case origin, closingIssueNumber, notes, claudeFlags, claudeSessionID, autoReview
+        case origin, closingIssueNumber, notes, claudeSessionID, autoReview
         case addedAt, lastOpenedAt, disabled, viewedFiles, claudeReviewedAt, approvedByMe, manualIssueStatus
         case label, lastPane, authorUpdateSeenAt
         case myReviewState, myLastReviewAt, claudeLastCompletedAt, waitingSeenAt
+        case piSessionID, agent
+        /// Renamed in Swift when the session layer stopped being Claude-specific. The stored
+        /// key must not change, or existing items lose their configured flags.
+        case agentFlags = "claudeFlags"
+    }
+
+    /// Agent that will actually run this item, given the global default.
+    public func effectiveAgent(default defaultAgent: AgentKind) -> AgentKind {
+        agent ?? defaultAgent
+    }
+
+    /// Session ID this item holds for `kind`, if any. Each agent has its own slot because
+    /// their transcripts are mutually unreadable.
+    public func sessionID(for kind: AgentKind) -> String? {
+        switch kind {
+        case .claudeCode: return claudeSessionID
+        case .pi: return piSessionID
+        }
+    }
+
+    public mutating func setSessionID(_ id: String?, for kind: AgentKind) {
+        switch kind {
+        case .claudeCode: claudeSessionID = id
+        case .pi: piSessionID = id
+        }
     }
 
     private enum LegacyKeys: String, CodingKey {
@@ -69,8 +102,10 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         origin: ReviewOrigin,
         closingIssueNumber: Int? = nil,
         notes: String? = nil,
-        claudeFlags: [String]? = nil,
+        agentFlags: [String]? = nil,
         claudeSessionID: String? = nil,
+        piSessionID: String? = nil,
+        agent: AgentKind? = nil,
         autoReview: Bool = false,
         addedAt: Date,
         lastOpenedAt: Date? = nil,
@@ -96,8 +131,10 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.origin = origin
         self.closingIssueNumber = closingIssueNumber
         self.notes = notes
-        self.claudeFlags = claudeFlags
+        self.agentFlags = agentFlags
         self.claudeSessionID = claudeSessionID
+        self.piSessionID = piSessionID
+        self.agent = agent
         self.autoReview = autoReview
         self.addedAt = addedAt
         self.lastOpenedAt = lastOpenedAt
@@ -122,8 +159,10 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.origin = try c.decode(ReviewOrigin.self, forKey: .origin)
         self.closingIssueNumber = try c.decodeIfPresent(Int.self, forKey: .closingIssueNumber)
         self.notes = try c.decodeIfPresent(String.self, forKey: .notes)
-        self.claudeFlags = try c.decodeIfPresent([String].self, forKey: .claudeFlags)
+        self.agentFlags = try c.decodeIfPresent([String].self, forKey: .agentFlags)
         self.claudeSessionID = try c.decodeIfPresent(String.self, forKey: .claudeSessionID)
+        self.piSessionID = try c.decodeIfPresent(String.self, forKey: .piSessionID)
+        self.agent = try c.decodeIfPresent(AgentKind.self, forKey: .agent)
         self.addedAt = try c.decode(Date.self, forKey: .addedAt)
         self.lastOpenedAt = try c.decodeIfPresent(Date.self, forKey: .lastOpenedAt)
         self.disabled = try c.decodeIfPresent(Bool.self, forKey: .disabled) ?? false

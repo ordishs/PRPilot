@@ -25,7 +25,7 @@ private func sampleReview() -> WorkItem {
         settings: .default,
         review: sampleReview(),
         worktreePath: "/tmp/wt",
-        resolvedClaudePath: "/bin/claude",
+        kind: .claudeCode, resolvedExecutablePath: "/bin/claude",
         sessionID: "10889bb0-624c-4ef5-94f7-77480418849c",
         resume: false
     )
@@ -45,7 +45,7 @@ private func sampleReview() -> WorkItem {
         settings: .default,
         review: sampleReview(),
         worktreePath: "/tmp/wt",
-        resolvedClaudePath: "/bin/claude",
+        kind: .claudeCode, resolvedExecutablePath: "/bin/claude",
         sessionID: "10889bb0-624c-4ef5-94f7-77480418849c",
         resume: true
     )
@@ -66,7 +66,7 @@ private func nameArg(_ args: [String]) -> String? {
 @Test func launchBuilderNamesPRSessionWithNumberAndTitle() {
     let spec = AgentLaunchBuilder.build(
         settings: .default, review: sampleReview(), worktreePath: "/tmp/wt",
-        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
+        kind: .claudeCode, resolvedExecutablePath: "/bin/claude", sessionID: "sid", resume: false
     )
     #expect(nameArg(spec.arguments) == "#944 fix")
 }
@@ -74,7 +74,7 @@ private func nameArg(_ args: [String]) -> String? {
 @Test func launchBuilderNamesSessionOnResumeToo() {
     let spec = AgentLaunchBuilder.build(
         settings: .default, review: sampleReview(), worktreePath: "/tmp/wt",
-        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: true
+        kind: .claudeCode, resolvedExecutablePath: "/bin/claude", sessionID: "sid", resume: true
     )
     #expect(nameArg(spec.arguments) == "#944 fix")
 }
@@ -87,7 +87,7 @@ private func nameArg(_ args: [String]) -> String? {
     )
     let spec = AgentLaunchBuilder.build(
         settings: .default, review: item, worktreePath: "/tmp/wt",
-        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
+        kind: .claudeCode, resolvedExecutablePath: "/bin/claude", sessionID: "sid", resume: false
     )
     #expect(nameArg(spec.arguments) == "feat/parallel-validation")
 }
@@ -114,7 +114,7 @@ private func sampleIssueItem() -> WorkItem {
         settings: .default,
         review: sampleIssueItem(),
         worktreePath: "/tmp/wt",
-        resolvedClaudePath: "/bin/claude",
+        kind: .claudeCode, resolvedExecutablePath: "/bin/claude",
         sessionID: "abc",
         resume: false
     )
@@ -132,7 +132,7 @@ private func sampleIssueItem() -> WorkItem {
         settings: .default,
         review: sampleIssueItem(),
         worktreePath: "/tmp/wt",
-        resolvedClaudePath: "/bin/claude",
+        kind: .claudeCode, resolvedExecutablePath: "/bin/claude",
         sessionID: "abc",
         resume: true
     )
@@ -148,7 +148,7 @@ private func sampleIssueItem() -> WorkItem {
     )
     let spec = AgentLaunchBuilder.build(
         settings: .default, review: item, worktreePath: "/tmp/wt",
-        resolvedClaudePath: "/usr/bin/claude", sessionID: "sid", resume: false
+        kind: .claudeCode, resolvedExecutablePath: "/usr/bin/claude", sessionID: "sid", resume: false
     )
     #expect(!spec.arguments.contains { $0.hasPrefix("/review ") })
     #expect(spec.arguments.contains("--session-id"))
@@ -187,7 +187,7 @@ private func settings(review: String? = nil, issue: String? = nil) -> Settings {
     """
     let spec = AgentLaunchBuilder.build(
         settings: settings(review: template), review: sampleReview(), worktreePath: "/tmp/wt",
-        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
+        kind: .claudeCode, resolvedExecutablePath: "/bin/claude", sessionID: "sid", resume: false
     )
     #expect(spec.arguments.contains("""
     /review https://github.com/bsv-blockchain/teranode/pull/944
@@ -199,7 +199,7 @@ private func settings(review: String? = nil, issue: String? = nil) -> Settings {
 @Test func launchBuilderUsesDefaultIssueTemplate() {
     let spec = AgentLaunchBuilder.build(
         settings: .default, review: issueItem(), worktreePath: "/tmp/wt",
-        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
+        kind: .claudeCode, resolvedExecutablePath: "/bin/claude", sessionID: "sid", resume: false
     )
     #expect(spec.arguments.contains("/start-issue 4577"))
 }
@@ -208,7 +208,7 @@ private func settings(review: String? = nil, issue: String? = nil) -> Settings {
     let spec = AgentLaunchBuilder.build(
         settings: settings(issue: "/start-issue {number} in {owner}/{repo}"),
         review: issueItem(), worktreePath: "/tmp/wt",
-        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
+        kind: .claudeCode, resolvedExecutablePath: "/bin/claude", sessionID: "sid", resume: false
     )
     #expect(spec.arguments.contains("/start-issue 4577 in bsv-blockchain/teranode"))
 }
@@ -217,7 +217,7 @@ private func settings(review: String? = nil, issue: String? = nil) -> Settings {
     // A deliberately empty template opens the session with no prompt at all.
     let spec = AgentLaunchBuilder.build(
         settings: settings(review: "   "), review: sampleReview(), worktreePath: "/tmp/wt",
-        resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: false
+        kind: .claudeCode, resolvedExecutablePath: "/bin/claude", sessionID: "sid", resume: false
     )
     #expect(!spec.arguments.contains { $0.hasPrefix("/") })
     #expect(spec.arguments.contains("--session-id"))
@@ -226,7 +226,7 @@ private func settings(review: String? = nil, issue: String? = nil) -> Settings {
 @Test func launchBuilderIgnoresTemplatesOnResume() {
     let spec = AgentLaunchBuilder.build(
         settings: settings(review: "/review {url} and be brief"), review: sampleReview(),
-        worktreePath: "/tmp/wt", resolvedClaudePath: "/bin/claude", sessionID: "sid", resume: true
+        worktreePath: "/tmp/wt", kind: .claudeCode, resolvedExecutablePath: "/bin/claude", sessionID: "sid", resume: true
     )
     #expect(!spec.arguments.contains { $0.hasPrefix("/review") })
 }

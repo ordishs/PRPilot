@@ -1,41 +1,45 @@
 import Foundation
+import PRPilotModels
 
+/// Transcript discovery, expressed once for every agent.
+///
+/// Each backend supplies only two facts — where its transcripts live, and how to read a
+/// session ID out of a file name. Everything here is derived from those, so pi's timestamped
+/// file names need no special case.
 public enum AgentTranscriptPath {
-    public static func directoryURL(forWorktreePath path: String) -> URL {
-        // Claude Code derives the transcript folder name from the working directory by
-        // replacing every character that is not ASCII-alphanumeric or '-' with '-'.
-        // This must match exactly — e.g. "/Users/me/Application Support/x" must encode to
-        // "-Users-me-Application-Support-x" (space -> '-') and "masa.gi" to "masa-gi"
-        // ('.' -> '-'). If it doesn't, the transcript watcher tails the wrong (empty)
-        // directory, status stays .starting, and review state never updates.
-        let encoded = String(path.map { Self.encodedCharacters.contains($0) ? $0 : "-" })
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        return homeDir.appendingPathComponent(".claude/projects/\(encoded)")
+    public static func directoryURL(for kind: AgentKind, worktreePath: String) -> URL {
+        AgentBackends.backend(for: kind).transcriptDirectory(forWorktreePath: worktreePath)
     }
 
-    private static let encodedCharacters = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-")
-
-    public static func latestSessionID(forWorktreePath path: String) -> String? {
-        latestSessionID(in: directoryURL(forWorktreePath: path))
+    public static func latestSessionID(for kind: AgentKind, worktreePath: String) -> String? {
+        latestSessionID(in: directoryURL(for: kind, worktreePath: worktreePath), kind: kind)
     }
 
-    /// Whether a transcript still exists for `sessionID` under the worktree's project dir.
-    /// Used to decide if `claude --resume <sessionID>` is safe: a persisted session whose
-    /// transcript has been archived or pruned would otherwise exit with "No conversation
-    /// found", so the caller starts a fresh review instead.
-    public static func transcriptExists(forWorktreePath path: String, sessionID: String) -> Bool {
-        let url = directoryURL(forWorktreePath: path).appendingPathComponent("\(sessionID).jsonl")
-        return FileManager.default.fileExists(atPath: url.path)
+    /// Whether a transcript still exists for `sessionID`.
+    ///
+    /// Used to decide whether resuming is safe: a persisted session whose transcript has been
+    /// archived or pruned would exit with "No conversation found", so the caller starts a
+    /// fresh session instead.
+    ///
+    /// This lists the directory and maps names to session IDs rather than building a path.
+    /// It cannot build one — pi prefixes a timestamp the caller does not know.
+    public static func transcriptExists(for kind: AgentKind, worktreePath: String, sessionID: String) -> Bool {
+        let dir = directoryURL(for: kind, worktreePath: worktreePath)
+        let backend = AgentBackends.backend(for: kind)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else {
+            return false
+        }
+        return names.contains { backend.sessionID(fromTranscriptFilename: $0) == sessionID }
     }
 
     /// Moves a worktree's session transcripts into an `archived/` subdirectory so they are
     /// no longer discovered by `latestSessionID` (or tailed by the watcher). This forces a
-    /// brand-new Claude session — used when clearing a session to start a fresh review,
-    /// rather than resuming the old (possibly interrupted) conversation. Transcripts are
-    /// preserved on disk under `archived/`, not deleted. Returns the number moved.
+    /// brand-new session — used when clearing a session to start a fresh review, rather than
+    /// resuming the old (possibly interrupted) conversation. Transcripts are preserved on
+    /// disk under `archived/`, not deleted. Returns the number moved.
     @discardableResult
-    public static func archiveTranscripts(forWorktreePath path: String) -> Int {
-        archiveTranscripts(in: directoryURL(forWorktreePath: path))
+    public static func archiveTranscripts(for kind: AgentKind, worktreePath: String) -> Int {
+        archiveTranscripts(in: directoryURL(for: kind, worktreePath: worktreePath))
     }
 
     @discardableResult
@@ -63,7 +67,8 @@ public enum AgentTranscriptPath {
         return moved
     }
 
-    public static func latestSessionID(in dir: URL) -> String? {
+    public static func latestSessionID(in dir: URL, kind: AgentKind) -> String? {
+        let backend = AgentBackends.backend(for: kind)
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
             at: dir,
@@ -72,14 +77,14 @@ public enum AgentTranscriptPath {
         ) else {
             return nil
         }
-        let jsonl = entries.filter { $0.pathExtension == "jsonl" }
-        guard !jsonl.isEmpty else { return nil }
-        let withDates: [(URL, Date)] = jsonl.compactMap { url in
+        let transcripts = entries.filter { backend.sessionID(fromTranscriptFilename: $0.lastPathComponent) != nil }
+        guard !transcripts.isEmpty else { return nil }
+        let withDates: [(URL, Date)] = transcripts.compactMap { url in
             let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
             guard let date = values?.contentModificationDate else { return nil }
             return (url, date)
         }
         guard let newest = withDates.max(by: { $0.1 < $1.1 }) else { return nil }
-        return newest.0.deletingPathExtension().lastPathComponent
+        return backend.sessionID(fromTranscriptFilename: newest.0.lastPathComponent)
     }
 }

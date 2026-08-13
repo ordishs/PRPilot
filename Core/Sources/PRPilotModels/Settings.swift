@@ -12,6 +12,14 @@ public struct Settings: Codable, Sendable, Equatable {
     public var claudePath: String?
     public var claudeLaunchArgs: String
     public var claudeEnv: String
+    /// Agent used by a work item that has made no explicit choice of its own.
+    public var defaultAgent: AgentKind
+    /// Path to the `pi` executable. Effectively required to use pi at all: a GUI-launched
+    /// login shell has no nvm PATH, so `pi` cannot be resolved automatically the way `claude`
+    /// can. See the pi agent backend design doc.
+    public var piPath: String?
+    public var piLaunchArgs: String
+    public var piEnv: String
     public var autoLoad: Bool
     public var notificationsEnabled: Bool
     public var diffMode: DiffMode
@@ -28,6 +36,11 @@ public struct Settings: Codable, Sendable, Equatable {
     public var reviewPromptTemplate: String
     /// First prompt of an issue session.
     public var issuePromptTemplate: String
+    /// First prompt of a pi review session. Separate from the Claude Code template because
+    /// `/review` is a Claude Code slash command with no pi equivalent.
+    public var piReviewPromptTemplate: String
+    /// First prompt of a pi issue session.
+    public var piIssuePromptTemplate: String
     /// Live `claude` child processes allowed at once. Each costs roughly 550 MB, so an
     /// uncapped one-per-item spread exhausts swap on a large work list.
     public var maxLiveAgentSessions: Int
@@ -55,6 +68,12 @@ public struct Settings: Codable, Sendable, Equatable {
         case claudePath
         case claudeLaunchArgs
         case claudeEnv
+        case defaultAgent
+        case piPath
+        case piLaunchArgs
+        case piEnv
+        case piReviewPromptTemplate
+        case piIssuePromptTemplate
         case autoLoad
         case notificationsEnabled
         case diffMode
@@ -86,6 +105,10 @@ public struct Settings: Codable, Sendable, Equatable {
         claudePath: String? = nil,
         claudeLaunchArgs: String = "",
         claudeEnv: String = "",
+        defaultAgent: AgentKind = .claudeCode,
+        piPath: String? = nil,
+        piLaunchArgs: String = "",
+        piEnv: String = "",
         autoLoad: Bool = false,
         notificationsEnabled: Bool,
         diffMode: DiffMode,
@@ -97,6 +120,8 @@ public struct Settings: Codable, Sendable, Equatable {
         appearance: Appearance = .system,
         reviewPromptTemplate: String = Settings.defaultReviewPromptTemplate,
         issuePromptTemplate: String = Settings.defaultIssuePromptTemplate,
+        piReviewPromptTemplate: String = Settings.defaultPiReviewPromptTemplate,
+        piIssuePromptTemplate: String = Settings.defaultPiIssuePromptTemplate,
         maxLiveAgentSessions: Int = 5,
         maxLiveWebViews: Int = 8
     ) {
@@ -113,6 +138,10 @@ public struct Settings: Codable, Sendable, Equatable {
         self.claudePath = claudePath
         self.claudeLaunchArgs = claudeLaunchArgs
         self.claudeEnv = claudeEnv
+        self.defaultAgent = defaultAgent
+        self.piPath = piPath
+        self.piLaunchArgs = piLaunchArgs
+        self.piEnv = piEnv
         self.autoLoad = autoLoad
         self.notificationsEnabled = notificationsEnabled
         self.diffMode = diffMode
@@ -124,6 +153,8 @@ public struct Settings: Codable, Sendable, Equatable {
         self.appearance = appearance
         self.reviewPromptTemplate = reviewPromptTemplate
         self.issuePromptTemplate = issuePromptTemplate
+        self.piReviewPromptTemplate = piReviewPromptTemplate
+        self.piIssuePromptTemplate = piIssuePromptTemplate
         self.maxLiveAgentSessions = maxLiveAgentSessions
         self.maxLiveWebViews = maxLiveWebViews
     }
@@ -147,6 +178,10 @@ public struct Settings: Codable, Sendable, Equatable {
             let envArray = try c.decodeIfPresent([String].self, forKey: .claudeEnv) ?? []
             claudeEnv = envArray.joined(separator: " ")
         }
+        defaultAgent = try c.decodeIfPresent(AgentKind.self, forKey: .defaultAgent) ?? .claudeCode
+        piPath = try c.decodeIfPresent(String.self, forKey: .piPath)
+        piLaunchArgs = try c.decodeIfPresent(String.self, forKey: .piLaunchArgs) ?? ""
+        piEnv = try c.decodeIfPresent(String.self, forKey: .piEnv) ?? ""
         autoLoad = try c.decodeIfPresent(Bool.self, forKey: .autoLoad) ?? false
         notificationsEnabled = try c.decode(Bool.self, forKey: .notificationsEnabled)
         diffMode = try c.decode(DiffMode.self, forKey: .diffMode)
@@ -169,6 +204,10 @@ public struct Settings: Codable, Sendable, Equatable {
             ?? Settings.defaultReviewPromptTemplate
         issuePromptTemplate = try c.decodeIfPresent(String.self, forKey: .issuePromptTemplate)
             ?? Settings.defaultIssuePromptTemplate
+        piReviewPromptTemplate = try c.decodeIfPresent(String.self, forKey: .piReviewPromptTemplate)
+            ?? Settings.defaultPiReviewPromptTemplate
+        piIssuePromptTemplate = try c.decodeIfPresent(String.self, forKey: .piIssuePromptTemplate)
+            ?? Settings.defaultPiIssuePromptTemplate
         maxLiveAgentSessions = try c.decodeIfPresent(Int.self, forKey: .maxLiveAgentSessions) ?? 5
         maxLiveWebViews = try c.decodeIfPresent(Int.self, forKey: .maxLiveWebViews) ?? 8
 
@@ -189,6 +228,12 @@ public struct Settings: Codable, Sendable, Equatable {
 
     public static let defaultReviewPromptTemplate = "/review {url}"
     public static let defaultIssuePromptTemplate = "/start-issue {number}"
+
+    /// pi has no `/review` or `/start-issue` command, so its templates are plain prose rather
+    /// than a slash command. Kept deliberately short — the user owns and is expected to tune
+    /// these, exactly as with the Claude Code templates.
+    public static let defaultPiReviewPromptTemplate = "Review the pull request at {url}."
+    public static let defaultPiIssuePromptTemplate = "Start work on issue {number}."
 
     public static let defaultReviewRequestQueries: [DiscoveryQuery] = [
         DiscoveryQuery(text: "review-requested:@me is:open"),
