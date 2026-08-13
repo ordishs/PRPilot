@@ -558,15 +558,15 @@ public final class AppModel {
             Open a terminal and run `which \(name)`, then paste that path into Settings ▸ Tools ▸ \(name).
             """
         case .pi:
-            // Worth naming the usual cause, because `which pi` in a terminal succeeds while the
-            // app's login shell fails: node version managers export their PATH from `.zshrc`,
-            // which a login shell never reads.
+            // Resolution runs an interactive login shell, so it reads .zshrc and finds a
+            // version-manager PATH. Reaching this message therefore means pi really is absent
+            // from the shell, not merely hidden from a login shell.
             return """
-            Couldn't find the `\(name)` command on your login PATH.
+            Couldn't find the `\(name)` command in your shell.
 
-            If `which \(name)` works in your terminal but not here, your node version manager
-            sets PATH in ~/.zshrc, which login shells don't read. Move that line to ~/.zprofile,
-            or paste the path into Settings ▸ Claude ▸ Agent binaries ▸ \(name).
+            Open a terminal and run `which \(name)`. If that prints nothing, pi is not installed
+            for the node version your shell selects by default. Otherwise paste the path into
+            Settings ▸ Claude ▸ Agent binaries ▸ \(name).
             """
         }
     }

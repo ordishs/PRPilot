@@ -87,21 +87,31 @@ to use.
 This was found by the spike and is the one finding that changed the design.
 
 `claude` is a native Mach-O binary. `pi` is a node script whose first line is
-`#!/usr/bin/env node`. PR Pilot launches through `/bin/zsh -l -c` with
-`environment: nil`, so the child inherits the app's launchd environment. A login shell reads
-`.zprofile` and `.zlogin` but **not** `.zshrc`, and nvm sets its PATH in `.zshrc`. Two
-consequences, both reproduced:
+`#!/usr/bin/env node`. `AgentSession` launches through `/bin/zsh -l -c` with
+`environment: nil`, so the child inherits the app's launchd environment. A **login** shell reads
+`.zprofile` and `.zlogin` but not `.zshrc`, and nvm sets its PATH in `.zshrc`. So the shebang
+cannot find its interpreter:
 
 ```
-$ env -i HOME=/Users/ordishs /bin/zsh -l -c 'which pi'
-pi not found
-
 $ env -i /bin/zsh -l -c "exec /Users/…/v24.14.1/bin/pi --version"
 env: node: No such file or directory        # exits 127
 ```
 
 In the harness this surfaced as an immediate `processTerminated` with raw status 32512, which
 is exit 127. pi never drew a single character.
+
+**This affects the launch only, not resolution.** `LoginShellResolver` runs
+`zsh -i -l -c "command -v …"`, and the `-i` makes it read `.zshrc`, so it finds a
+version-manager PATH without help. Confirmed with the nvm lines present only in `.zshrc`:
+
+```
+-i -l  (resolver)      → /Users/…/v24.14.1/bin/pi
+-l     (AgentSession)  → not found
+```
+
+An earlier draft of this document claimed pi could not be resolved at all and that `piPath` was
+effectively required. That was wrong; it generalised from a `zsh -l` test to the resolver, which
+uses different flags.
 
 Both are fixed by prepending the resolved pi binary's own directory to PATH. nvm installs
 `node` and `pi` as siblings in the same bin directory, so the interpreter is guaranteed to be
@@ -116,25 +126,21 @@ Consequences for the design:
 - `AgentBackend` gains `prependsExecutableDirectoryToPath: Bool` — `true` for pi, `false` for
   Claude Code. Making it unconditional would alter the PATH that Claude Code's own child
   processes see, and this design promises Claude Code stays bit-for-bit unchanged.
-- `settings.piPath` follows the existing `ghPath` / `gitPath` / `claudePath` convention: blank
-  means auto-detect from the login PATH. It is simply worth setting more often, because the
-  same `.zshrc` problem defeats auto-detection.
+- `settings.piPath` follows the existing `ghPath` / `gitPath` / `claudePath` convention with no
+  caveat: blank means auto-detect. Nothing about pi makes it special here.
 
-  The user can also fix it at the shell instead, which makes auto-detection work and lets the
-  setting stay empty. Verified on 2026-08-13 — moving the two nvm lines from `.zshrc` into
-  `.zprofile` resolves both `node` and `pi` in a stripped login shell:
+  A user may also export the version-manager PATH from `.zprofile` rather than `.zshrc`, which
+  makes a plain login shell find pi too:
 
   ```sh
   export NVM_DIR="$HOME/.nvm"
   export PATH="$NVM_DIR/versions/node/$(cat "$NVM_DIR/alias/default" 2>/dev/null)/bin:$PATH"
   ```
 
-  This does **not** remove the need for `prependsExecutableDirectoryToPath`. That covers a
-  machine whose shell has not been fixed, and it pins the `node` sibling of the exact `pi`
-  binary that was resolved rather than whatever `nvm alias default` says later.
-
-  When resolution does fail, the unavailable state names the likely cause — `which pi` working
-  in a terminal but not in the app — rather than only pointing at the setting.
+  That is a robustness improvement, not a requirement, and it does **not** remove the need for
+  `prependsExecutableDirectoryToPath`. The flag covers a machine whose shell has not been
+  changed, and it pins the `node` sibling of the exact `pi` binary that was resolved rather than
+  whatever `nvm alias default` says later.
 
 ### pi's stop reasons
 
