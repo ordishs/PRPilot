@@ -99,28 +99,88 @@ public final class AgentSession {
     /// Closing the terminal also cancels the SwiftTerm process monitor whose handler calls
     /// `waitpid`, so this reaps the agent itself. Otherwise every terminated session leaves a
     /// zombie in the process table for as long as the app runs.
+    /// Fire-and-forget termination, for callers that are not shutting the app down.
+    ///
+    /// Quitting must use `terminateAndWait` instead. The detached task here cannot finish once
+    /// AppKit starts tearing the process down, so on quit the escalation never runs.
     public func terminate() {
+        guard let termination = signalTree() else { return }
+        Task { @MainActor in await waitForTree(termination) }
+    }
+
+    /// Terminates the agent and everything it started, and returns only once they are gone.
+    ///
+    /// `killpg` alone misses part of the tree. Claude Code puts each Bash tool command in a new
+    /// process group, so a `go test` or a load generator the agent started does not receive the
+    /// group signal. Those processes are still descendants, so the tree walk finds them. One
+    /// escaped `while true` loop costs a core until the machine reboots.
+    ///
+    /// The tree is captured before anything is signalled. Killing the agent reparents its
+    /// children to `launchd`, which erases the links a later walk would need.
+    public func terminateAndWait() async {
+        guard let termination = signalTree() else { return }
+        await waitForTree(termination)
+    }
+
+    /// The pids one `terminate` is responsible for, captured while the links still exist.
+    private struct Termination {
+        let pid: pid_t
+        var strays: [pid_t]
+    }
+
+    /// Signals the whole tree and closes the pty, all before returning.
+    ///
+    /// This half stays synchronous because `restart` terminates and starts again in the same turn.
+    /// Deferring it would let the new agent take the terminal first, and the teardown would then
+    /// read the replacement's pid out of the session and kill the agent it just started.
+    private func signalTree() -> Termination? {
         let pid = terminalView.process.shellPid
-        guard pid > 0 else { return }
+        guard pid > 0 else { return nil }
+        let strays = ProcessTree.descendants(of: pid)
+
         killpg(pid, SIGTERM)
+        for stray in strays { kill(stray, SIGTERM) }
         terminalView.process.terminate()
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if killpg(pid, 0) == 0 {
-                killpg(pid, SIGKILL)
-            }
-            for _ in 0..<Self.reapAttempts {
-                var status: Int32 = 0
-                if waitpid(pid, &status, WNOHANG) != 0 { return }
-                try? await Task.sleep(nanoseconds: Self.reapPollNanoseconds)
-            }
+        return Termination(pid: pid, strays: strays)
+    }
+
+    /// Waits out the grace period, escalates to `SIGKILL`, and reaps. Works only from the pids it
+    /// was handed, so it stays correct after the session has moved on to another agent.
+    private func waitForTree(_ termination: Termination) async {
+        var strays = termination.strays
+        let pid = termination.pid
+        if await settled(pid: pid, strays: strays, within: Self.graceNanoseconds) { return }
+
+        strays += ProcessTree.descendants(of: pid).filter { !strays.contains($0) }
+        killpg(pid, SIGKILL)
+        for stray in strays where kill(stray, 0) == 0 { kill(stray, SIGKILL) }
+
+        _ = await settled(pid: pid, strays: strays, within: Self.escalationNanoseconds)
+    }
+
+    /// Polls until the agent is reaped and no descendant is left alive, or the budget runs out.
+    ///
+    /// The agent is this process's child, so `waitpid` both detects its exit and reaps it —
+    /// closing the terminal cancels the SwiftTerm monitor that would otherwise do so, and an
+    /// unreaped agent stays in the process table as a zombie for the life of the app. Descendants
+    /// are not our children, so aliveness is all we can ask about them.
+    private func settled(pid: pid_t, strays: [pid_t], within budget: UInt64) async -> Bool {
+        var waited: UInt64 = 0
+        while true {
+            var status: Int32 = 0
+            let agentGone = waitpid(pid, &status, WNOHANG) != 0
+            if agentGone, !strays.contains(where: { kill($0, 0) == 0 }) { return true }
+            if waited >= budget { return false }
+            try? await Task.sleep(nanoseconds: Self.pollNanoseconds)
+            waited += Self.pollNanoseconds
         }
     }
 
-    /// Two seconds of polling after the SIGKILL. `waitpid` answers 0 only while the agent is
-    /// still alive, so the loop ends as soon as it exits.
-    private static let reapAttempts = 40
-    private static let reapPollNanoseconds: UInt64 = 50_000_000
+    /// Half a second to exit on `SIGTERM`, then two more to die on `SIGKILL`. The polls end each
+    /// wait as soon as the tree is clear, so a well-behaved agent costs nothing near these bounds.
+    private static let graceNanoseconds: UInt64 = 500_000_000
+    private static let escalationNanoseconds: UInt64 = 2_000_000_000
+    private static let pollNanoseconds: UInt64 = 25_000_000
 
     /// Internal rather than private so the launch command can be asserted directly. The
     /// PATH prefix it builds is what makes an interpreted agent launch at all.
