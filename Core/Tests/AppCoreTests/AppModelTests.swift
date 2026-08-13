@@ -2593,6 +2593,43 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     #expect(model.claudeSessions.count == 1)
 }
 
+/// The drain gives each item one turn. A released item that never got its reviewed stamp
+/// used to fall straight back into the queue, so the drain restarted it on the next tick and
+/// cycled the backlog for as long as the app ran. Each start leaks nothing now, but it still
+/// relaunches the agent and spends tokens for no result.
+@Test @MainActor func drainDoesNotRestartAnItemItAlreadyReleased() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    for index in 1...2 {
+        try await store.upsertItem(cappedReview("q\(index)", number: index, openedMinutesAgo: index))
+    }
+    let clone = try await registerExistingClone(in: store)
+    defer { try? FileManager.default.removeItem(at: clone) }
+    var settings = await store.settings()
+    settings.autoLoad = true
+    settings.maxLiveAgentSessions = 1
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+    model.selection = nil
+
+    await model.drainSessionQueue()
+    try await Task.sleep(nanoseconds: 1_500_000_000)
+    model.recomputeStatus(for: "item-q1", now: Date())
+    #expect(model.claudeSessions["item-q1"] != nil)
+
+    await model.drainSessionQueue()
+    #expect(model.claudeSessions["item-q2"] != nil)
+    try await Task.sleep(nanoseconds: 1_500_000_000)
+    model.recomputeStatus(for: "item-q2", now: Date())
+
+    await model.drainSessionQueue()
+
+    #expect(model.queuedReviewIDs.isEmpty)
+    #expect(model.claudeSessions["item-q1"] == nil)
+    #expect(model.claudeSessions["item-q2"] != nil)
+}
+
 @Test @MainActor func aSecondCompletedTurnMovesOnlyTheLatestStamp() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     let item = cappedReview("turns", number: 1, openedMinutesAgo: 1)
