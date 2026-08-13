@@ -264,9 +264,28 @@ private struct ClaudeSettingsTab: View {
     @State private var notificationsEnabled: Bool = true
     @State private var reviewPrompt: String = ""
     @State private var issuePrompt: String = ""
+    @State private var defaultAgent: AgentKind = .claudeCode
+    @State private var piPath: String = ""
+    @State private var piArgsText: String = ""
+    @State private var piEnvText: String = ""
+    @State private var piReviewPrompt: String = ""
+    @State private var piIssuePrompt: String = ""
 
     var body: some View {
         Form {
+            Section("Default agent") {
+                Picker("", selection: $defaultAgent) {
+                    ForEach(AgentKind.allCases, id: \.self) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Text("Used by any item that has not picked an agent of its own. Change an individual item from the menu beside its Review tab.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Extra environment variables for Claude Code") {
                 TextField("", text: $envText)
                     .textFieldStyle(.roundedBorder)
@@ -315,6 +334,54 @@ private struct ClaudeSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("pi binary") {
+                HStack {
+                    TextField("", text: $piPath)
+                        .textFieldStyle(.roundedBorder)
+                        .labelsHidden()
+                        .multilineTextAlignment(.leading)
+                    Button("Choose…") { pick(into: $piPath) }
+                }
+                Text("Usually required, unlike the Claude Code path. pi is normally installed by a node version manager, which puts it on the PATH from your shell's interactive startup file — a file the app's login shell never reads. Run `which pi` in a terminal and paste the result here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("pi arguments") {
+                TextField("", text: $piArgsText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .labelsHidden()
+                    .multilineTextAlignment(.leading)
+                Text("Appended to the pi command, exactly as typed. Choose the provider and model here, for example --provider anthropic --model '*sonnet*'. Leave empty to use pi's own configured default.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Extra environment variables for pi") {
+                TextField("", text: $piEnvText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .labelsHidden()
+                    .multilineTextAlignment(.leading)
+            }
+
+            Section("pi launch prompts") {
+                promptEditor(
+                    title: "PR review",
+                    text: $piReviewPrompt,
+                    defaultValue: Settings.defaultPiReviewPromptTemplate
+                )
+                promptEditor(
+                    title: "Issue work",
+                    text: $piIssuePrompt,
+                    defaultValue: Settings.defaultPiIssuePromptTemplate
+                )
+                Text("Separate from the Claude Code prompts because pi has no /review or /start-issue command. Same placeholders apply.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Notifications") {
                 Toggle("Send notification when a review goes idle", isOn: $notificationsEnabled)
             }
@@ -327,6 +394,12 @@ private struct ClaudeSettingsTab: View {
             notificationsEnabled = model.settings.notificationsEnabled
             reviewPrompt = model.settings.reviewPromptTemplate
             issuePrompt = model.settings.issuePromptTemplate
+            defaultAgent = model.settings.defaultAgent
+            piPath = model.settings.piPath ?? ""
+            piArgsText = model.settings.piLaunchArgs
+            piEnvText = model.settings.piEnv
+            piReviewPrompt = model.settings.piReviewPromptTemplate
+            piIssuePrompt = model.settings.piIssuePromptTemplate
         }
         .onChange(of: envText) { _, _ in commit() }
         .onChange(of: claudePath) { _, _ in commit() }
@@ -334,6 +407,12 @@ private struct ClaudeSettingsTab: View {
         .onChange(of: notificationsEnabled) { _, _ in commit() }
         .onChange(of: reviewPrompt) { _, _ in commit() }
         .onChange(of: issuePrompt) { _, _ in commit() }
+        .onChange(of: defaultAgent) { _, _ in commit() }
+        .onChange(of: piPath) { _, _ in commit() }
+        .onChange(of: piArgsText) { _, _ in commit() }
+        .onChange(of: piEnvText) { _, _ in commit() }
+        .onChange(of: piReviewPrompt) { _, _ in commit() }
+        .onChange(of: piIssuePrompt) { _, _ in commit() }
     }
 
     @ViewBuilder
@@ -359,13 +438,17 @@ private struct ClaudeSettingsTab: View {
     }
 
     private func pickClaude() {
+        pick(into: $claudePath)
+    }
+
+    private func pick(into path: Binding<String>) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = false
         panel.directoryURL = URL(fileURLWithPath: "/usr/local/bin")
         if panel.runModal() == .OK, let url = panel.url {
-            claudePath = url.path
+            path.wrappedValue = url.path
         }
     }
 
@@ -377,6 +460,12 @@ private struct ClaudeSettingsTab: View {
         updated.claudePath = claudePath.isEmpty ? nil : claudePath
         updated.claudeLaunchArgs = argsText.trimmingCharacters(in: .whitespacesAndNewlines)
         updated.notificationsEnabled = notificationsEnabled
+        updated.defaultAgent = defaultAgent
+        updated.piPath = piPath.isEmpty ? nil : piPath
+        updated.piLaunchArgs = piArgsText.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.piEnv = piEnvText.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.piReviewPromptTemplate = piReviewPrompt
+        updated.piIssuePromptTemplate = piIssuePrompt
         Task { await model.updateSettings(updated) }
     }
 }

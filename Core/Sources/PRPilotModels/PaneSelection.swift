@@ -5,9 +5,11 @@ public enum PaneSelection: String, Codable, Sendable, CaseIterable {
     case claude
     case github
 
-    public var displayName: String {
+    /// Raw value stays `claude` because it is persisted in `WorkItem.lastPane`. The label is
+    /// resolved against the item's agent instead, so the tab reads "pi Review" when pi drives it.
+    public func displayName(for agent: AgentKind) -> String {
         switch self {
-        case .claude: return "Claude Review"
+        case .claude: return "\(agent.displayName) Review"
         case .github: return "GitHub"
         }
     }

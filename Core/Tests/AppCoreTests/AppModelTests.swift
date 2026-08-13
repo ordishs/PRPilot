@@ -3096,3 +3096,137 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
 
     #expect(model.claudeSessions[oldest.id] != nil)
 }
+
+// MARK: - Switching an item's agent
+
+@MainActor
+private func agentSwitchModel(store: ReviewStore) -> AppModel {
+    AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+}
+
+/// The point of a session ID per agent: flipping an item to pi and back must leave the Claude
+/// Code conversation resumable rather than destroying it.
+///
+/// Real transcripts are written for both agents, because the stored session ID is deliberately
+/// replaced when its transcript has gone — resuming a pruned session would fail. So the promise
+/// only holds while both transcripts exist, and that is what this asserts.
+@Test @MainActor func switchingAgentKeepsBothSessionIDsWhileBothTranscriptsExist() async throws {
+    let worktree = "/tmp/agent-switch-\(UUID().uuidString)"
+    let claudeSessionID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    let piSessionID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+    let fm = FileManager.default
+    let claudeDir = AgentTranscriptPath.directoryURL(for: .claudeCode, worktreePath: worktree)
+    let piDir = AgentTranscriptPath.directoryURL(for: .pi, worktreePath: worktree)
+    try fm.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+    try fm.createDirectory(at: piDir, withIntermediateDirectories: true)
+    defer {
+        try? fm.removeItem(at: claudeDir)
+        try? fm.removeItem(at: piDir)
+    }
+    try "{}".write(to: claudeDir.appendingPathComponent("\(claudeSessionID).jsonl"), atomically: true, encoding: .utf8)
+    try "{}".write(
+        to: piDir.appendingPathComponent("2026-08-13T11-54-02-626Z_\(piSessionID).jsonl"),
+        atomically: true,
+        encoding: .utf8
+    )
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.worktreePath = worktree
+    review.claudeSessionID = claudeSessionID
+    review.piSessionID = piSessionID
+    try await store.upsertItem(review)
+    var settings = await store.settings()
+    settings.piPath = "/usr/bin/true"
+    try await store.updateSettings(settings)
+
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(
+            result: WorktreeReady(clonePath: "/tmp/clone", worktreePath: worktree, remoteName: "origin")
+        ),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.setAgent(.pi, for: review.id)
+    var current = model.reviews.first(where: { $0.id == review.id })
+    #expect(current?.agent == .pi)
+    #expect(current?.claudeSessionID == claudeSessionID, "switching to pi must not disturb Claude Code")
+    #expect(current?.piSessionID == piSessionID, "pi resumes its own existing transcript")
+
+    await model.setAgent(.claudeCode, for: review.id)
+    current = model.reviews.first(where: { $0.id == review.id })
+    #expect(current?.agent == .claudeCode)
+    #expect(current?.claudeSessionID == claudeSessionID, "Claude Code resumes where it stopped")
+    #expect(current?.piSessionID == piSessionID, "switching back must not disturb pi")
+}
+
+/// The other half of the contract: a stored session whose transcript has gone is replaced
+/// rather than resumed, because resuming it would fail.
+@Test @MainActor func aSessionWithNoTranscriptIsReplacedNotResumed() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.claudeSessionID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    review.piSessionID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    try await store.upsertItem(review)
+    let model = agentSwitchModel(store: store)
+    await model.load()
+
+    await model.setAgent(.pi, for: review.id)
+
+    let current = model.reviews.first(where: { $0.id == review.id })
+    #expect(current?.piSessionID != "dddddddd-dddd-dddd-dddd-dddddddddddd", "no transcript, so a fresh id")
+    #expect(current?.piSessionID != nil)
+    // The inactive agent is untouched either way.
+    #expect(current?.claudeSessionID == "cccccccc-cccc-cccc-cccc-cccccccccccc")
+}
+
+@Test @MainActor func settingAgentToNilRestoresTheGlobalDefault() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.agent = .pi
+    try await store.upsertItem(review)
+    let model = agentSwitchModel(store: store)
+    await model.load()
+
+    await model.setAgent(nil, for: review.id)
+
+    let current = model.reviews.first(where: { $0.id == review.id })
+    #expect(current?.agent == nil)
+    #expect(current?.effectiveAgent(default: .claudeCode) == .claudeCode)
+}
+
+/// Clearing a session must only archive and forget the agent that is actually running, or the
+/// other agent's conversation would be collateral damage.
+@Test @MainActor func clearingASessionLeavesTheOtherAgentsSessionIDIntact() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.claudeSessionID = "claude-session"
+    review.piSessionID = "pi-session"
+    try await store.upsertItem(review)
+    let model = agentSwitchModel(store: store)
+    await model.load()
+
+    // The item follows the default, which is Claude Code.
+    await model.clearAgentSession(for: review.id)
+
+    let cleared = model.reviews.first(where: { $0.id == review.id })
+    #expect(cleared?.claudeSessionID != "claude-session")
+    #expect(cleared?.piSessionID == "pi-session")
+}

@@ -244,8 +244,12 @@ private func sampleIssue() -> WorkItem {
 @Test func paneSelectionEncodesStableRawValues() throws {
     #expect(PaneSelection.claude.rawValue == "claude")
     #expect(PaneSelection.github.rawValue == "github")
-    #expect(PaneSelection.claude.displayName == "Claude Review")
-    #expect(PaneSelection.github.displayName == "GitHub")
+    // The raw value stays "claude" because it is persisted, but the label follows the agent
+    // actually driving the item.
+    #expect(PaneSelection.claude.displayName(for: .claudeCode) == "Claude Code Review")
+    #expect(PaneSelection.claude.displayName(for: .pi) == "pi Review")
+    #expect(PaneSelection.github.displayName(for: .claudeCode) == "GitHub")
+    #expect(PaneSelection.github.displayName(for: .pi) == "GitHub")
     #expect(PaneSelection.allCases == [.claude, .github])
     let decoded = try JSONDecoder().decode(PaneSelection.self, from: Data("\"github\"".utf8))
     #expect(decoded == .github)

@@ -33,15 +33,20 @@ struct DetailView: View {
                 .padding(8)
                 .background(Color.red.opacity(0.12))
             }
-            Picker("", selection: $pane) {
-                ForEach(PaneSelection.allCases, id: \.self) { pane in
-                    Text(pane.displayName)
-                        .tag(pane)
-                        .disabled(pane == .claude && review.disabled)
+            HStack(spacing: 8) {
+                Picker("", selection: $pane) {
+                    ForEach(PaneSelection.allCases, id: \.self) { pane in
+                        Text(pane.displayName(for: effectiveAgent))
+                            .tag(pane)
+                            .disabled(pane == .claude && review.disabled)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                if pane == .claude && !review.disabled {
+                    agentMenu
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             .padding(8)
             .background { paneShortcuts }
             Divider()
@@ -66,6 +71,38 @@ struct DetailView: View {
             guard !review.disabled else { return }
             Task { await model.setPane(selected, for: review.id) }
         }
+    }
+
+    private var effectiveAgent: AgentKind {
+        review.effectiveAgent(default: model.settings.defaultAgent)
+    }
+
+    /// Per-item agent choice. "Default" leaves the item following the global setting, so
+    /// changing that setting still moves it.
+    private var agentMenu: some View {
+        Menu {
+            Button {
+                Task { await model.setAgent(nil, for: review.id) }
+            } label: {
+                Label(
+                    "Default (\(model.settings.defaultAgent.displayName))",
+                    systemImage: review.agent == nil ? "checkmark" : ""
+                )
+            }
+            Divider()
+            ForEach(AgentKind.allCases, id: \.self) { kind in
+                Button {
+                    Task { await model.setAgent(kind, for: review.id) }
+                } label: {
+                    Label(kind.displayName, systemImage: review.agent == kind ? "checkmark" : "")
+                }
+            }
+        } label: {
+            Label(effectiveAgent.displayName, systemImage: "cpu")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Which agent runs this item. Switching keeps each agent's own session.")
     }
 
     private func restorePaneForSelection() {

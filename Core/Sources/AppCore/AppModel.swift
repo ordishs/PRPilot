@@ -1012,6 +1012,31 @@ public final class AppModel {
     /// ClaudePaneView only auto-triggers ensureAgentSession when review.id changes,
     /// so a cleared-but-not-restarted session would leave the pane stuck on the
     /// "Preparing worktree…" placeholder.
+    /// Switches which agent drives an item.
+    ///
+    /// The live session goes away and the new agent starts, but neither agent's stored session
+    /// ID or transcripts are touched. So flipping to pi and back resumes the Claude Code
+    /// conversation where it stopped, and vice versa — which is the whole point of keeping a
+    /// session ID per agent.
+    public func setAgent(_ kind: AgentKind?, for id: String) async {
+        guard var review = reviews.first(where: { $0.id == id }) else { return }
+        let before = review.effectiveAgent(default: settings.defaultAgent)
+        review.agent = kind
+        let after = review.effectiveAgent(default: settings.defaultAgent)
+        guard before != after || review.agent != kind else { return }
+
+        terminateAgentSession(for: id)
+        do {
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
+        } catch {
+            errorMessage = String(describing: error)
+            return
+        }
+        guard let refreshed = reviews.first(where: { $0.id == id }) else { return }
+        await ensureAgentSession(for: refreshed)
+    }
+
     public func clearAgentSession(for id: String) async {
         terminateAgentSession(for: id)
         guard var review = reviews.first(where: { $0.id == id }) else { return }
