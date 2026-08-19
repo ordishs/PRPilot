@@ -52,13 +52,28 @@ public enum SessionBudget {
         return victims
     }
 
-    private static func isProtected(_ candidate: Candidate, now: Date) -> Bool {
+    /// The single protection rule, shared with `SessionQueue` so the two cannot drift apart.
+    ///
+    /// `.idle` needs care. It does not mean the agent finished: a completed turn reads
+    /// `.awaitingInput`, so `.idle` means the last transcript line left the turn open and
+    /// nothing followed it for 30 seconds. That is what a long tool call looks like from
+    /// outside — a build, a test run, a large read. Killing it throws away the work the cap
+    /// promises never to lose.
+    ///
+    /// The `since` date decides which kind of `.idle` this is. A line written after this
+    /// process started belongs to this process, so the turn is in flight. A line older than
+    /// the process is replay: `TranscriptWatcher` re-reads the transcript from the start on
+    /// attach, so a session resumed after an interrupted turn reports the old line and never
+    /// adds another. That one is genuinely idle, and the cap must still reclaim its slot.
+    public static func isProtected(_ candidate: Candidate, now: Date) -> Bool {
         switch candidate.status {
         case .working:
             return true
         case .starting:
             return now.timeIntervalSince(candidate.startedAt) <= startupGraceSeconds
-        case .awaitingInput, .idle, .ready, .failed:
+        case .idle(let since, _):
+            return since >= candidate.startedAt
+        case .awaitingInput, .ready, .failed:
             return false
         }
     }

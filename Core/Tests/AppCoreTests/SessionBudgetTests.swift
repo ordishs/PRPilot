@@ -162,3 +162,43 @@ private func evictions(
 
     #expect(victims.isEmpty)
 }
+
+/// `.idle` means the last transcript line did not end the turn. When that line arrived after
+/// this process started, the agent is mid-turn inside a long tool call — it writes nothing for
+/// minutes and must keep its slot.
+@Test func budgetKeepsAnIdleSessionWhoseTurnIsStillInFlight() {
+    let midTurn = AgentStatus.idle(
+        since: budgetNow.addingTimeInterval(-45),
+        lastVerdictSnippet: "reading files"
+    )
+    let victims = evictions(
+        [
+            candidate("newest", minutesAgo: 1),
+            candidate("quiet", minutesAgo: 2, status: midTurn, startedSecondsAgo: 600),
+        ],
+        cap: 1,
+        selectedID: "newest"
+    )
+
+    #expect(victims.isEmpty)
+}
+
+/// The mirror case. A resumed session replays the interrupted turn of an earlier run, so its
+/// last event predates this process. That says nothing about what this process does now, and
+/// the cap must still reclaim the slot.
+@Test func budgetEvictsAnIdleSessionWhoseLastEventPredatesTheProcess() {
+    let replayed = AgentStatus.idle(
+        since: budgetNow.addingTimeInterval(-7200),
+        lastVerdictSnippet: nil
+    )
+    let victims = evictions(
+        [
+            candidate("newest", minutesAgo: 1),
+            candidate("resumed", minutesAgo: 2, status: replayed, startedSecondsAgo: 600),
+        ],
+        cap: 1,
+        selectedID: "newest"
+    )
+
+    #expect(victims == ["resumed"])
+}

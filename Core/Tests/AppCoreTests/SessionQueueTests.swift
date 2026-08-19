@@ -137,3 +137,39 @@ private func step(
     #expect(result.release == nil)
     #expect(result.start == nil)
 }
+
+/// The drain must not take the slot of an agent that is mid-turn but quiet, whatever the
+/// backlog costs. Losing a long review is worse than a slow queue.
+@Test func queueNeverReleasesASessionWhoseTurnIsStillInFlight() {
+    let midTurn = AgentStatus.idle(
+        since: queueNow.addingTimeInterval(-45),
+        lastVerdictSnippet: "running tests"
+    )
+    let result = step(
+        queued: ["next"],
+        live: [
+            live("newest", minutesAgo: 1),
+            live("quiet", minutesAgo: 5, status: midTurn, startedSecondsAgo: 600),
+        ],
+        cap: 2
+    )
+
+    #expect(result.release == "newest")
+    #expect(result.start == "next")
+}
+
+/// A replayed event from an earlier run does not protect the current process.
+@Test func queueReleasesASessionWhoseLastEventPredatesTheProcess() {
+    let replayed = AgentStatus.idle(
+        since: queueNow.addingTimeInterval(-7200),
+        lastVerdictSnippet: nil
+    )
+    let result = step(
+        queued: ["next"],
+        live: [live("resumed", minutesAgo: 5, status: replayed, startedSecondsAgo: 600)],
+        cap: 1
+    )
+
+    #expect(result.release == "resumed")
+    #expect(result.start == "next")
+}

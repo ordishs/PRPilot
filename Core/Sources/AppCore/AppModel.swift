@@ -41,10 +41,12 @@ public final class AppModel {
     public private(set) var prStatuses: [String: PRStatus] = [:]
     /// Items autoLoad wants reviewed that have no session yet, most recently opened first.
     public private(set) var queuedReviewIDs: [String] = []
-    /// Items the drain has already started this run. A session the drain releases before the
-    /// item earns its reviewed stamp would otherwise re-enter the queue at once, and the drain
-    /// would restart it every tick for as long as the app runs.
-    private var drainStartedIDs: Set<String> = []
+    /// Items autoLoad has had its turn at this run: everything the drain started, and
+    /// everything the session budget evicted. A session that goes away before the item earns
+    /// its reviewed stamp would otherwise re-enter the queue at once, and the drain would
+    /// restart it every tick for as long as the app runs — releasing another live session each
+    /// time to make room. A deliberate restart clears the id again in `terminateAgentSession`.
+    private var autoLoadSpentIDs: Set<String> = []
 
     public enum RebaseState: Sendable, Equatable {
         case conflicted([String])
@@ -802,7 +804,7 @@ public final class AppModel {
     func terminateAgentSession(for id: String) {
         claudeSessions[id]?.terminate()
         claudeSessions.removeValue(forKey: id)
-        drainStartedIDs.remove(id)
+        autoLoadSpentIDs.remove(id)
         claudePreparing.remove(id)
         claudePaneState.removeValue(forKey: id)
         transcriptWatchers[id]?.stop()
@@ -826,6 +828,10 @@ public final class AppModel {
     /// which describe the PR on GitHub rather than the session, and keeps the persisted
     /// `claudeSessionID` so the next open resumes instead of starting over.
     private func evictAgentSession(for id: String) {
+        // Eviction spends the item's autoLoad turn. Without this the drain reads the evicted
+        // item as queued work and starts it again on the next tick, which costs a second live
+        // session its slot.
+        autoLoadSpentIDs.insert(id)
         claudeSessions[id]?.terminate()
         claudeSessions.removeValue(forKey: id)
         claudePreparing.remove(id)
@@ -865,8 +871,8 @@ public final class AppModel {
 
     /// Keyed on `claudeReviewedAt` being nil, which is what makes the queue finite: the
     /// stamp survives a session ending, so a reviewed item leaves the queue for good. An item
-    /// the drain has already started leaves the queue too, whether or not it earned the stamp,
-    /// so a session that ends without one is not started again and again.
+    /// that already spent its autoLoad turn leaves the queue too, whether or not it earned the
+    /// stamp, so a session that ends without one is not started again and again.
     func recomputeReviewQueue() {
         guard settings.autoLoad else {
             queuedReviewIDs = []
@@ -876,7 +882,7 @@ public final class AppModel {
             .filter { !$0.disabled }
             .filter { $0.claudeReviewedAt == nil }
             .filter { claudeSessions[$0.id] == nil }
-            .filter { !drainStartedIDs.contains($0.id) }
+            .filter { !autoLoadSpentIDs.contains($0.id) }
             .filter { review in
                 guard let clonePath = registeredClonePath(for: review) else { return false }
                 return FileManager.default.fileExists(atPath: clonePath)
@@ -910,9 +916,16 @@ public final class AppModel {
         }
         guard let start = step.start,
               let review = reviews.first(where: { $0.id == start }) else { return }
-        drainStartedIDs.insert(start)
+        autoLoadSpentIDs.insert(start)
         await ensureAgentSession(for: review)
         recomputeReviewQueue()
+    }
+
+    /// Backdates when a session's process started. A protection rule that compares the last
+    /// transcript event against the process start needs a session older than the event, and a
+    /// test cannot wait ten minutes for one.
+    func setSessionStartedAtForTesting(_ date: Date, for id: String) {
+        sessionStartedAt[id] = date
     }
 
     func setPRStatusForTesting(_ status: PRStatus, for id: String) {

@@ -40,16 +40,9 @@ public enum SessionQueue {
         return Step(release: releasable.id, start: next)
     }
 
-    /// Same rule as `SessionBudget`: a session mid-turn keeps its slot, and a launching one
-    /// gets a grace period before it counts as idle.
+    /// The release rule and the eviction rule must stay identical, so both call
+    /// `SessionBudget.isProtected` rather than keeping a copy each.
     private static func isProtected(_ candidate: SessionBudget.Candidate, now: Date) -> Bool {
-        switch candidate.status {
-        case .working:
-            return true
-        case .starting:
-            return now.timeIntervalSince(candidate.startedAt) <= SessionBudget.startupGraceSeconds
-        case .awaitingInput, .idle, .ready, .failed:
-            return false
-        }
+        SessionBudget.isProtected(candidate, now: now)
     }
 }

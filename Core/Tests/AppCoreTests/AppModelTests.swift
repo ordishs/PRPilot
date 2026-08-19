@@ -3378,3 +3378,85 @@ private func agentSwitchModel(store: ReviewStore) -> AppModel {
 
     #expect(model.claudeSessions.isEmpty)
 }
+
+/// A live agent that is mid-turn writes nothing to its transcript during a long tool call, so
+/// its status decays to `.idle` after 30 seconds. Clicking another item at the cap used to
+/// SIGTERM that agent — and since the kill takes the whole process tree, it threw away a build
+/// or a push in flight.
+@Test @MainActor func clickingAnotherItemAtTheCapKeepsAQuietRunningAgentAlive() async throws {
+    let cwd = FileManager.default.temporaryDirectory
+        .appendingPathComponent("quietwt-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: cwd) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let running = cappedReview("running", number: 1, openedMinutesAgo: 2)
+    let clicked = cappedReview("clicked", number: 2, openedMinutesAgo: 1)
+    for item in [running, clicked] { try await store.upsertItem(item) }
+    var settings = await store.settings()
+    settings.maxLiveAgentSessions = 1
+    try await store.updateSettings(settings)
+
+    var provider = StubWorktreeProvider()
+    provider.result = WorktreeReady(clonePath: cwd.path, worktreePath: cwd.path, remoteName: "origin")
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: provider,
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/yes",
+        notificationPoster: StubNotificationPoster()
+    )
+    defer { model.terminateAllAgentSessions() }
+    await model.load()
+    model.selection = running.id
+    await model.ensureAgentSession(for: running)
+
+    // Ten minutes into the session, 45 seconds into a long tool call: the process runs, the
+    // transcript stays quiet, and the last line did not end the turn.
+    model.setSessionStartedAtForTesting(Date().addingTimeInterval(-600), for: running.id)
+    let quiet = Date().addingTimeInterval(-45)
+    model.handleTranscriptEvent(reviewID: running.id, at: quiet, snippet: "reading files", turnCompleted: false)
+    model.recomputeStatus(for: running.id, now: Date())
+    #expect(model.claudeStatuses[running.id] == .idle(since: quiet, lastVerdictSnippet: "reading files"))
+
+    // The user clicks the other item.
+    model.selection = clicked.id
+    await model.markReviewOpened(clicked.id)
+    await model.ensureAgentSession(for: clicked)
+
+    #expect(model.claudeSessions[running.id] != nil)
+    #expect(model.claudeSessions[clicked.id] != nil)
+}
+
+/// The drain already refuses to restart an item it released. The budget shared none of that
+/// bookkeeping, so an item the user opened by hand fell back into the queue after eviction, and
+/// the next drain tick released a second live session to start it again.
+@Test @MainActor func anItemTheBudgetEvictsDoesNotFallBackIntoTheQueue() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let first = cappedReview("first", number: 1, openedMinutesAgo: 2)
+    let second = cappedReview("second", number: 2, openedMinutesAgo: 1)
+    for item in [first, second] { try await store.upsertItem(item) }
+    let clone = try await registerExistingClone(in: store)
+    defer { try? FileManager.default.removeItem(at: clone) }
+    var settings = await store.settings()
+    settings.autoLoad = true
+    settings.maxLiveAgentSessions = 1
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+    model.selection = first.id
+    await model.ensureAgentSession(for: first)
+    model.selection = second.id
+    await model.markReviewOpened(second.id)
+    await model.ensureAgentSession(for: second)
+
+    model.enforceSessionBudget(now: Date().addingTimeInterval(120))
+    model.recomputeReviewQueue()
+
+    #expect(model.claudeSessions[first.id] == nil)
+    #expect(model.queuedReviewIDs.contains(first.id) == false)
+}
