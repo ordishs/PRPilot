@@ -46,6 +46,11 @@ public struct Settings: Codable, Sendable, Equatable {
     public var maxLiveAgentSessions: Int
     /// Live web views allowed at once. Each holds its own WebContent process.
     public var maxLiveWebViews: Int
+    /// Hides PRs you approved that have gone quiet — see `isParkedReview`. A standing
+    /// preference rather than momentary triage, so unlike the other filter pills it is
+    /// stored and survives a restart.
+    public var hideParked: Bool
+
     /// How long a quiet agent session still counts as mid-turn, in minutes.
     ///
     /// An agent inside a long tool call writes nothing, so the app cannot tell it apart from
@@ -96,6 +101,7 @@ public struct Settings: Codable, Sendable, Equatable {
         case maxLiveAgentSessions = "maxLiveClaudeSessions"
         case maxLiveWebViews
         case idleSessionProtectionMinutes
+        case hideParked
     }
 
     public init(
@@ -131,7 +137,8 @@ public struct Settings: Codable, Sendable, Equatable {
         piIssuePromptTemplate: String = Settings.defaultPiIssuePromptTemplate,
         maxLiveAgentSessions: Int = 5,
         maxLiveWebViews: Int = 8,
-        idleSessionProtectionMinutes: Int = SessionDefaults.idleProtectionMinutes
+        idleSessionProtectionMinutes: Int = SessionDefaults.idleProtectionMinutes,
+        hideParked: Bool = false
     ) {
         self.managedRoot = managedRoot
         self.reviewRequestQueries = reviewRequestQueries
@@ -166,6 +173,7 @@ public struct Settings: Codable, Sendable, Equatable {
         self.maxLiveAgentSessions = maxLiveAgentSessions
         self.maxLiveWebViews = maxLiveWebViews
         self.idleSessionProtectionMinutes = idleSessionProtectionMinutes
+        self.hideParked = hideParked
     }
 
     public init(from decoder: Decoder) throws {
@@ -221,6 +229,7 @@ public struct Settings: Codable, Sendable, Equatable {
         maxLiveWebViews = try c.decodeIfPresent(Int.self, forKey: .maxLiveWebViews) ?? 8
         idleSessionProtectionMinutes = try c.decodeIfPresent(Int.self, forKey: .idleSessionProtectionMinutes)
             ?? SessionDefaults.idleProtectionMinutes
+        hideParked = try c.decodeIfPresent(Bool.self, forKey: .hideParked) ?? false
 
         if let rrq = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .reviewRequestQueries) {
             reviewRequestQueries = rrq

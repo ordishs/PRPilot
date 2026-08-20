@@ -151,3 +151,90 @@ private let noSelection = SidebarFilterSelection()
     #expect(ResourceFilter.ordered.allSatisfy { !$0.help.isEmpty })
     #expect(ResourceFilter.ordered.allSatisfy { !$0.symbolName.isEmpty })
 }
+
+// MARK: - Parked
+
+private func approvedPR(state: PRState = .open) -> WorkItem {
+    var i = sample()
+    i.prState = state
+    i.myReviewState = .approved
+    return i
+}
+
+@Test func aPRYouApprovedThatHasGoneQuietIsParked() {
+    #expect(isParkedReview(approvedPR(), hasUnseenAuthorUpdate: false))
+}
+
+@Test func aPRYouApprovedIsNotParkedOnceTheAuthorMoves() {
+    #expect(!isParkedReview(approvedPR(), hasUnseenAuthorUpdate: true))
+}
+
+@Test func aDraftYouApprovedIsStillParked() {
+    #expect(isParkedReview(approvedPR(state: .draft), hasUnseenAuthorUpdate: false))
+}
+
+@Test func aMergedOrClosedPRIsNeverParked() {
+    #expect(!isParkedReview(approvedPR(state: .merged), hasUnseenAuthorUpdate: false))
+    #expect(!isParkedReview(approvedPR(state: .closed), hasUnseenAuthorUpdate: false))
+}
+
+@Test func onlyYourOwnApprovalParksAPR() {
+    for state: MyReviewState in [.none, .commented, .changesRequested] {
+        var i = approvedPR()
+        i.myReviewState = state
+        #expect(!isParkedReview(i, hasUnseenAuthorUpdate: false),
+                "myReviewState \(state.rawValue) must not park an item")
+    }
+    var neverReviewed = approvedPR()
+    neverReviewed.myReviewState = nil
+    #expect(!isParkedReview(neverReviewed, hasUnseenAuthorUpdate: false))
+}
+
+@Test func anItemWithNoPullRequestIsNeverParked() {
+    var issue = WorkItem(
+        title: "flaky subtree test",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        issueRef: IssueRef(owner: "bsv-blockchain", repo: "teranode", number: 12,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/issues/12")!,
+            authorLogin: "icellan"),
+        origin: .added, addedAt: Date()
+    )
+    issue.myReviewState = .approved
+    #expect(!isParkedReview(issue, hasUnseenAuthorUpdate: false))
+}
+
+@Test func hideParkedDropsAParkedRow() {
+    let selection = SidebarFilterSelection(hideParked: true)
+    #expect(!sidebarItemMatches(sample(), query: "", selection: selection,
+                                facts: SidebarItemFacts(isParked: true)))
+}
+
+@Test func hideParkedKeepsEveryOtherRow() {
+    let selection = SidebarFilterSelection(hideParked: true)
+    #expect(sidebarItemMatches(sample(), query: "", selection: selection, facts: noFacts))
+}
+
+@Test func aParkedRowShowsWhileHideParkedIsOff() {
+    #expect(sidebarItemMatches(sample(), query: "", selection: noSelection,
+                               facts: SidebarItemFacts(isParked: true)))
+}
+
+@Test func hideParkedOverridesASelectedSignal() {
+    // Dirty selects the row in; parked takes it back out. Exclusion wins.
+    let selection = SidebarFilterSelection(signals: .dirty, hideParked: true)
+    #expect(!sidebarItemMatches(sample(), query: "", selection: selection,
+                                facts: SidebarItemFacts(hasLocalChanges: true, isParked: true)))
+    #expect(sidebarItemMatches(sample(), query: "", selection: selection,
+                               facts: SidebarItemFacts(hasLocalChanges: true)))
+}
+
+@Test func hideParkedCountsTowardsSelectionEmptiness() {
+    var selection = SidebarFilterSelection()
+    #expect(selection.isEmpty)
+    selection.hideParked = true
+    #expect(!selection.isEmpty)
+    selection.clear()
+    #expect(!selection.hideParked)
+    #expect(selection.isEmpty)
+}

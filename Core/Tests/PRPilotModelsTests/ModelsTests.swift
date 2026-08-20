@@ -119,3 +119,29 @@ import Foundation
     #expect(Settings.default.issueQueries == [DiscoveryQuery(text: "assignee:@me is:open")])
     #expect(Settings.default.issuesEnabled == true)
 }
+
+@Test func settingsDecodeWithoutHideParkedDefaultsToOff() throws {
+    let json = """
+    {
+      "managedRoot": "/tmp/PRPilot",
+      "reviewRequestQueries": [{"text": "review-requested:@me is:open", "allowUnscoped": false}],
+      "myPRQueries": [{"text": "author:@me is:open", "allowUnscoped": false}],
+      "reviewRequestsEnabled": true,
+      "myPRsEnabled": true,
+      "pollIntervalSeconds": 120,
+      "notificationsEnabled": true,
+      "diffMode": "unified",
+      "diffIgnoreWhitespace": false
+    }
+    """
+    let s = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
+    #expect(s.hideParked == false)
+}
+
+@Test func settingsRoundTripHideParked() throws {
+    var settings = Settings.default
+    #expect(settings.hideParked == false)
+    settings.hideParked = true
+    let decoded = try JSONDecoder().decode(Settings.self, from: JSONEncoder().encode(settings))
+    #expect(decoded.hideParked == true)
+}

@@ -34,13 +34,22 @@ struct ContentView: View {
             hasLocalChanges: (model.worktreeLocalChanges[review.id] ?? 0) > 0,
             hasWorktree: review.worktreePath != nil,
             hasSession: model.claudeSessions[review.id] != nil,
-            hasWebView: webViewCache.isLive(review.id)
+            hasWebView: webViewCache.isLive(review.id),
+            isParked: isParkedReview(review, hasUnseenAuthorUpdate: model.hasUnseenAuthorUpdate(review))
         )
+    }
+
+    /// The pills the user pressed this launch, plus the one filter that is a stored
+    /// preference. Merged here so the match rule still sees one whole selection.
+    private var activeSelection: SidebarFilterSelection {
+        var selection = filterSelection
+        selection.hideParked = model.settings.hideParked
+        return selection
     }
 
     private var filteredReviews: [WorkItem] {
         model.reviews.filter {
-            sidebarItemMatches($0, query: searchText, selection: filterSelection, facts: facts(for: $0))
+            sidebarItemMatches($0, query: searchText, selection: activeSelection, facts: facts(for: $0))
         }
     }
 
@@ -50,6 +59,16 @@ struct ContentView: View {
 
     private func count(_ resource: ResourceFilter) -> Int {
         model.reviews.reduce(0) { $0 + (facts(for: $1).has(resource) ? 1 : 0) }
+    }
+
+    private var parkedCount: Int {
+        model.reviews.reduce(0) { $0 + (facts(for: $1).isParked ? 1 : 0) }
+    }
+
+    private func setHideParked(_ hide: Bool) {
+        var updated = model.settings
+        updated.hideParked = hide
+        Task { await model.updateSettings(updated) }
     }
 
     private var sidebarHeader: some View {
@@ -76,7 +95,16 @@ struct ContentView: View {
                         help: resource.help
                     ) { filterSelection.toggle(resource) }
                 }
-                if !filterSelection.isEmpty {
+                filterPill(
+                    label: "Hide parked",
+                    systemImage: "eye.slash",
+                    count: parkedCount,
+                    isOn: model.settings.hideParked,
+                    help: "Hide PRs you approved that are now waiting on somebody else. One "
+                        + "comes back as soon as the author pushes, replies, or asks you for "
+                        + "another review."
+                ) { setHideParked(!model.settings.hideParked) }
+                if !activeSelection.isEmpty {
                     clearFiltersButton
                 }
             }
@@ -104,7 +132,10 @@ struct ContentView: View {
     }
 
     private var clearFiltersButton: some View {
-        Button { filterSelection.clear() } label: {
+        Button {
+            filterSelection.clear()
+            setHideParked(false)
+        } label: {
             Text("Clear")
                 .font(.system(size: 12, weight: .medium))
                 .padding(.horizontal, 8).padding(.vertical, 3)

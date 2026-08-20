@@ -114,6 +114,8 @@ public struct SidebarItemFacts: Sendable, Equatable {
     public var hasWorktree: Bool
     public var hasSession: Bool
     public var hasWebView: Bool
+    /// You approved this PR and nothing has happened since — see `isParkedReview`.
+    public var isParked: Bool
 
     public init(
         awaitsMyResponse: Bool = false,
@@ -125,7 +127,8 @@ public struct SidebarItemFacts: Sendable, Equatable {
         hasLocalChanges: Bool = false,
         hasWorktree: Bool = false,
         hasSession: Bool = false,
-        hasWebView: Bool = false
+        hasWebView: Bool = false,
+        isParked: Bool = false
     ) {
         self.awaitsMyResponse = awaitsMyResponse
         self.needsInput = needsInput
@@ -137,6 +140,7 @@ public struct SidebarItemFacts: Sendable, Equatable {
         self.hasWorktree = hasWorktree
         self.hasSession = hasSession
         self.hasWebView = hasWebView
+        self.isParked = isParked
     }
 
     public func has(_ signal: SignalFilter) -> Bool {
@@ -171,13 +175,21 @@ public struct SidebarItemFacts: Sendable, Equatable {
 public struct SidebarFilterSelection: Sendable, Equatable {
     public var signals: SignalFilter
     public var resources: ResourceFilter
+    /// The one exclusion in the bar. The other pills say what to keep; this one says what
+    /// to drop, so it lives apart from both option sets rather than inside either.
+    public var hideParked: Bool
 
-    public init(signals: SignalFilter = [], resources: ResourceFilter = []) {
+    public init(
+        signals: SignalFilter = [],
+        resources: ResourceFilter = [],
+        hideParked: Bool = false
+    ) {
         self.signals = signals
         self.resources = resources
+        self.hideParked = hideParked
     }
 
-    public var isEmpty: Bool { signals.isEmpty && resources.isEmpty }
+    public var isEmpty: Bool { signals.isEmpty && resources.isEmpty && !hideParked }
 
     public mutating func toggle(_ signal: SignalFilter) {
         if signals.contains(signal) {
@@ -198,7 +210,29 @@ public struct SidebarFilterSelection: Sendable, Equatable {
     public mutating func clear() {
         signals = []
         resources = []
+        hideParked = false
     }
+}
+
+/// Whether an item is waiting on somebody other than you.
+///
+/// You approved the PR, so your part is done, and the author has done nothing since. The
+/// PR now sits on a second reviewer or on the author's own merge, and neither is your
+/// work. Hiding it clears the list of rows you can do nothing about.
+///
+/// Your own approval is the test, not the PR's overall `reviewDecision`. A PR that still
+/// needs a second reviewer never reads APPROVED overall, and that is exactly the case this
+/// serves. `myReviewState` is persisted on the item, so the answer is right at launch,
+/// before the first poll, and while offline.
+///
+/// `hasUnseenAuthorUpdate` is the release. It covers a new head commit, a reply in one of
+/// your threads, a thread the author resolved, and a re-review request naming you — the
+/// same signal the Author pill reads, so the two can never disagree.
+public func isParkedReview(_ item: WorkItem, hasUnseenAuthorUpdate: Bool) -> Bool {
+    guard item.prRef != nil else { return false }
+    guard item.prState == .open || item.prState == .draft else { return false }
+    guard item.myReviewState == .approved else { return false }
+    return !hasUnseenAuthorUpdate
 }
 
 /// Pure sidebar match predicate.
@@ -206,12 +240,16 @@ public struct SidebarFilterSelection: Sendable, Equatable {
 /// Selections inside one group widen the result; the two groups narrow each other. So
 /// "Agent + Author" shows items with either signal, and adding "Session" then keeps only
 /// those of them that also hold a live session. An empty group imposes no condition.
+///
+/// Hide parked is an exclusion, so it runs last and it wins. A parked row that a selected
+/// signal would otherwise keep stays hidden — that is what asking to hide something means.
 public func sidebarItemMatches(
     _ item: WorkItem,
     query: String,
     selection: SidebarFilterSelection,
     facts: SidebarItemFacts
 ) -> Bool {
+    if selection.hideParked, facts.isParked { return false }
     if !selection.signals.isEmpty {
         let anySignal = SignalFilter.ordered.contains { selection.signals.contains($0) && facts.has($0) }
         guard anySignal else { return false }
