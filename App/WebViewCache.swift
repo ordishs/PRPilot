@@ -190,6 +190,12 @@ final class WebViewCache {
         loadStates[review.id] ?? WebLoadState()
     }
 
+    /// Whether this item currently holds a web view. The sidebar shows it, because a live
+    /// view holds its own WebContent process and the cap makes them a scarce resource.
+    func isLive(_ reviewID: String) -> Bool {
+        webViews[reviewID] != nil
+    }
+
     func remove(reviewID: String) {
         activationOrder.removeAll { $0 == reviewID }
         trackers.removeValue(forKey: reviewID)?.progressObservation?.invalidate()

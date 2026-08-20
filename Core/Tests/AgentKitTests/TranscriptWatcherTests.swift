@@ -233,3 +233,53 @@ private let turnDurationSettledLine = """
     #expect(received.last?.snippet == "Looks good to me")
     watcher.stop()
 }
+
+// MARK: - Reporting which transcript is being tailed
+
+/// The app has to know which session the agent is actually writing, not just the one it
+/// launched: `/clear` inside Claude Code starts a new transcript under a new id, and an item
+/// that keeps resuming the launched id reopens the conversation the user threw away.
+@Test @MainActor func watcherReportsTheSessionIdOfTheFileItAttachesTo() async throws {
+    let tempDir = try makeTempDir()
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let first = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    try (sampleAssistantLine + "\n").write(
+        to: tempDir.appendingPathComponent("\(first).jsonl"), atomically: true, encoding: .utf8
+    )
+
+    let watcher = TranscriptWatcher(transcriptDir: tempDir, kind: .claudeCode)
+    defer { watcher.stop() }
+    var files: [String] = []
+    watcher.start(onEvent: { _ in }, onSessionFile: { files.append($0) })
+
+    #expect(files == [first])
+
+    // The user runs /clear: Claude Code opens a new transcript, now the newest file.
+    let second = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    try (sampleAssistantLine2 + "\n").write(
+        to: tempDir.appendingPathComponent("\(second).jsonl"), atomically: true, encoding: .utf8
+    )
+    try await Task.sleep(nanoseconds: 400_000_000)
+
+    #expect(files == [first, second], "the switch to the new transcript is reported")
+}
+
+/// A watcher with no interest in the file name still works. Every existing caller passes one
+/// closure, and the transcript reporting is opt-in.
+@Test @MainActor func watcherStillWorksWithoutTheSessionFileCallback() async throws {
+    let tempDir = try makeTempDir()
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+    try (sampleAssistantLine + "\n").write(
+        to: tempDir.appendingPathComponent("cccccccc-cccc-cccc-cccc-cccccccccccc.jsonl"),
+        atomically: true, encoding: .utf8
+    )
+
+    let watcher = TranscriptWatcher(transcriptDir: tempDir, kind: .claudeCode)
+    defer { watcher.stop() }
+    var received: [TranscriptEvent] = []
+    watcher.start { received.append($0) }
+    try await Task.sleep(nanoseconds: 300_000_000)
+
+    #expect(received.count == 1)
+}

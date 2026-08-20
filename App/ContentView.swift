@@ -12,65 +12,135 @@ struct ContentView: View {
     @State private var showingAddIssue = false
     @State private var showingNewTask = false
     @State private var labelTarget: WorkItem?
+    @State private var discardTarget: WorkItem?
     @State private var searchText = ""
-    @State private var sidebarFilter: SidebarFilter = .all
+    @State private var filterSelection = SidebarFilterSelection()
     @Environment(\.colorScheme) private var colorScheme
 
-    private func isWorking(_ id: String) -> Bool { model.claudeStatuses[id] == .working }
-    private func isAwaiting(_ id: String) -> Bool {
-        if case .awaitingInput = model.claudeStatuses[id] { return true }
-        return false
+    /// Everything the filter and the row indicators need that is not on the item itself.
+    /// Built here because only the view layer can see the live agent sessions and web views.
+    private func facts(for review: WorkItem) -> SidebarItemFacts {
+        let status = model.claudeStatuses[review.id]
+        var needsInput = false
+        if case .awaitingInput = status { needsInput = true }
+        let prStatus = model.prStatuses[review.id]
+        return SidebarItemFacts(
+            awaitsMyResponse: review.awaitsMyResponse(myLogin: model.currentLogin),
+            needsInput: needsInput,
+            isWorking: status == .working,
+            hasAuthorUpdate: model.hasUnseenAuthorUpdate(review),
+            ciFailing: prStatus?.ci == .failing,
+            isBehind: prStatus?.isBehind ?? false,
+            hasLocalChanges: (model.worktreeLocalChanges[review.id] ?? 0) > 0,
+            hasWorktree: review.worktreePath != nil,
+            hasSession: model.claudeSessions[review.id] != nil,
+            hasWebView: webViewCache.isLive(review.id)
+        )
     }
+
     private var filteredReviews: [WorkItem] {
         model.reviews.filter {
-            sidebarItemMatches($0, query: searchText, filter: sidebarFilter,
-                               isWorking: isWorking($0.id), isAwaiting: isAwaiting($0.id))
+            sidebarItemMatches($0, query: searchText, selection: filterSelection, facts: facts(for: $0))
         }
     }
-    private var activeCount: Int { model.reviews.filter { isWorking($0.id) || isAwaiting($0.id) }.count }
-    private var awaitingCount: Int { model.reviews.filter { isAwaiting($0.id) }.count }
+
+    private func count(_ signal: SignalFilter) -> Int {
+        model.reviews.reduce(0) { $0 + (facts(for: $1).has(signal) ? 1 : 0) }
+    }
+
+    private func count(_ resource: ResourceFilter) -> Int {
+        model.reviews.reduce(0) { $0 + (facts(for: $1).has(resource) ? 1 : 0) }
+    }
 
     private var sidebarHeader: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary).font(.system(size: 12))
-                TextField("Search", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                if !searchText.isEmpty {
-                    Button { searchText = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.borderless).foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 6) {
+            searchField
+            WrappingHStack(spacing: 4, lineSpacing: 4) {
+                ForEach(SignalFilter.ordered, id: \.rawValue) { signal in
+                    filterPill(
+                        label: signal.displayName,
+                        systemImage: nil,
+                        count: count(signal),
+                        isOn: filterSelection.signals.contains(signal),
+                        help: signal.help
+                    ) { filterSelection.toggle(signal) }
                 }
             }
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(Color.secondary.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            HStack(spacing: 6) {
-                filterPill(.all, label: "All", count: nil)
-                filterPill(.active, label: "Active", count: activeCount)
-                filterPill(.awaiting, label: "Awaiting", count: awaitingCount)
-                Spacer()
+            WrappingHStack(spacing: 4, lineSpacing: 4) {
+                ForEach(ResourceFilter.ordered, id: \.rawValue) { resource in
+                    filterPill(
+                        label: resource.displayName,
+                        systemImage: resource.symbolName,
+                        count: count(resource),
+                        isOn: filterSelection.resources.contains(resource),
+                        help: resource.help
+                    ) { filterSelection.toggle(resource) }
+                }
+                if !filterSelection.isEmpty {
+                    clearFiltersButton
+                }
             }
         }
         .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
     }
 
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary).font(.system(size: 12))
+            TextField("Search", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.borderless).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(Color.secondary.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var clearFiltersButton: some View {
+        Button { filterSelection.clear() } label: {
+            Text("Clear")
+                .font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Color.secondary.opacity(0.12))
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Switch every filter off and show the whole list")
+    }
+
+    /// One filter toggle. Nothing switched on means no filtering at all, so the bar needs
+    /// no All pill: Clear does that job and only appears when it has something to do.
     @ViewBuilder
-    private func filterPill(_ f: SidebarFilter, label: String, count: Int?) -> some View {
-        Button { sidebarFilter = f } label: {
+    private func filterPill(
+        label: String,
+        systemImage: String?,
+        count: Int,
+        isOn: Bool,
+        help: String,
+        toggle: @escaping () -> Void
+    ) -> some View {
+        Button(action: toggle) {
             HStack(spacing: 4) {
+                if let systemImage {
+                    Image(systemName: systemImage).font(.system(size: 10))
+                }
                 Text(label)
-                if let count { Text("\(count)").opacity(0.7) }
+                Text("\(count)").opacity(0.7)
             }
             .font(.system(size: 12, weight: .medium))
             .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(sidebarFilter == f ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.12))
+            .background(isOn ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.12))
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .help("\(help) · \(count) item\(count == 1 ? "" : "s")")
     }
 
     var body: some View {
@@ -137,6 +207,25 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showingNewTask) {
                 NewTaskSheet(model: model, isPresented: $showingNewTask)
+            }
+            .confirmationDialog(
+                "Discard local changes?",
+                isPresented: Binding(get: { discardTarget != nil }, set: { if !$0 { discardTarget = nil } }),
+                presenting: discardTarget
+            ) { item in
+                Button("Discard and Refresh", role: .destructive) {
+                    let id = item.id
+                    discardTarget = nil
+                    Task { await model.discardLocalChanges(id: id) }
+                }
+                Button("Cancel", role: .cancel) { discardTarget = nil }
+            } message: { item in
+                let changes = model.worktreeLocalChanges[item.id] ?? 0
+                Text(
+                    "This throws away \(changes) local change\(changes == 1 ? "" : "s") in the review worktree "
+                        + "for \(item.number.map { "#\($0)" } ?? item.title) and fast-forwards it to the PR head. "
+                        + "The changes cannot be recovered."
+                )
             }
             .sheet(item: $labelTarget) { item in
                 LabelSheet(item: item) { newLabel in
@@ -260,9 +349,7 @@ struct ContentView: View {
                 Text("\(review.owner)/\(review.repo) · \(review.author ?? "")")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
-                Text(relativeDateLabel(for: review.addedAt))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                footerLine(for: review)
             }
             Spacer()
             StatusDot(status: model.claudeStatuses[review.id])
@@ -286,7 +373,7 @@ struct ContentView: View {
                 Button {
                     Task { await model.clearWaiting(id: review.id) }
                 } label: {
-                    Label("Clear Waiting", systemImage: "clock.badge.checkmark")
+                    Label("Clear Agent Badge", systemImage: "clock.badge.checkmark")
                 }
             }
             Divider()
@@ -332,6 +419,14 @@ struct ContentView: View {
                 Label("Copy Worktree Path", systemImage: "folder")
             }
             .disabled(review.worktreePath == nil)
+            if let changes = model.worktreeLocalChanges[review.id], changes > 0 {
+                Button(role: .destructive) {
+                    discardTarget = review
+                } label: {
+                    Label("Discard Local Changes & Refresh…", systemImage: "arrow.uturn.backward")
+                }
+                Divider()
+            }
             Button {
                 Task { await model.clearAgentSession(for: review.id) }
             } label: {
@@ -342,7 +437,7 @@ struct ContentView: View {
                 Button {
                     Task { await model.markAuthorUpdateSeen(id: review.id) }
                 } label: {
-                    Label("Clear Updated Badge", systemImage: "bell.slash")
+                    Label("Clear Author Badge", systemImage: "bell.slash")
                 }
                 .disabled(!model.hasUnseenAuthorUpdate(review))
             }
@@ -361,6 +456,44 @@ struct ContentView: View {
         }
     }
 
+    /// Resource icons plus the item's last-activity stamp. A solid icon means the item holds
+    /// that resource right now; a faint one means it does not. Every icon carries a tooltip,
+    /// because an icon alone cannot say which agent or which path it stands for.
+    @ViewBuilder
+    private func footerLine(for review: WorkItem) -> some View {
+        let itemFacts = facts(for: review)
+        let activity = lastActivityAt(review, authorUpdatedAt: model.prStatuses[review.id]?.authorUpdatedAt)
+        HStack(spacing: 6) {
+            ForEach(ResourceFilter.ordered, id: \.rawValue) { resource in
+                Image(systemName: resource.symbolName)
+                    .font(.system(size: 10))
+                    .foregroundStyle(itemFacts.has(resource) ? Color.accentColor : Color.secondary.opacity(0.3))
+                    .help(resourceTooltip(resource, review: review, present: itemFacts.has(resource)))
+            }
+            Text(sidebarDateLabel(for: activity))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .help("Last activity: \(sidebarDateTooltip(for: activity))")
+        }
+    }
+
+    private func agentName(for review: WorkItem) -> String {
+        review.effectiveAgent(default: model.settings.defaultAgent).displayName
+    }
+
+    private func resourceTooltip(_ resource: ResourceFilter, review: WorkItem, present: Bool) -> String {
+        guard present else { return "No \(resource.displayName.lowercased()) for this item" }
+        switch resource {
+        case .session:
+            let agent = review.effectiveAgent(default: model.settings.defaultAgent)
+            return "\(agent.displayName) session is live"
+        case .worktree:
+            return review.worktreePath.map { "Worktree: \($0)" } ?? resource.help
+        default:
+            return resource.help
+        }
+    }
+
     @ViewBuilder
     private func badgeLine(for review: WorkItem) -> some View {
         WrappingHStack(spacing: 4, lineSpacing: 4) {
@@ -369,45 +502,76 @@ struct ContentView: View {
             } else {
                 switch review.sidebarStatus(myLogin: model.currentLogin) {
                 case .merged:
-                    StateBadge(text: "Merged", color: .purple)
+                    StateBadge(text: "Merged", color: .purple, help: "The PR is merged")
                 case .closed:
-                    StateBadge(text: "Closed", color: .red)
+                    StateBadge(text: "Closed", color: .red, help: "The PR is closed without merging")
                 case .approved:
-                    StateBadge(text: "Approved", color: .green)
+                    StateBadge(text: "Approved", color: .green, help: "You approved this PR")
                 case .new:
-                    StateBadge(text: "New", color: .orange)
+                    StateBadge(text: "New", color: .orange, help: "You have not reviewed this PR yet")
                 case .reviewed:
-                    StateBadge(text: "Reviewed", color: .blue)
+                    StateBadge(text: "Reviewed", color: .blue, help: "You commented or requested changes")
                 case .draft:
-                    StateBadge(text: "Draft", color: .gray)
+                    StateBadge(text: "Draft", color: .gray, help: "The PR is still a draft")
                 case .open:
                     EmptyView()
                 }
 
                 if review.awaitsMyResponse(myLogin: model.currentLogin) {
-                    StateBadge(text: "Waiting", color: .yellow)
+                    StateBadge(
+                        text: "Agent",
+                        color: .yellow,
+                        help: "\(agentName(for: review)) finished a turn that you have not answered. "
+                            + "Clear it from the context menu."
+                    )
                 }
 
                 if model.queuedReviewIDs.contains(review.id) {
-                    StateBadge(text: "Queued", color: .gray)
+                    StateBadge(text: "Queued", color: .gray, help: "Waiting for a free agent session slot")
                 }
             }
 
             if let status = model.prStatuses[review.id] {
                 switch status.ci {
-                case .passing: StateBadge(text: "✓ CI", color: .green)
-                case .failing: StateBadge(text: "✗ CI", color: .red)
-                case .pending: StateBadge(text: "◷ CI", color: .orange)
+                case .passing: StateBadge(text: "✓ CI", color: .green, help: "CI is passing")
+                case .failing: StateBadge(text: "✗ CI", color: .red, help: "CI is failing")
+                case .pending: StateBadge(text: "◷ CI", color: .orange, help: "CI is still running")
                 case .none: EmptyView()
                 }
-                if status.isBehind { StateBadge(text: "behind", color: .orange) }
-                if status.readiness == .changesRequested { StateBadge(text: "changes", color: .red) }
-                if model.hasUnseenAuthorUpdate(review) { StateBadge(text: "Updated", color: .teal) }
+                if status.isBehind {
+                    StateBadge(text: "behind", color: .orange, help: "The branch is behind \(review.baseBranch)")
+                }
+                if status.readiness == .changesRequested {
+                    StateBadge(text: "changes", color: .red, help: "A reviewer requested changes")
+                }
+                if model.hasUnseenAuthorUpdate(review) {
+                    StateBadge(
+                        text: "Author",
+                        color: .teal,
+                        help: "\(review.author ?? "The author") pushed or replied since your last review. "
+                            + "Clear it from the context menu."
+                    )
+                }
+            }
+
+            if let changes = model.worktreeLocalChanges[review.id], changes > 0 {
+                StateBadge(
+                    text: "Dirty",
+                    color: .brown,
+                    help: "\(changes) local change\(changes == 1 ? "" : "s") in this review worktree, so it was "
+                        + "not refreshed to the PR head. Discard them from the context menu."
+                )
             }
 
             if let push = model.pushability[review.id] {
-                if push.ahead > 0 { StateBadge(text: "↑\(push.ahead)", color: .green) }
-                if push.behind > 0 { StateBadge(text: "↓\(push.behind)", color: .orange) }
+                if push.ahead > 0 {
+                    StateBadge(text: "↑\(push.ahead)", color: .green,
+                               help: "\(push.ahead) commit(s) to push")
+                }
+                if push.behind > 0 {
+                    StateBadge(text: "↓\(push.behind)", color: .orange,
+                               help: "\(push.behind) commit(s) to pull")
+                }
             }
         }
     }
@@ -431,7 +595,8 @@ struct ContentView: View {
             claudeReviewedAt: review.claudeReviewedAt,
             claudeWorking: model.claudeStatuses[review.id] == .working
         )
-        StateBadge(text: status.displayName, color: issueStatusColor(status))
+        StateBadge(text: status.displayName, color: issueStatusColor(status),
+                   help: "Issue status: \(status.displayName)")
     }
 }
 
@@ -572,6 +737,9 @@ private struct StateBadge: View {
     @Environment(\.colorScheme) private var colorScheme
     let text: String
     let color: Color
+    /// Every badge explains itself on hover. A five-letter chip cannot say which actor it
+    /// reports, and that is exactly what AGENT and AUTHOR differ on.
+    var help: String = ""
 
     var body: some View {
         Text(text.uppercased())
@@ -583,6 +751,7 @@ private struct StateBadge: View {
             .padding(.vertical, 2)
             .background(color.opacity(colorScheme == .dark ? 0.30 : 0.18))
             .clipShape(Capsule())
+            .help(help)
     }
 }
 
@@ -662,15 +831,4 @@ private func statusTooltip(_ status: AgentStatus?) -> String {
     case nil:
         return ""
     }
-}
-
-private func relativeDateLabel(for date: Date) -> String {
-    let calendar = Calendar.current
-    let now = Date()
-    if calendar.isDateInToday(date) { return "Today" }
-    if calendar.isDateInYesterday(date) { return "Yesterday" }
-    let daysAgo = calendar.dateComponents([.day], from: date, to: now).day ?? 0
-    if daysAgo < 7 { return "This Week" }
-    if daysAgo < 14 { return "Last Week" }
-    return "Older"
 }

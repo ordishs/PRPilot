@@ -33,6 +33,10 @@ public final class TranscriptWatcher {
     private var currentFileURL: URL?
     private var readOffset: Int = 0
     private var onEvent: (@MainActor (TranscriptEvent) -> Void)?
+    /// Reports the session id of each transcript this watcher attaches to. The app stores the
+    /// id an item launched with, which stops being the truth the moment the agent moves to a
+    /// different transcript — `/clear` starts a new conversation under a new id.
+    private var onSessionFile: (@MainActor (String) -> Void)?
     /// Per-transcript parser state, for example Claude Code's outstanding workflow count. A
     /// transcript is replayed from the start whenever a file is attached, so this rebuilds on
     /// resume and must reset with the file.
@@ -50,8 +54,12 @@ public final class TranscriptWatcher {
     /// Claude Code's `/code-review` hands the review to a background `Workflow` and ends its
     /// turn within seconds, so an end_turn is only reported as a completion once no workflow is
     /// outstanding; until then the event carries `workflowPending`.
-    public func start(onEvent: @escaping @MainActor (TranscriptEvent) -> Void) {
+    public func start(
+        onEvent: @escaping @MainActor (TranscriptEvent) -> Void,
+        onSessionFile: (@MainActor (String) -> Void)? = nil
+    ) {
         self.onEvent = onEvent
+        self.onSessionFile = onSessionFile
         let fm = FileManager.default
         if !fm.fileExists(atPath: transcriptDir.path) {
             try? fm.createDirectory(at: transcriptDir, withIntermediateDirectories: true)
@@ -69,6 +77,7 @@ public final class TranscriptWatcher {
         readOffset = 0
         parseState = TranscriptParseState()
         onEvent = nil
+        onSessionFile = nil
     }
 
     private func attachDirectorySource() {
@@ -135,6 +144,9 @@ public final class TranscriptWatcher {
         }
         source.resume()
         fileSource = source
+        if let sessionID = backend.sessionID(fromTranscriptFilename: url.lastPathComponent) {
+            onSessionFile?(sessionID)
+        }
         readAppended()
     }
 

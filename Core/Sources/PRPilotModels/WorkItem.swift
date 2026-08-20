@@ -51,6 +51,11 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
     /// Claude completes a newer turn. Kept apart from `myLastReviewAt`, which every poll
     /// overwrites from GitHub.
     public var waitingSeenAt: Date?
+    /// When the current agent run began — the launch that started this review or fix.
+    /// Only a fresh launch stamps it; a resume keeps the original moment, so the detail
+    /// pane reports how long the work has been going rather than when the app last
+    /// reattached. Clearing the session clears it.
+    public var agentRunStartedAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case id, title, repoKey, baseBranch, headBranch, worktreePath, prRef, prState, issueRef
@@ -58,6 +63,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         case addedAt, lastOpenedAt, disabled, viewedFiles, claudeReviewedAt, approvedByMe, manualIssueStatus
         case label, lastPane, authorUpdateSeenAt
         case myReviewState, myLastReviewAt, claudeLastCompletedAt, waitingSeenAt
+        case agentRunStartedAt
         case piSessionID, agent
         /// Renamed in Swift when the session layer stopped being Claude-specific. The stored
         /// key must not change, or existing items lose their configured flags.
@@ -117,7 +123,8 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         label: String? = nil,
         lastPane: PaneSelection? = nil,
         authorUpdateSeenAt: Date? = nil,
-        waitingSeenAt: Date? = nil
+        waitingSeenAt: Date? = nil,
+        agentRunStartedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -147,6 +154,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.lastPane = lastPane
         self.authorUpdateSeenAt = authorUpdateSeenAt
         self.waitingSeenAt = waitingSeenAt
+        self.agentRunStartedAt = agentRunStartedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -177,6 +185,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.myLastReviewAt = try c.decodeIfPresent(Date.self, forKey: .myLastReviewAt)
         self.claudeLastCompletedAt = try c.decodeIfPresent(Date.self, forKey: .claudeLastCompletedAt)
         self.waitingSeenAt = try c.decodeIfPresent(Date.self, forKey: .waitingSeenAt)
+        self.agentRunStartedAt = try c.decodeIfPresent(Date.self, forKey: .agentRunStartedAt)
 
         if c.contains(.repoKey) {
             self.id = try c.decode(String.self, forKey: .id)

@@ -22,154 +22,64 @@ private func live(
 private func step(
     queued: [String],
     live sessions: [SessionBudget.Candidate],
-    cap: Int,
-    selectedID: String? = nil
+    cap: Int
 ) -> SessionQueue.Step {
-    SessionQueue.nextStep(
-        queued: queued,
-        live: sessions,
-        cap: cap,
-        selectedID: selectedID,
-        now: queueNow
-    )
+    SessionQueue.nextStep(queued: queued, live: sessions, cap: cap, now: queueNow)
 }
 
 @Test func queueDoesNothingWhenNothingIsQueued() {
-    let result = step(queued: [], live: [live("a", minutesAgo: 1)], cap: 1)
-
-    #expect(result.release == nil)
-    #expect(result.start == nil)
+    #expect(step(queued: [], live: [live("a", minutesAgo: 1)], cap: 1).start == nil)
 }
 
 @Test func queueStartsTheHeadWhenASlotIsFree() {
-    let result = step(queued: ["next"], live: [live("a", minutesAgo: 1)], cap: 3)
-
-    #expect(result.release == nil)
-    #expect(result.start == "next")
+    #expect(step(queued: ["next"], live: [live("a", minutesAgo: 1)], cap: 3).start == "next")
 }
 
-@Test func queueReleasesTheOldestIdleSessionAtTheCap() {
+@Test func queueDoesNothingForANonPositiveCap() {
+    #expect(step(queued: ["next"], live: [], cap: 0).start == nil)
+}
+
+/// The backlog never costs a live agent its process. autoLoad exists to fill idle capacity,
+/// not to take capacity away — a queued review is worth less than the turn already running.
+@Test func queueWaitsAtTheCapRatherThanReleasingAnything() {
     let result = step(
         queued: ["next"],
         live: [live("newest", minutesAgo: 1), live("oldest", minutesAgo: 5)],
         cap: 2
     )
 
-    #expect(result.release == "oldest")
-    #expect(result.start == "next")
-}
-
-@Test func queueNeverReleasesAWorkingSession() {
-    let result = step(
-        queued: ["next"],
-        live: [live("newest", minutesAgo: 1), live("oldest", minutesAgo: 5, status: .working)],
-        cap: 2
-    )
-
-    #expect(result.release == "newest")
-    #expect(result.start == "next")
-}
-
-@Test func queueNeverReleasesASessionInsideItsStartupGrace() {
-    let result = step(
-        queued: ["next"],
-        live: [
-            live("newest", minutesAgo: 1),
-            live("starting", minutesAgo: 5, status: .starting, startedSecondsAgo: 10),
-        ],
-        cap: 2
-    )
-
-    #expect(result.release == "newest")
-}
-
-@Test func queueNeverReleasesTheSelectedItem() {
-    let result = step(
-        queued: ["next"],
-        live: [live("newest", minutesAgo: 1), live("oldest", minutesAgo: 5)],
-        cap: 2,
-        selectedID: "oldest"
-    )
-
-    #expect(result.release == "newest")
-    #expect(result.start == "next")
-}
-
-@Test func queueDoesNothingWhenEverySessionIsProtected() {
-    let result = step(
-        queued: ["next"],
-        live: [
-            live("a", minutesAgo: 1, status: .working),
-            live("b", minutesAgo: 5, status: .working),
-        ],
-        cap: 2
-    )
-
-    #expect(result.release == nil)
     #expect(result.start == nil)
 }
 
-@Test func queueReleasesAFinishedSessionSoTheBacklogMoves() {
+/// The case the user hits: a session that has just answered and is waiting on them reads
+/// `.awaitingInput`, which used to make it the drain's first choice of victim.
+@Test func queueDoesNotTakeTheSlotOfASessionWaitingOnTheUser() {
+    let waiting = AgentStatus.awaitingInput(
+        since: queueNow.addingTimeInterval(-30),
+        lastVerdictSnippet: "shall I continue?"
+    )
+    let result = step(
+        queued: ["next"],
+        live: [live("waiting", minutesAgo: 5, status: waiting)],
+        cap: 1
+    )
+
+    #expect(result.start == nil)
+}
+
+/// Nor does a finished one. The budget reclaims stale slots on its own schedule; the drain
+/// only ever fills what is already free.
+@Test func queueDoesNotTakeTheSlotOfAFinishedSession() {
     let result = step(
         queued: ["next"],
         live: [live("done", minutesAgo: 5, status: .ready(exitCode: 0))],
         cap: 1
     )
 
-    #expect(result.release == "done")
-    #expect(result.start == "next")
-}
-
-@Test func queueReleasesAnAwaitingInputSessionEvenThoughItIsUnread() {
-    let unread = AgentStatus.awaitingInput(since: Date(timeIntervalSince1970: 0), lastVerdictSnippet: "verdict")
-    let result = step(
-        queued: ["next"],
-        live: [live("unread", minutesAgo: 5, status: unread)],
-        cap: 1
-    )
-
-    #expect(result.release == "unread")
-}
-
-@Test func queueDoesNothingForANonPositiveCap() {
-    let result = step(queued: ["next"], live: [], cap: 0)
-
-    #expect(result.release == nil)
     #expect(result.start == nil)
 }
 
-/// The drain must not take the slot of an agent that is mid-turn but quiet, whatever the
-/// backlog costs. Losing a long review is worse than a slow queue.
-@Test func queueNeverReleasesASessionWhoseTurnIsStillInFlight() {
-    let midTurn = AgentStatus.idle(
-        since: queueNow.addingTimeInterval(-45),
-        lastVerdictSnippet: "running tests"
-    )
-    let result = step(
-        queued: ["next"],
-        live: [
-            live("newest", minutesAgo: 1),
-            live("quiet", minutesAgo: 5, status: midTurn, startedSecondsAgo: 600),
-        ],
-        cap: 2
-    )
-
-    #expect(result.release == "newest")
-    #expect(result.start == "next")
-}
-
-/// A replayed event from an earlier run does not protect the current process.
-@Test func queueReleasesASessionWhoseLastEventPredatesTheProcess() {
-    let replayed = AgentStatus.idle(
-        since: queueNow.addingTimeInterval(-7200),
-        lastVerdictSnippet: nil
-    )
-    let result = step(
-        queued: ["next"],
-        live: [live("resumed", minutesAgo: 5, status: replayed, startedSecondsAgo: 600)],
-        cap: 1
-    )
-
-    #expect(result.release == "resumed")
-    #expect(result.start == "next")
+@Test func queueStartsAgainOnceTheBudgetHasFreedASlot() {
+    // One live session below a cap of two: the slot the budget reclaimed is now fillable.
+    #expect(step(queued: ["next"], live: [live("a", minutesAgo: 1)], cap: 2).start == "next")
 }

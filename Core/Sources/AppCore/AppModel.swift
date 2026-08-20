@@ -60,6 +60,9 @@ public final class AppModel {
     }
     public private(set) var rebaseStates: [String: RebaseState] = [:]
     public private(set) var pushability: [String: Pushability] = [:]
+    /// Local changes found in each item's worktree, by item id. Only recorded for review
+    /// items: an editable worktree is the user's own branch, where edits are the point.
+    public private(set) var worktreeLocalChanges: [String: Int] = [:]
     public private(set) var currentLogin: String?
     public private(set) var settings: Settings = .default
     public private(set) var discoveryWarnings: [String] = []
@@ -68,6 +71,9 @@ public final class AppModel {
     public var webPreloadHandler: ((WorkItem) -> Void)?
 
     private var transcriptWatchers: [String: TranscriptWatcher] = [:]
+    /// Session id of the transcript each watcher is currently tailing. Not the same thing as
+    /// the id the item launched with — see `SessionAdoption`.
+    private var watchedSessionID: [String: String] = [:]
     private var claudePreparing: Set<String> = []
     private var lastEventAt: [String: Date] = [:]
     private var lastVerdictSnippet: [String: String] = [:]
@@ -690,6 +696,11 @@ public final class AppModel {
             appendPrepLog("Starting fresh session", for: review.id)
         }
         updated.setSessionID(sessionID, for: kind)
+        // A fresh launch is the start of a new review or fix. A resume continues one that is
+        // already timed, so it leaves the original moment alone.
+        if !resume {
+            updated.agentRunStartedAt = Date()
+        }
 
         if updated != review {
             try? await store.upsertItem(updated)
@@ -712,6 +723,9 @@ public final class AppModel {
         sessionStartedAt[review.id] = Date()
         session.start()
         attachTranscriptWatcher(reviewID: review.id, worktreePath: ready.worktreePath, kind: kind)
+        // The prep just tried to fast-forward this worktree. If local edits stopped it, the
+        // row should say so rather than leaving the news in the preparation log.
+        await refreshWorktreeCleanliness(for: review.id)
         recomputeStatus(for: review.id, now: Date())
         enforceSessionBudget()
         if editable {
@@ -723,16 +737,21 @@ public final class AppModel {
         if transcriptWatchers[reviewID] != nil { return }
         let dir = AgentTranscriptPath.directoryURL(for: kind, worktreePath: worktreePath)
         let watcher = TranscriptWatcher(transcriptDir: dir, kind: kind)
-        watcher.start { [weak self] event in
-            guard let self else { return }
-            self.handleTranscriptEvent(
-                reviewID: reviewID,
-                at: event.date,
-                snippet: event.snippet,
-                turnCompleted: event.turnCompleted,
-                workflowPending: event.workflowPending
-            )
-        }
+        watcher.start(
+            onEvent: { [weak self] event in
+                guard let self else { return }
+                self.handleTranscriptEvent(
+                    reviewID: reviewID,
+                    at: event.date,
+                    snippet: event.snippet,
+                    turnCompleted: event.turnCompleted,
+                    workflowPending: event.workflowPending
+                )
+            },
+            onSessionFile: { [weak self] sessionID in
+                self?.watchedSessionID[reviewID] = sessionID
+            }
+        )
         transcriptWatchers[reviewID] = watcher
     }
 
@@ -759,7 +778,61 @@ public final class AppModel {
         if turnCompleted {
             Task { await self.markClaudeTurnCompleted(reviewID) }
         }
+        adoptWatchedSessionIfMoved(reviewID: reviewID, eventDate: date)
         recomputeStatus(for: reviewID, now: Date())
+    }
+
+    /// Records the session the agent is actually writing, when that stops being the one the
+    /// item launched with.
+    ///
+    /// Without this the item resumes its launch id forever. After a `/clear` that id names the
+    /// conversation the user threw away; once the transcript is pruned it names nothing, and
+    /// `ensureAgentSession` starts the review again from the beginning. `SessionAdoption` holds
+    /// the rule and the guards that keep two items sharing a clone from taking each other's
+    /// conversations.
+    private func adoptWatchedSessionIfMoved(reviewID: String, eventDate: Date) {
+        guard claudeSessions[reviewID] != nil else { return }
+        guard var review = reviews.first(where: { $0.id == reviewID }) else { return }
+        let kind = review.effectiveAgent(default: settings.defaultAgent)
+        let othersIDs = Set(reviews.compactMap { other -> String? in
+            guard other.id != reviewID else { return nil }
+            return other.sessionID(for: kind)
+        })
+        let shared = review.worktreePath.map { path in
+            claudeSessions.keys.contains { id in
+                id != reviewID && reviews.first(where: { $0.id == id })?.worktreePath == path
+            }
+        } ?? false
+        guard let adopted = SessionAdoption.adoptedSessionID(
+            watched: watchedSessionID[reviewID],
+            stored: review.sessionID(for: kind),
+            eventDate: eventDate,
+            sessionStartedAt: sessionStartedAt[reviewID],
+            idsOwnedByOtherItems: othersIDs,
+            transcriptDirectoryIsShared: shared
+        ) else { return }
+
+        Task { await self.persistAdoptedSession(adopted, kind: kind, for: reviewID) }
+    }
+
+    /// Re-reads the item inside the task rather than persisting the copy the caller held.
+    ///
+    /// `handleTranscriptEvent` can start a turn-completion write and this one from the same
+    /// line. Writing a copy captured before that ran would put the stamps back as they were.
+    private func persistAdoptedSession(_ sessionID: String, kind: AgentKind, for reviewID: String) async {
+        guard var review = reviews.first(where: { $0.id == reviewID }) else { return }
+        guard review.sessionID(for: kind) != sessionID else { return }
+        review.setSessionID(sessionID, for: kind)
+        do {
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func setWatchedSessionIDForTesting(_ sessionID: String, for reviewID: String) {
+        watchedSessionID[reviewID] = sessionID
     }
 
     func recomputeStatus(for reviewID: String, now: Date = Date()) {
@@ -809,12 +882,14 @@ public final class AppModel {
         claudePaneState.removeValue(forKey: id)
         transcriptWatchers[id]?.stop()
         transcriptWatchers.removeValue(forKey: id)
+        watchedSessionID.removeValue(forKey: id)
         claudeStatuses.removeValue(forKey: id)
         sessionLaunchedIsDark.removeValue(forKey: id)
         sessionStartedAt.removeValue(forKey: id)
         prStatuses.removeValue(forKey: id)
         rebaseStates.removeValue(forKey: id)
         pushability.removeValue(forKey: id)
+        worktreeLocalChanges.removeValue(forKey: id)
         lastRefreshedAt.removeValue(forKey: id)
         lastEventAt.removeValue(forKey: id)
         lastVerdictSnippet.removeValue(forKey: id)
@@ -838,6 +913,7 @@ public final class AppModel {
         claudePaneState.removeValue(forKey: id)
         transcriptWatchers[id]?.stop()
         transcriptWatchers.removeValue(forKey: id)
+        watchedSessionID.removeValue(forKey: id)
         claudeStatuses.removeValue(forKey: id)
         sessionLaunchedIsDark.removeValue(forKey: id)
         sessionStartedAt.removeValue(forKey: id)
@@ -846,6 +922,31 @@ public final class AppModel {
         lastEventWasTurnCompletion.removeValue(forKey: id)
         workflowPendingForSession.removeValue(forKey: id)
         notifiedAwaitingForSession.remove(id)
+    }
+
+    /// Drops sessions whose agent process has already exited. They hold a slot and a watcher
+    /// for nothing, and freeing one is not a kill, so it is not gated on the cap.
+    ///
+    /// The selected item is spared: its pane shows the exit banner and its Restart button, and
+    /// reaping the session would replace that with a fresh launch the user did not ask for.
+    /// A background item has no banner to show — reopening it relaunches the agent anyway.
+    func reapDeadSessions(now: Date = Date()) {
+        let dead = SessionBudget.deadSessions(candidates: sessionCandidates(now: now))
+        for id in dead where id != selection {
+            evictAgentSession(for: id)
+        }
+    }
+
+    private func sessionCandidates(now: Date) -> [SessionBudget.Candidate] {
+        claudeSessions.keys.compactMap { id in
+            guard let review = reviews.first(where: { $0.id == id }) else { return nil }
+            return SessionBudget.Candidate(
+                id: id,
+                lastOpenedAt: review.lastOpenedAt ?? review.addedAt,
+                status: claudeStatuses[id] ?? .starting,
+                startedAt: sessionStartedAt[id] ?? now
+            )
+        }
     }
 
     func enforceSessionBudget(now: Date = Date()) {
@@ -862,7 +963,8 @@ public final class AppModel {
             candidates: candidates,
             cap: settings.maxLiveAgentSessions,
             selectedID: selection,
-            now: now
+            now: now,
+            idleProtectionSeconds: idleProtectionSeconds
         )
         for id in victims {
             evictAgentSession(for: id)
@@ -891,9 +993,26 @@ public final class AppModel {
             .map(\.id)
     }
 
+    /// The `.idle` protection window, in seconds, from the user's setting.
+    private var idleProtectionSeconds: TimeInterval {
+        Double(max(settings.idleSessionProtectionMinutes, 0)) * 60
+    }
+
     /// One step per call. Starting a session does real work, so pacing it keeps the launch
     /// path calm and lets a released slot settle before the next start.
+    ///
+    /// The budget runs first. It reclaims sessions that have gone quiet past the protection
+    /// window, which is the only way a slot ever comes free without the user acting. The
+    /// drain then fills whatever room that left — it never takes a slot from a live agent.
     func drainSessionQueue(now: Date = Date()) async {
+        recomputeReviewQueue()
+        // Reaping only serves the backlog, so it waits until there is a backlog. With nothing
+        // queued a dead session costs only itself, and leaving it alone keeps the pane's exit
+        // banner intact for an item the user may come back to.
+        if !queuedReviewIDs.isEmpty {
+            reapDeadSessions(now: now)
+        }
+        enforceSessionBudget(now: now)
         recomputeReviewQueue()
         let candidates: [SessionBudget.Candidate] = claudeSessions.keys.compactMap { id in
             guard let review = reviews.first(where: { $0.id == id }) else { return nil }
@@ -908,12 +1027,8 @@ public final class AppModel {
             queued: queuedReviewIDs,
             live: candidates,
             cap: settings.maxLiveAgentSessions,
-            selectedID: selection,
             now: now
         )
-        if let release = step.release {
-            evictAgentSession(for: release)
-        }
         guard let start = step.start,
               let review = reviews.first(where: { $0.id == start }) else { return }
         autoLoadSpentIDs.insert(start)
@@ -952,10 +1067,12 @@ public final class AppModel {
         claudeSessions.removeAll()
         claudePaneState.removeAll()
         transcriptWatchers.removeAll()
+        watchedSessionID.removeAll()
         claudeStatuses.removeAll()
         prStatuses.removeAll()
         rebaseStates.removeAll()
         pushability.removeAll()
+        worktreeLocalChanges.removeAll()
         lastEventAt.removeAll()
         lastVerdictSnippet.removeAll()
         lastEventWasTurnCompletion.removeAll()
@@ -1140,6 +1257,7 @@ public final class AppModel {
         review.claudeReviewedAt = nil
         review.claudeLastCompletedAt = nil
         review.waitingSeenAt = nil
+        review.agentRunStartedAt = nil
         do {
             try await store.upsertItem(review)
             reviews = await store.allItems()
@@ -1215,7 +1333,48 @@ public final class AppModel {
         }
     }
 
+    /// Counts the local changes in a review worktree, so the sidebar can flag one that cannot
+    /// be fast-forwarded. Editable items are skipped: their worktree is the user's own branch.
+    func refreshWorktreeCleanliness(for id: String) async {
+        guard let review = reviews.first(where: { $0.id == id }) else { return }
+        guard review.category(myLogin: currentLogin) == .reviewRequest,
+              let worktreePath = review.worktreePath,
+              FileManager.default.fileExists(atPath: worktreePath)
+        else {
+            worktreeLocalChanges.removeValue(forKey: id)
+            return
+        }
+        guard let changes = try? await worktreeOps.localChanges(worktreePath: worktreePath) else { return }
+        if changes.isEmpty {
+            worktreeLocalChanges.removeValue(forKey: id)
+        } else {
+            worktreeLocalChanges[id] = changes.count
+        }
+    }
+
+    /// Throws away every local change in a review worktree, then fast-forwards it to the PR
+    /// head. Destructive: the caller must have confirmed with the user first.
+    public func discardLocalChanges(id: String) async {
+        guard let review = reviews.first(where: { $0.id == id }),
+              let worktreePath = review.worktreePath else { return }
+        do {
+            try await worktreeOps.discardLocalChanges(worktreePath: worktreePath)
+            if let number = review.number {
+                _ = try? await worktreeOps.refreshWorktree(
+                    clonePath: registeredClonePath(for: review) ?? worktreePath,
+                    worktreePath: worktreePath,
+                    number: number,
+                    remoteName: "origin"
+                )
+            }
+        } catch {
+            errorMessage = String(describing: error)
+        }
+        await refreshWorktreeCleanliness(for: id)
+    }
+
     func refreshReviewState(for id: String) async {
+        await refreshWorktreeCleanliness(for: id)
         guard let login = currentLogin,
               let review = reviews.first(where: { $0.id == id }),
               review.prState != .merged, review.prState != .closed,

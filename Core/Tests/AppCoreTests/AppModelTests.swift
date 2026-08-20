@@ -123,6 +123,24 @@ private actor StubWorktreeOps: WorktreeManaging {
     var shouldThrowAheadBehind: Set<String> = []
     private(set) var recordedPushCalls: [(remoteName: String, branch: String, force: Bool)] = []
 
+    var localChangesResult: [String] = []
+    private(set) var discardedPaths: [String] = []
+    private(set) var refreshedWorktrees: [String] = []
+
+    func set(localChangesResult: [String]) { self.localChangesResult = localChangesResult }
+
+    func localChanges(worktreePath: String) async throws -> [String] { localChangesResult }
+
+    func discardLocalChanges(worktreePath: String) async throws {
+        discardedPaths.append(worktreePath)
+        localChangesResult = []
+    }
+
+    func refreshWorktree(clonePath: String, worktreePath: String, number: Int, remoteName: String) async throws -> Bool {
+        refreshedWorktrees.append(worktreePath)
+        return true
+    }
+
     func set(currentBranchResult: String?) { self.currentBranchResult = currentBranchResult }
     func set(rebaseResult: RebaseOutcome) { self.rebaseResult = rebaseResult }
     func set(aheadBehindDefaultResult: (ahead: Int, behind: Int)) { self.aheadBehindDefaultResult = aheadBehindDefaultResult }
@@ -761,7 +779,7 @@ private func stubClient() -> GitHubClient {
 
     model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: "Review complete", turnCompleted: true)
 
-    try await Task.sleep(nanoseconds: 300_000_000)
+    try await waitForItem(model, id: review.id) { $0.claudeReviewedAt != nil }
     #expect(model.reviews.first(where: { $0.id == review.id })?.claudeReviewedAt != nil)
 
     // Completing a turn now yields .awaitingInput, which fires the "needs you" notification.
@@ -2294,7 +2312,7 @@ private let issueSearchHitJSON = """
         workflowPending: false
     )
 
-    try await Task.sleep(nanoseconds: 300_000_000)
+    try await waitForItem(model, id: review.id) { $0.claudeReviewedAt != nil }
     #expect(model.reviews.first(where: { $0.id == review.id })?.claudeReviewedAt != nil)
     let posted = await poster.posted
     #expect(posted.count == 1)
@@ -2593,11 +2611,10 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     #expect(model.claudeSessions.count == 1)
 }
 
-/// The drain gives each item one turn. A released item that never got its reviewed stamp
-/// used to fall straight back into the queue, so the drain restarted it on the next tick and
-/// cycled the backlog for as long as the app ran. Each start leaks nothing now, but it still
-/// relaunches the agent and spends tokens for no result.
-@Test @MainActor func drainDoesNotRestartAnItemItAlreadyReleased() async throws {
+/// The drain gives each item one turn. An item that lost its session before earning the
+/// reviewed stamp used to fall straight back into the queue, so the drain restarted it on the
+/// next tick and cycled the backlog for as long as the app ran.
+@Test @MainActor func drainDoesNotRestartAnItemItAlreadyStarted() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     for index in 1...2 {
         try await store.upsertItem(cappedReview("q\(index)", number: index, openedMinutesAgo: index))
@@ -2618,16 +2635,17 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     model.recomputeStatus(for: "item-q1", now: Date())
     #expect(model.claudeSessions["item-q1"] != nil)
 
+    // q1's process has exited, so the drain reaps that slot and fills it with q2.
     await model.drainSessionQueue()
+    #expect(model.claudeSessions["item-q1"] == nil, "the dead session is reaped, not killed")
     #expect(model.claudeSessions["item-q2"] != nil)
     try await Task.sleep(nanoseconds: 1_500_000_000)
     model.recomputeStatus(for: "item-q2", now: Date())
 
     await model.drainSessionQueue()
 
-    #expect(model.queuedReviewIDs.isEmpty)
-    #expect(model.claudeSessions["item-q1"] == nil)
-    #expect(model.claudeSessions["item-q2"] != nil)
+    #expect(model.queuedReviewIDs.isEmpty, "both items have spent their turn")
+    #expect(model.claudeSessions["item-q1"] == nil, "and neither is started a second time")
 }
 
 @Test @MainActor func aSecondCompletedTurnMovesOnlyTheLatestStamp() async throws {
@@ -2639,20 +2657,44 @@ private func registerExistingClone(in store: ReviewStore) async throws -> URL {
     await model.load()
     await model.ensureAgentSession(for: item)
 
+    // Each stamp is written by a detached task, so the test waits for the write rather than
+    // guessing how long it takes. A fixed sleep passed on an idle machine and failed under a
+    // loaded one, which said nothing about the behaviour under test.
     let first = Date(timeIntervalSince1970: 1_000)
     model.handleTranscriptEvent(reviewID: item.id, at: first, snippet: "done", turnCompleted: true)
-    try await Task.sleep(nanoseconds: 200_000_000)
+    try await waitForItem(model, id: item.id) { $0.claudeLastCompletedAt != nil }
     let afterFirst = model.reviews.first { $0.id == item.id }
 
     let second = Date(timeIntervalSince1970: 2_000)
     model.handleTranscriptEvent(reviewID: item.id, at: second, snippet: "done again", turnCompleted: true)
-    try await Task.sleep(nanoseconds: 200_000_000)
+    try await waitForItem(model, id: item.id) { $0.claudeLastCompletedAt != afterFirst?.claudeLastCompletedAt }
     let afterSecond = model.reviews.first { $0.id == item.id }
 
     #expect(afterFirst?.claudeReviewedAt != nil)
     #expect(afterFirst?.claudeLastCompletedAt != nil)
-    #expect(afterSecond?.claudeReviewedAt == afterFirst?.claudeReviewedAt)
-    #expect(afterSecond?.claudeLastCompletedAt != afterFirst?.claudeLastCompletedAt)
+    #expect(afterSecond?.claudeReviewedAt == afterFirst?.claudeReviewedAt, "the one-shot stamp stays put")
+    #expect(afterSecond?.claudeLastCompletedAt != afterFirst?.claudeLastCompletedAt, "the latest stamp moves")
+}
+
+/// Polls until a persisted change lands, or fails the test. Two seconds is far longer than the
+/// write needs and short enough to keep a real breakage obvious.
+///
+/// Every stamp the model writes goes through a detached task, so a test that sleeps a fixed
+/// 300ms is really asserting how busy the machine is. Use this wherever a test waits for a
+/// change to appear; a fixed sleep is only right when the test asserts nothing changed.
+@MainActor
+private func waitForItem(
+    _ model: AppModel,
+    id: String,
+    timeout: TimeInterval = 2,
+    until condition: (WorkItem) -> Bool
+) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if let item = model.reviews.first(where: { $0.id == id }), condition(item) { return }
+        try await Task.sleep(nanoseconds: 20_000_000)
+    }
+    Issue.record("timed out after \(timeout)s waiting for the persisted stamp to change")
 }
 
 @Test @MainActor func clearingASessionClearsBothClaudeStamps() async throws {
@@ -3459,4 +3501,458 @@ private func agentSwitchModel(store: ReviewStore) -> AppModel {
 
     #expect(model.claudeSessions[first.id] == nil)
     #expect(model.queuedReviewIDs.contains(first.id) == false)
+}
+
+// MARK: - Agent run start
+
+/// A model whose worktree is unique to one test, so a transcript another test left behind
+/// cannot turn a fresh launch into a resume.
+@MainActor
+private func agentRunModel(store: ReviewStore, worktree: String) -> AppModel {
+    AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(
+            result: WorktreeReady(clonePath: "/tmp/clone", worktreePath: worktree, remoteName: "origin")
+        ),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+}
+
+@Test @MainActor func aFreshAgentLaunchStampsTheRunStart() async throws {
+    let worktree = "/tmp/agent-run-\(UUID().uuidString)"
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()
+    try await store.upsertItem(review)
+    let model = agentRunModel(store: store, worktree: worktree)
+    await model.load()
+
+    let before = Date()
+    await model.ensureAgentSession(for: review)
+
+    let current = model.reviews.first(where: { $0.id == review.id })
+    let started = try #require(current?.agentRunStartedAt)
+    #expect(started >= before)
+    #expect(started <= Date())
+}
+
+/// Resuming continues work that already started, so the original moment must survive. A
+/// resume that re-stamped would report the app's last relaunch as the start of the review.
+@Test @MainActor func resumingAnAgentKeepsTheOriginalRunStart() async throws {
+    let worktree = "/tmp/agent-run-\(UUID().uuidString)"
+    let sessionID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    let fm = FileManager.default
+    let dir = AgentTranscriptPath.directoryURL(for: .claudeCode, worktreePath: worktree)
+    try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: dir) }
+    try "{}".write(to: dir.appendingPathComponent("\(sessionID).jsonl"), atomically: true, encoding: .utf8)
+
+    let originalStart = Date(timeIntervalSince1970: 1_755_000_000)
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.claudeSessionID = sessionID
+    review.agentRunStartedAt = originalStart
+    try await store.upsertItem(review)
+    let model = agentRunModel(store: store, worktree: worktree)
+    await model.load()
+
+    await model.ensureAgentSession(for: review)
+
+    let current = model.reviews.first(where: { $0.id == review.id })
+    #expect(current?.claudeSessionID == sessionID, "the session must actually have resumed")
+    #expect(current?.agentRunStartedAt == originalStart)
+}
+
+/// Clearing a session throws the conversation away and relaunches, so the old start time is
+/// no longer true. The new run gets its own.
+@Test @MainActor func clearingTheSessionRestampsTheRunStart() async throws {
+    let worktree = "/tmp/agent-run-\(UUID().uuidString)"
+    let originalStart = Date(timeIntervalSince1970: 1_755_000_000)
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.claudeSessionID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    review.agentRunStartedAt = originalStart
+    try await store.upsertItem(review)
+    let model = agentRunModel(store: store, worktree: worktree)
+    await model.load()
+
+    let before = Date()
+    await model.clearAgentSession(for: review.id)
+
+    let current = model.reviews.first(where: { $0.id == review.id })
+    let started = try #require(current?.agentRunStartedAt)
+    #expect(started != originalStart)
+    #expect(started >= before)
+}
+
+// MARK: - The backlog never costs a live agent its process
+
+/// The reported bug. A session that has just answered and is waiting on the user reads
+/// `.awaitingInput`, which made it the drain's first choice of victim: within one 5 second
+/// tick the agent was SIGTERMed to start a queued review. The user came back to a session
+/// they had left running and found it gone.
+@Test @MainActor func drainNeverTakesTheSlotOfASessionWaitingOnTheUser() async throws {
+    let cwd = FileManager.default.temporaryDirectory
+        .appendingPathComponent("waitwt-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: cwd) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let waiting = cappedReview("waiting", number: 1, openedMinutesAgo: 5)
+    let queued = cappedReview("queued", number: 2, openedMinutesAgo: 1)
+    for item in [waiting, queued] { try await store.upsertItem(item) }
+    let clone = try await registerExistingClone(in: store)
+    defer { try? FileManager.default.removeItem(at: clone) }
+    var settings = await store.settings()
+    settings.autoLoad = true
+    settings.maxLiveAgentSessions = 1
+    try await store.updateSettings(settings)
+
+    var provider = StubWorktreeProvider()
+    provider.result = WorktreeReady(clonePath: cwd.path, worktreePath: cwd.path, remoteName: "origin")
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: provider,
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/yes",
+        notificationPoster: StubNotificationPoster()
+    )
+    defer { model.terminateAllAgentSessions() }
+    await model.load()
+    await model.ensureAgentSession(for: waiting)
+    // Not the selected item, so the selection exemption cannot be what saves it.
+    model.selection = nil
+
+    // The agent finished a turn a minute ago and is waiting on the user.
+    let answered = Date().addingTimeInterval(-60)
+    model.handleTranscriptEvent(reviewID: waiting.id, at: answered, snippet: "shall I continue?", turnCompleted: true)
+    model.recomputeStatus(for: waiting.id, now: Date())
+    #expect(model.claudeStatuses[waiting.id] == .awaitingInput(since: answered, lastVerdictSnippet: "shall I continue?"))
+
+    await model.drainSessionQueue()
+
+    #expect(model.claudeSessions[waiting.id] != nil, "the waiting agent keeps its process")
+    #expect(model.claudeSessions[queued.id] == nil, "and the queued review waits for real headroom")
+}
+
+/// A mid-turn agent that has gone quiet for hours is not mid-turn any more. Protecting it
+/// forever is what let the session count reach 11 against a cap of 3, and left the drain with
+/// nothing to take but the session that had just answered.
+@Test @MainActor func theBudgetReclaimsASessionQuietPastTheProtectionWindow() async throws {
+    let cwd = FileManager.default.temporaryDirectory
+        .appendingPathComponent("stalewt-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: cwd) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let stale = cappedReview("stale", number: 1, openedMinutesAgo: 5)
+    let fresh = cappedReview("fresh", number: 2, openedMinutesAgo: 1)
+    for item in [stale, fresh] { try await store.upsertItem(item) }
+    var settings = await store.settings()
+    settings.maxLiveAgentSessions = 1
+    settings.idleSessionProtectionMinutes = 20
+    try await store.updateSettings(settings)
+
+    var provider = StubWorktreeProvider()
+    provider.result = WorktreeReady(clonePath: cwd.path, worktreePath: cwd.path, remoteName: "origin")
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: provider,
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/yes",
+        notificationPoster: StubNotificationPoster()
+    )
+    defer { model.terminateAllAgentSessions() }
+    await model.load()
+    await model.ensureAgentSession(for: stale)
+    await model.ensureAgentSession(for: fresh)
+    model.selection = fresh.id
+
+    // Three hours quiet, on a session that started four hours ago: its last line is its own,
+    // so the old rule protected it, but nothing has happened since.
+    model.setSessionStartedAtForTesting(Date().addingTimeInterval(-4 * 3600), for: stale.id)
+    let longQuiet = Date().addingTimeInterval(-3 * 3600)
+    model.handleTranscriptEvent(reviewID: stale.id, at: longQuiet, snippet: "reading files", turnCompleted: false)
+    model.recomputeStatus(for: stale.id, now: Date())
+    #expect(model.claudeStatuses[stale.id] == .idle(since: longQuiet, lastVerdictSnippet: "reading files"))
+
+    model.enforceSessionBudget()
+
+    #expect(model.claudeSessions[stale.id] == nil, "a session parked for three hours gives up its slot")
+    #expect(model.claudeSessions[fresh.id] != nil)
+}
+
+/// A session whose process has already exited holds a slot for nothing. Reaping it is not a
+/// kill, so it is not bound by the cap comparison — otherwise a dead session at exactly the
+/// cap would block the backlog for as long as the app runs.
+@Test @MainActor func drainReapsAnExitedSessionAndStartsTheNext() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    for index in 1...2 {
+        try await store.upsertItem(cappedReview("r\(index)", number: index, openedMinutesAgo: index))
+    }
+    let clone = try await registerExistingClone(in: store)
+    defer { try? FileManager.default.removeItem(at: clone) }
+    var settings = await store.settings()
+    settings.autoLoad = true
+    settings.maxLiveAgentSessions = 1
+    try await store.updateSettings(settings)
+
+    let model = cappedModel(store: store)
+    await model.load()
+    model.selection = nil
+    await model.drainSessionQueue()
+    let firstStarted = model.claudeSessions["item-r1"] != nil
+
+    // AgentSession.start runs `cd <cwd> && exec <claude>`, and StubWorktreeProvider's /tmp/wt
+    // does not exist, so the shell exits and the status settles to .ready. The wait covers
+    // `zsh -l` sourcing a slow profile before it can fail.
+    try await Task.sleep(nanoseconds: 1_500_000_000)
+    model.recomputeStatus(for: "item-r1", now: Date())
+    #expect(model.claudeStatuses["item-r1"] == .ready(exitCode: 1) || model.claudeStatuses["item-r1"] != .working)
+
+    await model.drainSessionQueue()
+
+    #expect(firstStarted == true)
+    #expect(model.claudeSessions["item-r1"] == nil, "the dead session is reaped")
+    #expect(model.claudeSessions["item-r2"] != nil, "and the backlog moves")
+    #expect(model.claudeSessions.count == 1)
+}
+
+// MARK: - Adopting the session the agent actually writes
+
+@MainActor
+private func adoptionModel(store: ReviewStore, worktree: String) -> AppModel {
+    AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(
+            result: WorktreeReady(clonePath: worktree, worktreePath: worktree, remoteName: "origin")
+        ),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/yes",
+        notificationPoster: StubNotificationPoster()
+    )
+}
+
+/// Running `/clear` in the terminal starts a new conversation under a new session id. The item
+/// kept resuming the id it launched with, so the next open reopened the conversation the user
+/// had just thrown away — and once that transcript was pruned, started the review from scratch.
+@Test @MainActor func theItemAdoptsTheSessionIdTheAgentMovesTo() async throws {
+    let worktree = "/tmp/adopt-\(UUID().uuidString)"
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.claudeSessionID = "launched-id"
+    try await store.upsertItem(review)
+    let model = adoptionModel(store: store, worktree: worktree)
+    await model.load()
+    await model.ensureAgentSession(for: review)
+    defer { model.terminateAllAgentSessions() }
+
+    model.setSessionStartedAtForTesting(Date().addingTimeInterval(-60), for: review.id)
+    model.setWatchedSessionIDForTesting("cleared-id", for: review.id)
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: "starting over", turnCompleted: false)
+    try await waitForItem(model, id: review.id) { $0.claudeSessionID == "cleared-id" }
+
+    #expect(model.reviews.first(where: { $0.id == review.id })?.claudeSessionID == "cleared-id")
+}
+
+/// The watcher replays a transcript from the start every time it attaches. Those events are
+/// older than the process, and must not rewrite the item's session id.
+@Test @MainActor func replayedEventsDoNotChangeTheStoredSessionId() async throws {
+    let worktree = "/tmp/adopt-\(UUID().uuidString)"
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.claudeSessionID = "launched-id"
+    try await store.upsertItem(review)
+    let model = adoptionModel(store: store, worktree: worktree)
+    await model.load()
+    await model.ensureAgentSession(for: review)
+    defer { model.terminateAllAgentSessions() }
+
+    // ensureAgentSession replaces a stored id whose transcript is gone, so the launched id is
+    // whatever it settled on. That is the value adoption must leave alone here.
+    let launched = model.reviews.first(where: { $0.id == review.id })?.claudeSessionID
+    model.setSessionStartedAtForTesting(Date(), for: review.id)
+    model.setWatchedSessionIDForTesting("older-id", for: review.id)
+    model.handleTranscriptEvent(
+        reviewID: review.id,
+        at: Date().addingTimeInterval(-3600),
+        snippet: "from an earlier run",
+        turnCompleted: false
+    )
+    try await Task.sleep(nanoseconds: 300_000_000)
+
+    #expect(model.reviews.first(where: { $0.id == review.id })?.claudeSessionID == launched)
+}
+
+/// Two items that point at the same clone share a transcript directory, so each watcher sees
+/// the other's files. Adopting there would hand one item's conversation to another.
+@Test @MainActor func anItemSharingAWorktreeNeverAdopts() async throws {
+    let worktree = "/tmp/adopt-shared-\(UUID().uuidString)"
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var first = cappedReview("shared1", number: 1, openedMinutesAgo: 2)
+    var second = cappedReview("shared2", number: 2, openedMinutesAgo: 1)
+    first.claudeSessionID = "first-id"
+    second.claudeSessionID = "second-id"
+    for item in [first, second] { try await store.upsertItem(item) }
+    let model = adoptionModel(store: store, worktree: worktree)
+    await model.load()
+    await model.ensureAgentSession(for: first)
+    await model.ensureAgentSession(for: second)
+    defer { model.terminateAllAgentSessions() }
+
+    let launched = model.reviews.first(where: { $0.id == first.id })?.claudeSessionID
+    model.setSessionStartedAtForTesting(Date().addingTimeInterval(-60), for: first.id)
+    model.setWatchedSessionIDForTesting("newest-in-the-shared-dir", for: first.id)
+    model.handleTranscriptEvent(reviewID: first.id, at: Date(), snippet: "whose is this?", turnCompleted: false)
+    try await Task.sleep(nanoseconds: 300_000_000)
+
+    #expect(model.reviews.first(where: { $0.id == first.id })?.claudeSessionID == launched)
+}
+
+/// The narrower version of the same danger: an id another item already owns is never taken,
+/// even when the directory is this item's alone.
+@Test @MainActor func anIdAnotherItemOwnsIsNeverAdopted() async throws {
+    let worktree = "/tmp/adopt-\(UUID().uuidString)"
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var mine = cappedReview("mine", number: 1, openedMinutesAgo: 2)
+    var theirs = cappedReview("theirs", number: 2, openedMinutesAgo: 1)
+    mine.claudeSessionID = "my-id"
+    theirs.claudeSessionID = "their-id"
+    theirs.worktreePath = "/tmp/somewhere-else-\(UUID().uuidString)"
+    for item in [mine, theirs] { try await store.upsertItem(item) }
+    let model = adoptionModel(store: store, worktree: worktree)
+    await model.load()
+    await model.ensureAgentSession(for: mine)
+    defer { model.terminateAllAgentSessions() }
+
+    let launched = model.reviews.first(where: { $0.id == mine.id })?.claudeSessionID
+    model.setSessionStartedAtForTesting(Date().addingTimeInterval(-60), for: mine.id)
+    model.setWatchedSessionIDForTesting("their-id", for: mine.id)
+    model.handleTranscriptEvent(reviewID: mine.id, at: Date(), snippet: "not mine", turnCompleted: false)
+    try await Task.sleep(nanoseconds: 300_000_000)
+
+    #expect(model.reviews.first(where: { $0.id == mine.id })?.claudeSessionID == launched)
+    #expect(model.reviews.first(where: { $0.id == theirs.id })?.claudeSessionID == "their-id")
+}
+
+// MARK: - Local changes in a review worktree
+
+@MainActor
+private func dirtyWorktreeModel(store: ReviewStore, ops: StubWorktreeOps, worktree: String) -> AppModel {
+    AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(
+            result: WorktreeReady(clonePath: worktree, worktreePath: worktree, remoteName: "origin")
+        ),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: ops,
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+}
+
+/// Someone edited a file inside a review checkout, so it can no longer be fast-forwarded to
+/// the PR head. The session opens regardless, and the row has to say the tree is not what the
+/// PR says it is — otherwise the review reads a stale diff with nothing on screen to warn it.
+@Test @MainActor func aDirtyReviewWorktreeIsRecorded() async throws {
+    let worktree = FileManager.default.temporaryDirectory
+        .appendingPathComponent("dirty-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: worktree) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()          // authored by icellan, so a review request
+    review.worktreePath = worktree.path
+    try await store.upsertItem(review)
+    let ops = StubWorktreeOps()
+    await ops.set(localChangesResult: [" M cmd/seeder/seeder.go"])
+    let model = dirtyWorktreeModel(store: store, ops: ops, worktree: worktree.path)
+    await model.load()
+    model.setCurrentLoginForTesting("ordishs")
+
+    await model.refreshWorktreeCleanliness(for: review.id)
+
+    #expect(model.worktreeLocalChanges[review.id] == 1)
+}
+
+/// An editable worktree is the user's own branch. Edits there are the work, not a problem, and
+/// flagging them would make the badge meaningless on every item the user is actually building.
+@Test @MainActor func anEditableWorktreeIsNeverFlaggedAsDirty() async throws {
+    let worktree = FileManager.default.temporaryDirectory
+        .appendingPathComponent("mine-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: worktree) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.worktreePath = worktree.path
+    try await store.upsertItem(review)
+    let ops = StubWorktreeOps()
+    await ops.set(localChangesResult: [" M main.go", "?? scratch.txt"])
+    let model = dirtyWorktreeModel(store: store, ops: ops, worktree: worktree.path)
+    await model.load()
+    // The PR author is the user, so this is their own branch.
+    model.setCurrentLoginForTesting("icellan")
+
+    await model.refreshWorktreeCleanliness(for: review.id)
+
+    #expect(model.worktreeLocalChanges[review.id] == nil)
+}
+
+@Test @MainActor func discardingLocalChangesClearsTheFlagAndRefreshes() async throws {
+    let worktree = FileManager.default.temporaryDirectory
+        .appendingPathComponent("discard-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: worktree) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.worktreePath = worktree.path
+    try await store.upsertItem(review)
+    let ops = StubWorktreeOps()
+    await ops.set(localChangesResult: [" M cmd/seeder/seeder.go", "?? notes.txt"])
+    let model = dirtyWorktreeModel(store: store, ops: ops, worktree: worktree.path)
+    await model.load()
+    model.setCurrentLoginForTesting("ordishs")
+    await model.refreshWorktreeCleanliness(for: review.id)
+    #expect(model.worktreeLocalChanges[review.id] == 2)
+
+    await model.discardLocalChanges(id: review.id)
+
+    #expect(model.worktreeLocalChanges[review.id] == nil, "the flag clears once the tree is clean")
+    #expect(await ops.discardedPaths == [worktree.path])
+    #expect(await ops.refreshedWorktrees == [worktree.path], "and the fast-forward it was blocking runs")
+}
+
+/// A worktree the user deleted from disk is not dirty, it is absent. Reporting a stale count
+/// would leave a badge on a row with nothing behind it.
+@Test @MainActor func aMissingWorktreeClearsTheFlag() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.worktreePath = "/tmp/gone-\(UUID().uuidString)"
+    try await store.upsertItem(review)
+    let ops = StubWorktreeOps()
+    await ops.set(localChangesResult: [" M something.go"])
+    let model = dirtyWorktreeModel(store: store, ops: ops, worktree: "/tmp/unused")
+    await model.load()
+    model.setCurrentLoginForTesting("ordishs")
+
+    await model.refreshWorktreeCleanliness(for: review.id)
+
+    #expect(model.worktreeLocalChanges[review.id] == nil)
 }

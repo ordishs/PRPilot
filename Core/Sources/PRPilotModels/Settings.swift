@@ -46,6 +46,12 @@ public struct Settings: Codable, Sendable, Equatable {
     public var maxLiveAgentSessions: Int
     /// Live web views allowed at once. Each holds its own WebContent process.
     public var maxLiveWebViews: Int
+    /// How long a quiet agent session still counts as mid-turn, in minutes.
+    ///
+    /// An agent inside a long tool call writes nothing, so the app cannot tell it apart from
+    /// one parked for hours except by how long the silence has lasted. Raise it if your
+    /// reviews run long tool calls; lower it to make the session cap bite sooner.
+    public var idleSessionProtectionMinutes: Int
 
     private enum LegacyKeys: String, CodingKey {
         case discoveryQueries
@@ -89,6 +95,7 @@ public struct Settings: Codable, Sendable, Equatable {
         case issuePromptTemplate
         case maxLiveAgentSessions = "maxLiveClaudeSessions"
         case maxLiveWebViews
+        case idleSessionProtectionMinutes
     }
 
     public init(
@@ -123,7 +130,8 @@ public struct Settings: Codable, Sendable, Equatable {
         piReviewPromptTemplate: String = Settings.defaultPiReviewPromptTemplate,
         piIssuePromptTemplate: String = Settings.defaultPiIssuePromptTemplate,
         maxLiveAgentSessions: Int = 5,
-        maxLiveWebViews: Int = 8
+        maxLiveWebViews: Int = 8,
+        idleSessionProtectionMinutes: Int = SessionDefaults.idleProtectionMinutes
     ) {
         self.managedRoot = managedRoot
         self.reviewRequestQueries = reviewRequestQueries
@@ -157,6 +165,7 @@ public struct Settings: Codable, Sendable, Equatable {
         self.piIssuePromptTemplate = piIssuePromptTemplate
         self.maxLiveAgentSessions = maxLiveAgentSessions
         self.maxLiveWebViews = maxLiveWebViews
+        self.idleSessionProtectionMinutes = idleSessionProtectionMinutes
     }
 
     public init(from decoder: Decoder) throws {
@@ -210,6 +219,8 @@ public struct Settings: Codable, Sendable, Equatable {
             ?? Settings.defaultPiIssuePromptTemplate
         maxLiveAgentSessions = try c.decodeIfPresent(Int.self, forKey: .maxLiveAgentSessions) ?? 5
         maxLiveWebViews = try c.decodeIfPresent(Int.self, forKey: .maxLiveWebViews) ?? 8
+        idleSessionProtectionMinutes = try c.decodeIfPresent(Int.self, forKey: .idleSessionProtectionMinutes)
+            ?? SessionDefaults.idleProtectionMinutes
 
         if let rrq = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .reviewRequestQueries) {
             reviewRequestQueries = rrq

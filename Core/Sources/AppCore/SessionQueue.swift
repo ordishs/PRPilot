@@ -1,19 +1,17 @@
 import Foundation
 import AgentKit
 
-/// Decides one step of draining the review backlog: which finished session gives up its
-/// slot, and which queued item takes it.
+/// Decides one step of draining the review backlog: which queued item takes a free slot.
 ///
-/// A finished review releases its process before the user has read it. Nothing is lost —
-/// the transcript survives and `ensureAgentSession` resumes it — and holding the slot
-/// would stall the backlog behind whatever the user has not got round to reading.
+/// autoLoad fills spare capacity. It never makes capacity: a queued review that has not
+/// started is worth less than a turn already running, and a live agent that the drain kills
+/// to make room loses whatever it was doing. So this returns a start only when the cap
+/// already has room. Reclaiming a stale slot is `SessionBudget`'s job, on its own rule.
 public enum SessionQueue {
     public struct Step: Sendable, Equatable {
-        public let release: String?
         public let start: String?
 
-        public init(release: String?, start: String?) {
-            self.release = release
+        public init(start: String?) {
             self.start = start
         }
     }
@@ -22,27 +20,10 @@ public enum SessionQueue {
         queued: [String],
         live: [SessionBudget.Candidate],
         cap: Int,
-        selectedID: String?,
         now: Date
     ) -> Step {
-        guard cap > 0, let next = queued.first else { return Step(release: nil, start: nil) }
-        guard live.count >= cap else { return Step(release: nil, start: next) }
-
-        let releasable = live
-            .filter { $0.id != selectedID }
-            .filter { !isProtected($0, now: now) }
-            .min { left, right in
-                if left.lastOpenedAt == right.lastOpenedAt { return left.id < right.id }
-                return left.lastOpenedAt < right.lastOpenedAt
-            }
-
-        guard let releasable else { return Step(release: nil, start: nil) }
-        return Step(release: releasable.id, start: next)
-    }
-
-    /// The release rule and the eviction rule must stay identical, so both call
-    /// `SessionBudget.isProtected` rather than keeping a copy each.
-    private static func isProtected(_ candidate: SessionBudget.Candidate, now: Date) -> Bool {
-        SessionBudget.isProtected(candidate, now: now)
+        guard cap > 0, let next = queued.first else { return Step(start: nil) }
+        guard live.count < cap else { return Step(start: nil) }
+        return Step(start: next)
     }
 }

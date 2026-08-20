@@ -208,6 +208,26 @@ public struct WorktreeManager: Sendable {
         return out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Porcelain status lines for a worktree — one per local change, tracked or untracked.
+    ///
+    /// This is the same list that stops `refreshWorktree` fast-forwarding, so counting it tells
+    /// the user exactly what stands between the checkout and the PR head. Ignored files are
+    /// excluded by git, and they never blocked the refresh either.
+    public func localChanges(worktreePath: String) async throws -> [String] {
+        let out = try await runGit(["-C", worktreePath, "status", "--porcelain"])
+        return out.split(separator: "\n").map(String.init).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    }
+
+    /// Throws away every local change in a worktree: tracked edits are reset, untracked files
+    /// are removed. Destructive and unrecoverable — the caller must have asked first.
+    ///
+    /// `clean` is deliberately without `-x`: ignored files are build output, they never blocked
+    /// the refresh, and deleting them would cost a rebuild for no gain.
+    public func discardLocalChanges(worktreePath: String) async throws {
+        try await runGit(["-C", worktreePath, "reset", "--hard"])
+        try await runGit(["-C", worktreePath, "clean", "-fd"])
+    }
+
     public func checkoutBranchWorktree(
         clonePath: String, owner: String, repo: String, branch: String, number: Int,
         remoteName: String = "origin", progress: @escaping @Sendable (String) async -> Void = { _ in }

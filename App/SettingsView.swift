@@ -69,6 +69,7 @@ private struct DiscoverySettingsTab: View {
     @State private var autoLoad = false
     @State private var maxLiveAgentSessions = 5
     @State private var maxLiveWebViews = 8
+    @State private var idleSessionProtectionMinutes = SessionDefaults.idleProtectionMinutes
 
     private struct QueryRow: Identifiable, Equatable {
         let id = UUID()
@@ -80,7 +81,7 @@ private struct DiscoverySettingsTab: View {
         Form {
             Section("Auto load") {
                 Toggle("Automatically start a Claude review for every PR", isOn: $autoLoad)
-                Text("Reviews every PR at least once, up to the live session limit at a time. Items above the limit wait their turn and show a Queued badge; a finished review releases its slot to the next in line. Repos without a local clone are reviewed when first opened.")
+                Text("Reviews every PR at least once, up to the live session limit at a time. Items above the limit wait their turn and show a Queued badge. A queued review never takes a slot from a running agent — it starts when one comes free. Repos without a local clone are reviewed when first opened.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -112,6 +113,11 @@ private struct DiscoverySettingsTab: View {
                 }
                 Text("Each Claude session is a process of roughly 550 MB. Each GitHub page holds its own web content process. Least-recently-opened items are closed above these limits, and reopen where they left off. A session that is mid-turn is never closed.")
                     .font(.caption).foregroundStyle(.secondary)
+                Stepper(value: $idleSessionProtectionMinutes, in: 1...240, step: 5) {
+                    Text("Treat a quiet session as mid-turn for \(idleSessionProtectionMinutes) minutes")
+                }
+                Text("An agent inside a long tool call writes nothing, so silence is the only way to tell it apart from one that has been parked. Below this age a quiet session keeps its slot; above it the session limit may close it. Raise it if your reviews run long builds or test suites.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -126,6 +132,7 @@ private struct DiscoverySettingsTab: View {
             autoLoad = model.settings.autoLoad
             maxLiveAgentSessions = model.settings.maxLiveAgentSessions
             maxLiveWebViews = model.settings.maxLiveWebViews
+            idleSessionProtectionMinutes = model.settings.idleSessionProtectionMinutes
         }
         .onChange(of: reviewRows) { _, _ in commit() }
         .onChange(of: myPRRows) { _, _ in commit() }
@@ -137,6 +144,7 @@ private struct DiscoverySettingsTab: View {
         .onChange(of: autoLoad) { _, _ in commit() }
         .onChange(of: maxLiveAgentSessions) { _, _ in commit() }
         .onChange(of: maxLiveWebViews) { _, _ in commit() }
+        .onChange(of: idleSessionProtectionMinutes) { _, _ in commit() }
     }
 
     @ViewBuilder
@@ -190,6 +198,7 @@ private struct DiscoverySettingsTab: View {
         updated.autoLoad = autoLoad
         updated.maxLiveAgentSessions = maxLiveAgentSessions
         updated.maxLiveWebViews = maxLiveWebViews
+        updated.idleSessionProtectionMinutes = idleSessionProtectionMinutes
         Task { await model.updateSettings(updated) }
     }
 }
