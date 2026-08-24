@@ -13,7 +13,8 @@ public struct AgentStatusReader: Sendable {
         lastVerdictSnippet: String?,
         now: Date = Date(),
         lastEventWasTurnCompletion: Bool = false,
-        workflowPending: Bool = false
+        workflowPending: Bool = false,
+        limitMessage: String? = nil
     ) -> AgentStatus {
         switch processState {
         case .failedToLaunch(let reason):
@@ -25,6 +26,13 @@ public struct AgentStatusReader: Sendable {
         case .running:
             guard let lastEventAt else {
                 return .starting
+            }
+            // A limit stop settles the question before anything else: the agent is not
+            // thinking, and it is not waiting on the user either. It cannot resume until the
+            // allowance does, so this must not decay to .idle and must not read as .working
+            // because a workflow counter was left open.
+            if let limitMessage {
+                return .limited(since: lastEventAt, message: limitMessage)
             }
             // A background workflow (how /code-review runs a review) writes nothing to the
             // transcript for minutes at a time. Claude is working, not idle, and it is not

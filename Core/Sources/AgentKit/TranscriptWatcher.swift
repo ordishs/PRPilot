@@ -11,12 +11,22 @@ public struct TranscriptEvent: Sendable, Equatable {
     public let turnCompleted: Bool
     /// A `Workflow` launched from this session has not reported back yet. Claude Code only.
     public let workflowPending: Bool
+    /// The agent stopped because it ran out of allowance — see `LimitStop`. Nil on every
+    /// other line.
+    public let limitMessage: String?
 
-    public init(date: Date, snippet: String?, turnCompleted: Bool, workflowPending: Bool) {
+    public init(
+        date: Date,
+        snippet: String?,
+        turnCompleted: Bool,
+        workflowPending: Bool,
+        limitMessage: String? = nil
+    ) {
         self.date = date
         self.snippet = snippet
         self.turnCompleted = turnCompleted
         self.workflowPending = workflowPending
+        self.limitMessage = limitMessage
     }
 }
 

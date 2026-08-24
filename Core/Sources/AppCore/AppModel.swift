@@ -78,6 +78,10 @@ public final class AppModel {
     private var lastEventAt: [String: Date] = [:]
     private var lastVerdictSnippet: [String: String] = [:]
     private var lastEventWasTurnCompletion: [String: Bool] = [:]
+    /// The limit message from the newest transcript event, when that event was a limit stop.
+    private var limitMessageForSession: [String: String] = [:]
+    /// Sessions already notified about their current block, so one limit fires one alert.
+    private var notifiedLimitForSession: Set<String> = []
     private var workflowPendingForSession: [String: Bool] = [:]
     private var notifiedAwaitingForSession: Set<String> = []
     private var lastRefreshedAt: [String: Date] = [:]
@@ -745,7 +749,8 @@ public final class AppModel {
                     at: event.date,
                     snippet: event.snippet,
                     turnCompleted: event.turnCompleted,
-                    workflowPending: event.workflowPending
+                    workflowPending: event.workflowPending,
+                    limitMessage: event.limitMessage
                 )
             },
             onSessionFile: { [weak self] sessionID in
@@ -760,13 +765,21 @@ public final class AppModel {
         at date: Date,
         snippet: String?,
         turnCompleted: Bool = false,
-        workflowPending: Bool = false
+        workflowPending: Bool = false,
+        limitMessage: String? = nil
     ) {
         guard claudeSessions[reviewID] != nil else { return }
         let isNewer = lastEventAt[reviewID].map { $0 < date } ?? true
         if isNewer {
             lastEventAt[reviewID] = date
             lastEventWasTurnCompletion[reviewID] = turnCompleted
+            limitMessageForSession[reviewID] = limitMessage
+            // Any newer line proves the agent is running again, so the block is over and the
+            // next one deserves its own alert.
+            if limitMessage == nil {
+                notifiedLimitForSession.remove(reviewID)
+            }
+            Task { await self.recordAgentLimit(reviewID, message: limitMessage, at: date) }
         }
         workflowPendingForSession[reviewID] = workflowPending
         if let snippet, !snippet.isEmpty {
@@ -843,7 +856,8 @@ public final class AppModel {
             lastVerdictSnippet: lastVerdictSnippet[reviewID],
             now: now,
             lastEventWasTurnCompletion: lastEventWasTurnCompletion[reviewID] ?? false,
-            workflowPending: workflowPendingForSession[reviewID] ?? false
+            workflowPending: workflowPendingForSession[reviewID] ?? false,
+            limitMessage: limitMessageForSession[reviewID]
         )
         let oldStatus = claudeStatuses[reviewID]
         claudeStatuses[reviewID] = newStatus
@@ -853,6 +867,21 @@ public final class AppModel {
         if shouldFireReviewReady(old: oldStatus, new: newStatus, reviewID: reviewID) {
             notifiedAwaitingForSession.insert(reviewID)
             postReviewReadyNotification(for: reviewID, status: newStatus)
+        }
+        if case .limited(_, let message) = newStatus, !notifiedLimitForSession.contains(reviewID) {
+            notifiedLimitForSession.insert(reviewID)
+            postAgentLimitNotification(for: reviewID, message: message)
+        }
+    }
+
+    /// The agent stopped for want of allowance, and nothing else in the app can tell. Its
+    /// process stays alive and writes no error, so without an alert the work simply stops.
+    private func postAgentLimitNotification(for reviewID: String, message: String) {
+        guard let review = reviews.first(where: { $0.id == reviewID }) else { return }
+        let title = "Agent blocked · #\(review.displayNumber.map(String.init) ?? "?")"
+        let poster = notificationPoster
+        Task {
+            await poster.postReviewReady(reviewID: reviewID, title: title, body: message)
         }
     }
 
@@ -894,6 +923,10 @@ public final class AppModel {
         lastEventAt.removeValue(forKey: id)
         lastVerdictSnippet.removeValue(forKey: id)
         lastEventWasTurnCompletion.removeValue(forKey: id)
+        // Only the live tracking goes. The persisted limit badge is the point: it must
+        // outlive the session so the user still learns why the work stopped.
+        limitMessageForSession.removeValue(forKey: id)
+        notifiedLimitForSession.remove(id)
         workflowPendingForSession.removeValue(forKey: id)
         notifiedAwaitingForSession.remove(id)
     }
@@ -920,6 +953,10 @@ public final class AppModel {
         lastEventAt.removeValue(forKey: id)
         lastVerdictSnippet.removeValue(forKey: id)
         lastEventWasTurnCompletion.removeValue(forKey: id)
+        // Only the live tracking goes. The persisted limit badge is the point: it must
+        // outlive the session so the user still learns why the work stopped.
+        limitMessageForSession.removeValue(forKey: id)
+        notifiedLimitForSession.remove(id)
         workflowPendingForSession.removeValue(forKey: id)
         notifiedAwaitingForSession.remove(id)
     }
@@ -975,6 +1012,35 @@ public final class AppModel {
     /// stamp survives a session ending, so a reviewed item leaves the queue for good. An item
     /// that already spent its autoLoad turn leaves the queue too, whether or not it earned the
     /// stamp, so a session that ends without one is not started again and again.
+    /// Writes the limit through to the item, or clears it, so the badge survives an
+    /// eviction, a quit, and the cap reclaiming the slot.
+    func recordAgentLimit(_ id: String, message: String?, at date: Date) async {
+        guard var review = reviews.first(where: { $0.id == id }) else { return }
+        if let message {
+            guard review.agentLimitedAt != date || review.agentLimitMessage != message else { return }
+            review.agentLimitedAt = date
+            review.agentLimitMessage = message
+        } else {
+            guard review.agentLimitedAt != nil || review.agentLimitMessage != nil else { return }
+            review.agentLimitedAt = nil
+            review.agentLimitMessage = nil
+        }
+        do {
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    /// Dismisses the Limit badge by hand, for a block the user has already dealt with.
+    public func clearAgentLimit(for id: String) async {
+        limitMessageForSession.removeValue(forKey: id)
+        notifiedLimitForSession.remove(id)
+        await recordAgentLimit(id, message: nil, at: Date())
+        recomputeStatus(for: id)
+    }
+
     func recomputeReviewQueue() {
         guard settings.autoLoad else {
             queuedReviewIDs = []
@@ -1076,6 +1142,8 @@ public final class AppModel {
         lastEventAt.removeAll()
         lastVerdictSnippet.removeAll()
         lastEventWasTurnCompletion.removeAll()
+        limitMessageForSession.removeAll()
+        notifiedLimitForSession.removeAll()
         workflowPendingForSession.removeAll()
         notifiedAwaitingForSession.removeAll()
     }

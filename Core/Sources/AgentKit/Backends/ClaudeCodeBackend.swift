@@ -87,8 +87,33 @@ public struct ClaudeCodeBackend: AgentBackend {
             date: date,
             snippet: snippet,
             turnCompleted: turnCompleted,
-            workflowPending: state.pendingWorkflows > 0
+            workflowPending: state.pendingWorkflows > 0,
+            limitMessage: limitMessage(from: line, type: event.type)
         )
+    }
+
+    /// The message of a limit stop, or nil. Reads the same assistant text `extractSnippet`
+    /// uses, but keeps it whole: the badge shows the exact wording, including any reset time.
+    private func limitMessage(from data: Data, type: String?) -> String? {
+        guard type == "assistant" else { return nil }
+        struct LimitEvent: Decodable {
+            let message: MessageEnvelope?
+            struct MessageEnvelope: Decodable {
+                let stopReason: String?
+                let content: [ContentBlock]?
+                struct ContentBlock: Decodable {
+                    let type: String?
+                    let text: String?
+                }
+                enum CodingKeys: String, CodingKey {
+                    case stopReason = "stop_reason"
+                    case content
+                }
+            }
+        }
+        guard let event = try? JSONDecoder().decode(LimitEvent.self, from: data) else { return nil }
+        let text = event.message?.content?.first { $0.type == "text" }?.text
+        return LimitStop.message(stopReason: event.message?.stopReason, text: text)
     }
 
     /// Runs before a line is reported, so an end_turn on the same line as a workflow launch

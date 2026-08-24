@@ -315,3 +315,57 @@ private func evictions(
 
     #expect(dead.isEmpty)
 }
+
+// MARK: - Limit stops
+
+private let limitedMessage =
+    "You've hit your individual spend limit · run /usage-credits to ask your admin for a higher limit"
+
+private func limited(secondsAgo: TimeInterval) -> AgentStatus {
+    .limited(since: budgetNow.addingTimeInterval(-secondsAgo), message: limitedMessage)
+}
+
+@Test func aFreshLimitStopIsProtected() {
+    let c = candidate("blocked", minutesAgo: 90, status: limited(secondsAgo: 60))
+    #expect(SessionBudget.isProtected(c, now: budgetNow))
+}
+
+@Test func aLimitStopStopsBeingProtectedAfterTheWindow() {
+    let window = Double(SessionBudget.defaultLimitProtectionMinutes) * 60
+    let c = candidate("blocked", minutesAgo: 90, status: limited(secondsAgo: window + 1))
+    #expect(!SessionBudget.isProtected(c, now: budgetNow))
+}
+
+@Test func theCapCannotBeHeldForeverByBlockedSessions() {
+    // Every session is blocked and past its window, so the cap still reclaims the overflow.
+    let window = Double(SessionBudget.defaultLimitProtectionMinutes) * 60
+    let stale = limited(secondsAgo: window + 60)
+    let victims = evictions(
+        [
+            candidate("newest", minutesAgo: 1, status: stale),
+            candidate("middle", minutesAgo: 5, status: stale),
+            candidate("oldest", minutesAgo: 9, status: stale),
+        ],
+        cap: 1,
+        selectedID: nil
+    )
+    #expect(victims == ["oldest", "middle"])
+}
+
+@Test func aFreshlyBlockedSessionSurvivesTheCap() {
+    let victims = evictions(
+        [
+            candidate("newest", minutesAgo: 1, status: limited(secondsAgo: 30)),
+            candidate("oldest", minutesAgo: 9, status: limited(secondsAgo: 30)),
+        ],
+        cap: 1,
+        selectedID: nil
+    )
+    #expect(victims.isEmpty)
+}
+
+@Test func aBlockedSessionIsNotDead() {
+    // Its process is alive and holds the conversation, so reaping it would lose the pane.
+    let candidates = [candidate("blocked", minutesAgo: 1, status: limited(secondsAgo: 99999))]
+    #expect(SessionBudget.deadSessions(candidates: candidates).isEmpty)
+}

@@ -3956,3 +3956,121 @@ private func dirtyWorktreeModel(store: ReviewStore, ops: StubWorktreeOps, worktr
 
     #expect(model.worktreeLocalChanges[review.id] == nil)
 }
+
+// MARK: - Agent limit stops
+
+private let spendLimitMessage =
+    "You've hit your individual spend limit · run /usage-credits to ask your admin for a higher limit"
+
+@MainActor
+private func modelWithLiveSession(
+    poster: StubNotificationPoster = StubNotificationPoster()
+) async throws -> (AppModel, WorkItem) {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()
+    try await store.upsertItem(review)
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: poster,
+        statusReader: AgentStatusReader(idleThresholdSeconds: 0.1)
+    )
+    await model.load()
+    await model.ensureAgentSession(for: review)
+    return (model, review)
+}
+
+@Test @MainActor func aLimitStopShowsAsLimitedRatherThanIdle() async throws {
+    let (model, review) = try await modelWithLiveSession()
+    let at = Date()
+
+    model.handleTranscriptEvent(reviewID: review.id, at: at, snippet: nil, limitMessage: spendLimitMessage)
+
+    // Well past the idle threshold: a blocked agent must not decay into a quiet one.
+    model.recomputeStatus(for: review.id, now: at.addingTimeInterval(600))
+    #expect(model.claudeStatuses[review.id] == .limited(since: at, message: spendLimitMessage))
+}
+
+@Test @MainActor func aLimitStopIsPersistedOnTheItem() async throws {
+    let (model, review) = try await modelWithLiveSession()
+    let at = Date(timeIntervalSince1970: 1_700_000_000)
+
+    model.handleTranscriptEvent(reviewID: review.id, at: at, snippet: nil, limitMessage: spendLimitMessage)
+    try await Task.sleep(nanoseconds: 300_000_000)
+
+    let stored = model.reviews.first { $0.id == review.id }
+    #expect(stored?.agentLimitedAt == at)
+    #expect(stored?.agentLimitMessage == spendLimitMessage)
+}
+
+@Test @MainActor func theNextRealEventClearsThePersistedLimit() async throws {
+    let (model, review) = try await modelWithLiveSession()
+    let at = Date(timeIntervalSince1970: 1_700_000_000)
+
+    model.handleTranscriptEvent(reviewID: review.id, at: at, snippet: nil, limitMessage: spendLimitMessage)
+    try await Task.sleep(nanoseconds: 300_000_000)
+    #expect(model.reviews.first { $0.id == review.id }?.agentLimitedAt != nil)
+
+    model.handleTranscriptEvent(reviewID: review.id, at: at.addingTimeInterval(60), snippet: "back at it")
+    try await Task.sleep(nanoseconds: 300_000_000)
+
+    let stored = model.reviews.first { $0.id == review.id }
+    #expect(stored?.agentLimitedAt == nil)
+    #expect(stored?.agentLimitMessage == nil)
+    #expect(model.claudeStatuses[review.id] != .limited(since: at, message: spendLimitMessage))
+}
+
+@Test @MainActor func clearingTheLimitBadgeByHandRemovesIt() async throws {
+    let (model, review) = try await modelWithLiveSession()
+    let at = Date(timeIntervalSince1970: 1_700_000_000)
+
+    model.handleTranscriptEvent(reviewID: review.id, at: at, snippet: nil, limitMessage: spendLimitMessage)
+    try await Task.sleep(nanoseconds: 300_000_000)
+
+    await model.clearAgentLimit(for: review.id)
+
+    let stored = model.reviews.first { $0.id == review.id }
+    #expect(stored?.agentLimitedAt == nil)
+    #expect(stored?.agentLimitMessage == nil)
+}
+
+@Test @MainActor func aLimitStopNotifiesOnceAndCarriesTheMessage() async throws {
+    let poster = StubNotificationPoster()
+    let (model, review) = try await modelWithLiveSession(poster: poster)
+    let at = Date()
+
+    model.handleTranscriptEvent(reviewID: review.id, at: at, snippet: nil, limitMessage: spendLimitMessage)
+    model.recomputeStatus(for: review.id, now: at)
+    // A second recompute of the same block must not notify again.
+    model.recomputeStatus(for: review.id, now: at.addingTimeInterval(30))
+    try await Task.sleep(nanoseconds: 300_000_000)
+
+    let posted = await poster.posted
+    #expect(posted.count == 1)
+    #expect(posted.first?.reviewID == review.id)
+    #expect(posted.first?.body == spendLimitMessage)
+}
+
+@Test @MainActor func aFreshLimitAfterRecoveryNotifiesAgain() async throws {
+    let poster = StubNotificationPoster()
+    let (model, review) = try await modelWithLiveSession(poster: poster)
+    let at = Date()
+
+    model.handleTranscriptEvent(reviewID: review.id, at: at, snippet: nil, limitMessage: spendLimitMessage)
+    model.recomputeStatus(for: review.id, now: at)
+    model.handleTranscriptEvent(reviewID: review.id, at: at.addingTimeInterval(60), snippet: "working")
+    model.recomputeStatus(for: review.id, now: at.addingTimeInterval(60))
+    model.handleTranscriptEvent(
+        reviewID: review.id, at: at.addingTimeInterval(120), snippet: nil, limitMessage: spendLimitMessage
+    )
+    model.recomputeStatus(for: review.id, now: at.addingTimeInterval(120))
+    try await Task.sleep(nanoseconds: 300_000_000)
+
+    let posted = await poster.posted
+    #expect(posted.count == 2)
+}

@@ -302,3 +302,45 @@ private func sampleIssue() -> WorkItem {
     #expect(decoded.myLastReviewAt == Date(timeIntervalSince1970: 500))
     #expect(decoded.claudeLastCompletedAt == Date(timeIntervalSince1970: 900))
 }
+
+// MARK: - Agent limit stop
+
+private let storedLimitMessage =
+    "You've hit your individual spend limit · run /usage-credits to ask your admin for a higher limit"
+
+@Test func agentLimitFieldsDefaultToNil() {
+    let item = WorkItem(
+        title: "t", repoKey: "github.com/o/r", baseBranch: "main",
+        origin: .added, addedAt: Date(timeIntervalSince1970: 1)
+    )
+    #expect(item.agentLimitedAt == nil)
+    #expect(item.agentLimitMessage == nil)
+}
+
+@Test func agentLimitFieldsRoundTripThroughCodable() throws {
+    var item = WorkItem(
+        title: "t", repoKey: "github.com/o/r", baseBranch: "main",
+        origin: .added, addedAt: Date(timeIntervalSince1970: 1)
+    )
+    item.agentLimitedAt = Date(timeIntervalSince1970: 1_700_000_000)
+    item.agentLimitMessage = storedLimitMessage
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: JSONEncoder().encode(item))
+    #expect(decoded.agentLimitedAt == Date(timeIntervalSince1970: 1_700_000_000))
+    #expect(decoded.agentLimitMessage == storedLimitMessage)
+}
+
+@Test func anItemStoredBeforeLimitTrackingDecodesWithNoLimit() throws {
+    let json = """
+    {
+      "id": "abc",
+      "title": "t",
+      "repoKey": "github.com/o/r",
+      "baseBranch": "main",
+      "origin": "added",
+      "addedAt": 1
+    }
+    """
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: Data(json.utf8))
+    #expect(decoded.agentLimitedAt == nil)
+    #expect(decoded.agentLimitMessage == nil)
+}

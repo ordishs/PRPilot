@@ -472,6 +472,12 @@ struct ContentView: View {
                 }
                 .disabled(!model.hasUnseenAuthorUpdate(review))
             }
+            Button {
+                Task { await model.clearAgentLimit(for: review.id) }
+            } label: {
+                Label("Clear Limit Badge", systemImage: "creditcard.trianglebadge.exclamationmark")
+            }
+            .disabled(review.agentLimitedAt == nil)
             Divider()
             Button {
                 Task { await model.setReviewDisabled(!review.disabled, for: review.id) }
@@ -583,6 +589,15 @@ struct ContentView: View {
                             + "Clear it from the context menu."
                     )
                 }
+            }
+
+            if let message = review.agentLimitMessage {
+                StateBadge(
+                    text: "Limit",
+                    color: .pink,
+                    help: "\(agentName(for: review)) stopped: \(message). "
+                        + "Clear it from the context menu."
+                )
             }
 
             if let changes = model.worktreeLocalChanges[review.id], changes > 0 {
@@ -823,6 +838,8 @@ private struct StatusDot: View {
             return Color(red: 0.95, green: 0.61, blue: 0.07)
         case .idle:
             return .gray
+        case .limited:
+            return .pink
         case .ready(let code):
             return code == 0 ? .green : .orange
         case .failed:
@@ -853,6 +870,9 @@ private func statusTooltip(_ status: AgentStatus?) -> String {
             return "\(base) · \(snippet)"
         }
         return base
+    case .limited(let since, let message):
+        let mins = max(Int(Date().timeIntervalSince(since)) / 60, 0)
+        return mins > 0 ? "Blocked \(mins)m · \(message)" : "Blocked · \(message)"
     case .ready(let code):
         return code == 0 ? "Review ready" : "Exited · code \(code)"
     case .failed(let reason):

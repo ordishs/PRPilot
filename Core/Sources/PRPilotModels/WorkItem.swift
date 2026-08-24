@@ -56,6 +56,13 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
     /// pane reports how long the work has been going rather than when the app last
     /// reattached. Clearing the session clears it.
     public var agentRunStartedAt: Date?
+    /// When the agent last stopped because it ran out of allowance. Persisted so the badge
+    /// survives an eviction, a quit, and the cap reclaiming the slot — the moments when the
+    /// live status is gone but the user still needs to know why the work stopped.
+    public var agentLimitedAt: Date?
+    /// What the agent said when it hit the limit, verbatim, so the tooltip can tell a spend
+    /// limit apart from a five-hour one with a reset time.
+    public var agentLimitMessage: String?
 
     enum CodingKeys: String, CodingKey {
         case id, title, repoKey, baseBranch, headBranch, worktreePath, prRef, prState, issueRef
@@ -64,6 +71,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         case label, lastPane, authorUpdateSeenAt
         case myReviewState, myLastReviewAt, claudeLastCompletedAt, waitingSeenAt
         case agentRunStartedAt
+        case agentLimitedAt, agentLimitMessage
         case piSessionID, agent
         /// Renamed in Swift when the session layer stopped being Claude-specific. The stored
         /// key must not change, or existing items lose their configured flags.
@@ -186,6 +194,8 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.claudeLastCompletedAt = try c.decodeIfPresent(Date.self, forKey: .claudeLastCompletedAt)
         self.waitingSeenAt = try c.decodeIfPresent(Date.self, forKey: .waitingSeenAt)
         self.agentRunStartedAt = try c.decodeIfPresent(Date.self, forKey: .agentRunStartedAt)
+        self.agentLimitedAt = try c.decodeIfPresent(Date.self, forKey: .agentLimitedAt)
+        self.agentLimitMessage = try c.decodeIfPresent(String.self, forKey: .agentLimitMessage)
 
         if c.contains(.repoKey) {
             self.id = try c.decode(String.self, forKey: .id)

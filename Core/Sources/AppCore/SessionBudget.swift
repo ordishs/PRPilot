@@ -22,6 +22,11 @@ public enum SessionBudget {
     /// user. That is exactly backwards.
     public static let defaultIdleProtectionMinutes = SessionDefaults.idleProtectionMinutes
 
+    /// How long a session blocked on a spend or usage limit is kept before the cap may take
+    /// it. Bounded for the same reason the idle window is: a blocked agent does no work, so
+    /// permanent protection would let a few of them hold every slot.
+    public static let defaultLimitProtectionMinutes = SessionDefaults.limitProtectionMinutes
+
     public struct Candidate: Sendable, Equatable {
         public let id: String
         public let lastOpenedAt: Date
@@ -70,7 +75,9 @@ public enum SessionBudget {
         candidates.filter { candidate in
             switch candidate.status {
             case .ready, .failed: return true
-            case .working, .starting, .idle, .awaitingInput: return false
+            // A blocked agent's process is alive and still holds the conversation, so
+            // reaping it would throw away the pane the user needs to read.
+            case .working, .starting, .idle, .awaitingInput, .limited: return false
             }
         }.map(\.id)
     }
@@ -96,7 +103,8 @@ public enum SessionBudget {
     public static func isProtected(
         _ candidate: Candidate,
         now: Date,
-        idleProtectionSeconds: TimeInterval = Double(defaultIdleProtectionMinutes) * 60
+        idleProtectionSeconds: TimeInterval = Double(defaultIdleProtectionMinutes) * 60,
+        limitProtectionSeconds: TimeInterval = Double(defaultLimitProtectionMinutes) * 60
     ) -> Bool {
         switch candidate.status {
         case .working:
@@ -106,6 +114,11 @@ public enum SessionBudget {
         case .idle(let since, _):
             guard since >= candidate.startedAt else { return false }
             return now.timeIntervalSince(since) <= idleProtectionSeconds
+        case .limited(let since, _):
+            // Unlike .idle this needs no `since >= startedAt` check. A replayed limit line
+            // describes the same block the user still has to clear, and the window bounds it
+            // either way.
+            return now.timeIntervalSince(since) <= limitProtectionSeconds
         case .awaitingInput, .ready, .failed:
             return false
         }
