@@ -20,6 +20,21 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
     /// item between agents resumes each conversation instead of destroying one.
     public var claudeSessionID: String?
     public var piSessionID: String?
+    /// Most recent allowance reading from the agent driving this item.
+    ///
+    /// Persisted for the same reason as the limit badge: eviction, quit and the cap reclaiming
+    /// a slot are exactly the moments the figure is still worth knowing. Usage is per account,
+    /// so several items running the same agent will each hold their own copy of the same
+    /// number — whichever read it last is the freshest.
+    public var agentUsage: AgentUsage?
+    /// Handover note waiting to be read by the next agent this item launches.
+    ///
+    /// Set when PR Pilot moves the item off a blocked agent, and cleared by the launch that
+    /// sends it. Persisted, because the app can be quit between the block and the relaunch.
+    public var pendingHandoverPath: String?
+    /// codex's session for this item. codex names its own sessions, so this is written from
+    /// the transcript the watcher attaches to rather than chosen at launch.
+    public var codexSessionID: String?
     /// Agent this item uses. Nil means follow `Settings.defaultAgent`, so changing the global
     /// default moves every item that has made no choice of its own.
     public var agent: AgentKind?
@@ -72,7 +87,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         case myReviewState, myLastReviewAt, claudeLastCompletedAt, waitingSeenAt
         case agentRunStartedAt
         case agentLimitedAt, agentLimitMessage
-        case piSessionID, agent
+        case piSessionID, codexSessionID, agent, pendingHandoverPath, agentUsage
         /// Renamed in Swift when the session layer stopped being Claude-specific. The stored
         /// key must not change, or existing items lose their configured flags.
         case agentFlags = "claudeFlags"
@@ -89,6 +104,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         switch kind {
         case .claudeCode: return claudeSessionID
         case .pi: return piSessionID
+        case .codex: return codexSessionID
         }
     }
 
@@ -96,6 +112,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         switch kind {
         case .claudeCode: claudeSessionID = id
         case .pi: piSessionID = id
+        case .codex: codexSessionID = id
         }
     }
 
@@ -119,6 +136,9 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         agentFlags: [String]? = nil,
         claudeSessionID: String? = nil,
         piSessionID: String? = nil,
+        codexSessionID: String? = nil,
+        pendingHandoverPath: String? = nil,
+        agentUsage: AgentUsage? = nil,
         agent: AgentKind? = nil,
         autoReview: Bool = false,
         addedAt: Date,
@@ -149,6 +169,9 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.agentFlags = agentFlags
         self.claudeSessionID = claudeSessionID
         self.piSessionID = piSessionID
+        self.codexSessionID = codexSessionID
+        self.pendingHandoverPath = pendingHandoverPath
+        self.agentUsage = agentUsage
         self.agent = agent
         self.autoReview = autoReview
         self.addedAt = addedAt
@@ -178,6 +201,9 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.agentFlags = try c.decodeIfPresent([String].self, forKey: .agentFlags)
         self.claudeSessionID = try c.decodeIfPresent(String.self, forKey: .claudeSessionID)
         self.piSessionID = try c.decodeIfPresent(String.self, forKey: .piSessionID)
+        self.codexSessionID = try c.decodeIfPresent(String.self, forKey: .codexSessionID)
+        self.pendingHandoverPath = try c.decodeIfPresent(String.self, forKey: .pendingHandoverPath)
+        self.agentUsage = try c.decodeIfPresent(AgentUsage.self, forKey: .agentUsage)
         self.agent = try c.decodeIfPresent(AgentKind.self, forKey: .agent)
         self.addedAt = try c.decode(Date.self, forKey: .addedAt)
         self.lastOpenedAt = try c.decodeIfPresent(Date.self, forKey: .lastOpenedAt)

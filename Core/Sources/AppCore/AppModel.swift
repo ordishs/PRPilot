@@ -80,6 +80,12 @@ public final class AppModel {
     private var lastEventWasTurnCompletion: [String: Bool] = [:]
     /// The limit message from the newest transcript event, when that event was a limit stop.
     private var limitMessageForSession: [String: String] = [:]
+    /// Tail of the serialised item-edit chain. See `enqueueItemEdit`.
+    private var pendingItemEdits: Task<Void, Never>?
+    /// Latest allowance reading per session, ahead of what is persisted on the item.
+    private var agentUsage: [String: AgentUsage] = [:]
+    /// Sessions already warned about the current window, so one crossing fires one alert.
+    private var warnedUsageForSession: Set<String> = []
     /// Sessions already notified about their current block, so one limit fires one alert.
     private var notifiedLimitForSession: Set<String> = []
     private var workflowPendingForSession: [String: Bool] = [:]
@@ -587,6 +593,16 @@ public final class AppModel {
             for the node version your shell selects by default. Otherwise paste the path into
             Settings ▸ Claude ▸ Agent binaries ▸ \(name).
             """
+        case .codex:
+            // codex is a node script under a version manager, like pi, so the same reasoning
+            // applies: an interactive login shell already read .zshrc.
+            return """
+            Couldn't find the `\(name)` command in your shell.
+
+            Open a terminal and run `which \(name)`. If that prints nothing, codex is not
+            installed for the node version your shell selects by default. Otherwise paste the
+            path into Settings ▸ Claude ▸ Agent binaries ▸ \(name).
+            """
         }
     }
 
@@ -610,6 +626,7 @@ public final class AppModel {
         switch kind {
         case .claudeCode: candidates = [settings.claudePath, claudePath]
         case .pi: candidates = [settings.piPath]
+        case .codex: candidates = [settings.codexPath]
         }
         for candidate in candidates {
             guard let candidate, !candidate.isEmpty, candidate != name else { continue }
@@ -699,17 +716,30 @@ public final class AppModel {
             resume = false
             appendPrepLog("Starting fresh session", for: review.id)
         }
-        updated.setSessionID(sessionID, for: kind)
+        // A backend that cannot be told its session ID has not been told this one, so storing
+        // it would name a conversation that does not exist — and the next open would find no
+        // transcript for it and start fresh again, for ever. codex names its own session, and
+        // `SessionAdoption` writes the real ID through as soon as the watcher attaches.
+        // A resume is different: that ID came from the transcript, so it is real.
+        if resume || AgentBackends.backend(for: kind).acceptsAssignedSessionID {
+            updated.setSessionID(sessionID, for: kind)
+        } else {
+            // Clearing rather than leaving the old value behind. A stored ID whose transcript
+            // has gone is dead: it cannot be resumed, and leaving it would have the item
+            // claim a conversation that no longer exists until adoption happens to replace
+            // it.
+            updated.setSessionID(nil, for: kind)
+        }
         // A fresh launch is the start of a new review or fix. A resume continues one that is
         // already timed, so it leaves the original moment alone.
         if !resume {
             updated.agentRunStartedAt = Date()
         }
 
-        if updated != review {
-            try? await store.upsertItem(updated)
-            reviews = await store.allItems()
-        }
+        // The prompt is built from `updated`, so the note is only cleared after the spec below
+        // has been given it. A resume sends no prompt at all, so the note stays pending for
+        // whichever fresh launch comes next.
+        let handoverToClear = resume ? nil : updated.pendingHandoverPath
         let spec = AgentLaunchBuilder.build(
             settings: settings,
             review: updated,
@@ -719,6 +749,14 @@ public final class AppModel {
             sessionID: sessionID,
             resume: resume
         )
+        if handoverToClear != nil {
+            updated.pendingHandoverPath = nil
+            appendPrepLog("Handover note passed to \(kind.displayName)", for: review.id)
+        }
+        if updated != review {
+            try? await store.upsertItem(updated)
+            reviews = await store.allItems()
+        }
         let session = AgentSession(spec: spec)
         claudeSessions[review.id] = session
         claudePaneState[review.id] = .sessionLive
@@ -739,8 +777,10 @@ public final class AppModel {
 
     private func attachTranscriptWatcher(reviewID: String, worktreePath: String, kind: AgentKind) {
         if transcriptWatchers[reviewID] != nil { return }
-        let dir = AgentTranscriptPath.directoryURL(for: kind, worktreePath: worktreePath)
-        let watcher = TranscriptWatcher(transcriptDir: dir, kind: kind)
+        let dirs = AgentTranscriptPath.directoryURLs(for: kind, worktreePath: worktreePath)
+        // The worktree is handed over so a backend that shares one directory across projects
+        // — codex — tails this item's session rather than the newest file any project wrote.
+        let watcher = TranscriptWatcher(transcriptDirs: dirs, kind: kind, worktreePath: worktreePath)
         watcher.start(
             onEvent: { [weak self] event in
                 guard let self else { return }
@@ -750,7 +790,8 @@ public final class AppModel {
                     snippet: event.snippet,
                     turnCompleted: event.turnCompleted,
                     workflowPending: event.workflowPending,
-                    limitMessage: event.limitMessage
+                    limitMessage: event.limitMessage,
+                    usage: event.usage
                 )
             },
             onSessionFile: { [weak self] sessionID in
@@ -766,7 +807,8 @@ public final class AppModel {
         snippet: String?,
         turnCompleted: Bool = false,
         workflowPending: Bool = false,
-        limitMessage: String? = nil
+        limitMessage: String? = nil,
+        usage: AgentUsage? = nil
     ) {
         guard claudeSessions[reviewID] != nil else { return }
         let isNewer = lastEventAt[reviewID].map { $0 < date } ?? true
@@ -779,7 +821,10 @@ public final class AppModel {
             if limitMessage == nil {
                 notifiedLimitForSession.remove(reviewID)
             }
-            Task { await self.recordAgentLimit(reviewID, message: limitMessage, at: date) }
+            enqueueItemEdit { await self.recordAgentLimit(reviewID, message: limitMessage, at: date) }
+        }
+        if let usage {
+            recordAgentUsage(usage, for: reviewID)
         }
         workflowPendingForSession[reviewID] = workflowPending
         if let snippet, !snippet.isEmpty {
@@ -789,7 +834,7 @@ public final class AppModel {
         // merely that the session went idle, which also happens when a review is
         // interrupted mid-task and later resumed.
         if turnCompleted {
-            Task { await self.markClaudeTurnCompleted(reviewID) }
+            enqueueItemEdit { await self.markClaudeTurnCompleted(reviewID) }
         }
         adoptWatchedSessionIfMoved(reviewID: reviewID, eventDate: date)
         recomputeStatus(for: reviewID, now: Date())
@@ -825,7 +870,39 @@ public final class AppModel {
             transcriptDirectoryIsShared: shared
         ) else { return }
 
-        Task { await self.persistAdoptedSession(adopted, kind: kind, for: reviewID) }
+        enqueueItemEdit { await self.persistAdoptedSession(adopted, kind: kind, for: reviewID) }
+    }
+
+    /// Runs one item edit after every edit already queued.
+    ///
+    /// A single transcript line can start four separate writes to the same item: the limit
+    /// badge, the turn-completion stamps, an adopted session ID and the usage reading. Each one
+    /// reads the item, changes its own field and upserts the whole record, so two running
+    /// concurrently means the later write puts the earlier one's field back as it was. Which
+    /// field is lost depends on scheduling, so the symptom is a badge or a stamp that
+    /// intermittently fails to stick.
+    ///
+    /// Re-reading inside each task narrows the window but does not close it: both can still
+    /// read before either writes. Chaining them closes it — every edit sees the previous one's
+    /// result.
+    ///
+    /// Ordering matters as much as atomicity. The events arrive in transcript order, and a
+    /// limit cleared by a later line must not be re-applied by an earlier line's write landing
+    /// second.
+    func enqueueItemEdit(_ edit: @escaping @MainActor @Sendable () async -> Void) {
+        let previous = pendingItemEdits
+        pendingItemEdits = Task { @MainActor in
+            await previous?.value
+            await edit()
+        }
+    }
+
+    /// Waits for every queued item edit to finish.
+    ///
+    /// Tests need this: the alternative is sleeping and hoping, which is exactly the race the
+    /// chain exists to remove.
+    public func waitForPendingItemEdits() async {
+        await pendingItemEdits?.value
     }
 
     /// Re-reads the item inside the task rather than persisting the copy the caller held.
@@ -871,6 +948,13 @@ public final class AppModel {
         if case .limited(_, let message) = newStatus, !notifiedLimitForSession.contains(reviewID) {
             notifiedLimitForSession.insert(reviewID)
             postAgentLimitNotification(for: reviewID, message: message)
+            // Automatic failover fires once per block, off the same guard as the notification,
+            // so a status recomputed every second cannot switch the item repeatedly.
+            if settings.agentFailover == .automatic,
+               let review = reviews.first(where: { $0.id == reviewID }),
+               settings.failoverAgent != review.effectiveAgent(default: settings.defaultAgent) {
+                Task { await self.handOverToFailoverAgent(for: reviewID) }
+            }
         }
     }
 
@@ -884,6 +968,84 @@ public final class AppModel {
             await poster.postReviewReady(reviewID: reviewID, title: title, body: message)
         }
     }
+
+    // MARK: - Usage
+
+    /// Stores the latest allowance reading and warns the first time it crosses the threshold.
+    ///
+    /// Every codex turn reports usage, so this runs constantly. Only a reading that actually
+    /// moves the displayed figure is written through, because a percentage that has not
+    /// changed to a whole number is not worth a store write per turn.
+    func recordAgentUsage(_ usage: AgentUsage, for reviewID: String) {
+        let previous = agentUsage[reviewID]
+        agentUsage[reviewID] = usage
+        let threshold = settings.usageWarningPercent
+        // Fires on the crossing, not on the state. Without the previous reading a session
+        // sitting at 95% would alert on every turn it took.
+        let crossed = usage.hasReached(threshold) && !(previous?.hasReached(threshold) ?? false)
+        if crossed, !warnedUsageForSession.contains(reviewID) {
+            warnedUsageForSession.insert(reviewID)
+            postUsageWarning(for: reviewID, usage: usage)
+        }
+        // A window that has reset earns a fresh warning.
+        if !usage.hasReached(threshold) {
+            warnedUsageForSession.remove(reviewID)
+        }
+        if previous?.displayPercent != usage.displayPercent || previous?.resetsAt != usage.resetsAt {
+            enqueueItemEdit { await self.persistAgentUsage(usage, for: reviewID) }
+        }
+    }
+
+    private func persistAgentUsage(_ usage: AgentUsage, for reviewID: String) async {
+        guard var review = reviews.first(where: { $0.id == reviewID }) else { return }
+        guard review.agentUsage != usage else { return }
+        review.agentUsage = usage
+        do {
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    /// The reading to show for an item, or nil when there is none worth showing.
+    ///
+    /// A stale figure is worse than none: it invites the user to hand work over on the strength
+    /// of a number whose window has since reset.
+    public func usageToShow(for review: WorkItem, now: Date = Date()) -> AgentUsage? {
+        let usage = agentUsage[review.id] ?? review.agentUsage
+        guard let usage, !usage.isStale(now: now) else { return nil }
+        return usage
+    }
+
+    /// Warns while the agent is still working, which is the whole point — a limit stop is only
+    /// discovered after the work has already stopped.
+    private func postUsageWarning(for reviewID: String, usage: AgentUsage) {
+        guard let review = reviews.first(where: { $0.id == reviewID }) else { return }
+        let title = "\(usage.agent.displayName) at \(usage.displayPercent)% · #\(review.displayNumber.map(String.init) ?? "?")"
+        var body = "\(usage.displayPercent)% of the"
+        if let window = usage.windowDescription {
+            body += " \(window)"
+        }
+        body += " allowance is spent."
+        if let resetsAt = usage.resetsAt {
+            body += " It resets \(Self.resetDescription.string(from: resetsAt))."
+        }
+        if settings.failoverAgent != review.effectiveAgent(default: settings.defaultAgent) {
+            body += " Hand the item to \(settings.failoverAgent.displayName) before it stops."
+        }
+        let poster = notificationPoster
+        Task {
+            await poster.postReviewReady(reviewID: reviewID, title: title, body: body)
+        }
+    }
+
+    private static let resetDescription: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter
+    }()
 
     private func shouldFireReviewReady(old: AgentStatus?, new: AgentStatus, reviewID: String) -> Bool {
         guard !notifiedAwaitingForSession.contains(reviewID) else { return false }
@@ -924,8 +1086,10 @@ public final class AppModel {
         lastVerdictSnippet.removeValue(forKey: id)
         lastEventWasTurnCompletion.removeValue(forKey: id)
         // Only the live tracking goes. The persisted limit badge is the point: it must
-        // outlive the session so the user still learns why the work stopped.
+        // outlive the session so the user still learns why the work stopped. The persisted
+        // usage reading survives for the same reason.
         limitMessageForSession.removeValue(forKey: id)
+        agentUsage.removeValue(forKey: id)
         notifiedLimitForSession.remove(id)
         workflowPendingForSession.removeValue(forKey: id)
         notifiedAwaitingForSession.remove(id)
@@ -954,8 +1118,10 @@ public final class AppModel {
         lastVerdictSnippet.removeValue(forKey: id)
         lastEventWasTurnCompletion.removeValue(forKey: id)
         // Only the live tracking goes. The persisted limit badge is the point: it must
-        // outlive the session so the user still learns why the work stopped.
+        // outlive the session so the user still learns why the work stopped. The persisted
+        // usage reading survives for the same reason.
         limitMessageForSession.removeValue(forKey: id)
+        agentUsage.removeValue(forKey: id)
         notifiedLimitForSession.remove(id)
         workflowPendingForSession.removeValue(forKey: id)
         notifiedAwaitingForSession.remove(id)
@@ -1143,6 +1309,8 @@ public final class AppModel {
         lastVerdictSnippet.removeAll()
         lastEventWasTurnCompletion.removeAll()
         limitMessageForSession.removeAll()
+        agentUsage.removeAll()
+        warnedUsageForSession.removeAll()
         notifiedLimitForSession.removeAll()
         workflowPendingForSession.removeAll()
         notifiedAwaitingForSession.removeAll()
@@ -1308,6 +1476,108 @@ public final class AppModel {
         }
         guard let refreshed = reviews.first(where: { $0.id == id }) else { return }
         await ensureAgentSession(for: refreshed)
+    }
+
+    // MARK: - Failover
+
+    /// Whether this item can be handed to another agent right now.
+    ///
+    /// A limit is the only reason to offer it: any other stop is either the agent working or
+    /// the agent waiting for the user, and neither wants a different agent. The target must
+    /// also differ from the blocked agent — one account cannot rescue itself.
+    public func canHandOver(_ review: WorkItem) -> Bool {
+        guard settings.failoverAgent != review.effectiveAgent(default: settings.defaultAgent) else {
+            return false
+        }
+        if case .limited = claudeStatuses[review.id] { return true }
+        return review.agentLimitMessage != nil
+    }
+
+    /// Moves a blocked item to the failover agent, leaving a note behind for it to read.
+    ///
+    /// The note is rendered by PR Pilot, not by the blocked agent. That is the point: asking a
+    /// blocked agent to summarise its own work costs exactly the allowance it has run out of.
+    /// PR Pilot already tails the transcript, so it can write the note with no model call.
+    ///
+    /// The target starts a fresh session rather than resuming its own older conversation for
+    /// this item. A resume sends no prompt, so the note would never be read — and an unrelated
+    /// earlier thread is the wrong place to continue this work anyway. The old transcripts stay
+    /// on disk untouched.
+    @discardableResult
+    public func handOverToFailoverAgent(for id: String) async -> Bool {
+        guard var review = reviews.first(where: { $0.id == id }) else { return false }
+        let from = review.effectiveAgent(default: settings.defaultAgent)
+        let to = settings.failoverAgent
+        guard from != to else { return false }
+        guard let worktreePath = review.worktreePath else { return false }
+
+        let reason = review.agentLimitMessage ?? limitMessage(forSession: id)
+        let notePath = writeHandoverNote(
+            for: review, from: from, to: to, reason: reason, worktreePath: worktreePath
+        )
+
+        terminateAgentSession(for: id)
+        review.agent = to
+        review.pendingHandoverPath = notePath
+        // The badge described the agent that is no longer running this item. Leaving it would
+        // have the new session look blocked from its first frame.
+        review.agentLimitedAt = nil
+        review.agentLimitMessage = nil
+        do {
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
+        } catch {
+            errorMessage = String(describing: error)
+            return false
+        }
+        notifiedLimitForSession.remove(id)
+        limitMessageForSession.removeValue(forKey: id)
+        guard let refreshed = reviews.first(where: { $0.id == id }) else { return false }
+        await ensureAgentSession(for: refreshed, forceFresh: true)
+        return true
+    }
+
+    /// Writes the note into the worktree and returns its path, or nil when it cannot be written.
+    ///
+    /// A failure here does not stop the handover. The switch is still the right thing to do —
+    /// the user simply loses the summary, and the new agent starts from the launch prompt.
+    private func writeHandoverNote(
+        for review: WorkItem,
+        from: AgentKind,
+        to: AgentKind,
+        reason: String?,
+        worktreePath: String
+    ) -> String? {
+        let transcript = HandoverNote.transcriptURL(
+            for: from,
+            worktreePath: worktreePath,
+            sessionID: review.sessionID(for: from)
+        )
+        let entries = transcript.map { HandoverNote.entries(inTranscriptAt: $0, kind: from) } ?? []
+        let note = HandoverNote.render(
+            item: review,
+            from: from,
+            to: to,
+            reason: reason,
+            entries: entries,
+            transcriptPath: transcript?.path,
+            now: Date()
+        )
+        let url = URL(fileURLWithPath: worktreePath).appendingPathComponent(HandoverNote.fileName)
+        do {
+            try note.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            appendPrepLog("Could not write the handover note: \(error)", for: review.id)
+            return nil
+        }
+        appendPrepLog("Wrote \(HandoverNote.fileName) for \(to.displayName)", for: review.id)
+        return url.path
+    }
+
+    /// The live limit message for a session, for the case where the badge has not been
+    /// persisted yet.
+    private func limitMessage(forSession id: String) -> String? {
+        limitMessageForSession[id]
     }
 
     public func clearAgentSession(for id: String) async {

@@ -121,3 +121,95 @@ private func decodeItem(_ json: String) throws -> WorkItem {
     #expect(decoded.piPath == nil)
     #expect(decoded.piReviewPromptTemplate == Settings.defaultPiReviewPromptTemplate)
 }
+
+// MARK: - codex and failover settings
+
+@Test func codexSettingsStartEmptyAndFailoverDefaultsToManual() {
+    let s = Settings.default
+    #expect(s.codexPath == nil)
+    #expect(s.codexLaunchArgs.isEmpty)
+    #expect(s.codexEnv.isEmpty)
+    #expect(s.codexReviewPromptTemplate == "Review the pull request at {url}.")
+    #expect(s.codexIssuePromptTemplate == "Start work on issue {number}.")
+    // Manual by default: a switch hands a half-finished worktree to an agent with a different
+    // sandbox and approval model, so it should be a deliberate act until the user says
+    // otherwise.
+    #expect(s.agentFailover == .manual)
+    #expect(s.failoverAgent == .codex)
+}
+
+@Test func settingsWrittenBeforeCodexSupportDecodeWithTheNewDefaults() throws {
+    let json = """
+    {
+      "managedRoot": "/tmp",
+      "reviewRequestQueries": [],
+      "myPRQueries": [],
+      "pollIntervalSeconds": 120,
+      "claudeLaunchArgs": "",
+      "notificationsEnabled": true,
+      "diffMode": "unified",
+      "diffIgnoreWhitespace": false,
+      "defaultAgent": "pi",
+      "piPath": "/opt/node/bin/pi"
+    }
+    """
+    let decoded = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
+    #expect(decoded.codexPath == nil)
+    #expect(decoded.codexReviewPromptTemplate == Settings.defaultCodexReviewPromptTemplate)
+    #expect(decoded.agentFailover == .manual)
+    #expect(decoded.failoverAgent == .codex)
+    // The settings that were already there are untouched.
+    #expect(decoded.defaultAgent == .pi)
+    #expect(decoded.piPath == "/opt/node/bin/pi")
+}
+
+@Test func failoverSettingsRoundTrip() throws {
+    var s = Settings.default
+    s.agentFailover = .automatic
+    s.failoverAgent = .pi
+    s.codexPath = "/opt/node/bin/codex"
+    let decoded = try JSONDecoder().decode(Settings.self, from: try JSONEncoder().encode(s))
+    #expect(decoded.agentFailover == .automatic)
+    #expect(decoded.failoverAgent == .pi)
+    #expect(decoded.codexPath == "/opt/node/bin/codex")
+}
+
+@Test func theUsageWarningThresholdDefaultsAndMigrates() throws {
+    #expect(Settings.default.usageWarningPercent == 90)
+
+    let json = """
+    {
+      "managedRoot": "/tmp",
+      "reviewRequestQueries": [],
+      "myPRQueries": [],
+      "pollIntervalSeconds": 120,
+      "claudeLaunchArgs": "",
+      "notificationsEnabled": true,
+      "diffMode": "unified",
+      "diffIgnoreWhitespace": false
+    }
+    """
+    let decoded = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
+    #expect(decoded.usageWarningPercent == SessionDefaults.usageWarningPercent)
+
+    var edited = Settings.default
+    edited.usageWarningPercent = 75
+    let roundTripped = try JSONDecoder().decode(Settings.self, from: try JSONEncoder().encode(edited))
+    #expect(roundTripped.usageWarningPercent == 75)
+}
+
+@Test func anItemStoredBeforeTheGaugeHasNoUsage() throws {
+    let json = """
+    {
+      "id": "X", "title": "t", "repoKey": "github.com/o/r",
+      "baseBranch": "main", "origin": "added", "autoReview": false,
+      "addedAt": "2023-11-14T22:13:20Z", "disabled": false, "viewedFiles": [], "approvedByMe": false,
+      "codexSessionID": "01a03df8-9e0c-7672-908a-546665225b9b"
+    }
+    """
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let decoded = try decoder.decode(WorkItem.self, from: Data(json.utf8))
+    #expect(decoded.agentUsage == nil)
+    #expect(decoded.codexSessionID == "01a03df8-9e0c-7672-908a-546665225b9b")
+}

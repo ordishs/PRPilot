@@ -14,4 +14,11 @@ public enum SessionDefaults {
     /// a blocked agent can do no work, so protecting it forever would let a handful of them
     /// hold every slot and starve the drain queue.
     public static let limitProtectionMinutes = 30
+
+    /// Percentage of an agent's allowance at which PR Pilot warns.
+    ///
+    /// 90 leaves a real margin: on a weekly window that is most of a day's work, which is
+    /// enough to finish the turn in hand, hand the item over, or raise the limit. Lower and
+    /// the warning becomes noise; higher and it arrives too late to act on.
+    public static let usageWarningPercent = 90
 }

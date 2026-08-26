@@ -97,6 +97,24 @@ private actor StubNotificationPoster: NotificationPosting {
     func postReviewReady(reviewID: String, title: String, body: String) async {
         posted.append((reviewID: reviewID, title: title, body: body))
     }
+
+    /// Waits until at least `count` notifications have arrived, or the deadline passes.
+    ///
+    /// A notification is posted from its own task, so a fixed sleep either wastes time or
+    /// flakes under load. Polling asserts the same thing without guessing how long it takes.
+    /// It deliberately does not fail on timeout: the caller's own expectation reports what it
+    /// actually saw.
+    func waitForPosts(atLeast count: Int, timeout: TimeInterval = 5) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while posted.count < count, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    /// Waits out a further quiet period, for a test asserting that nothing *more* arrives.
+    func settle(seconds: TimeInterval = 0.4) async {
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+    }
 }
 
 private struct StubWorktreeProvider: WorktreeProviding {
@@ -4001,7 +4019,7 @@ private func modelWithLiveSession(
     let at = Date(timeIntervalSince1970: 1_700_000_000)
 
     model.handleTranscriptEvent(reviewID: review.id, at: at, snippet: nil, limitMessage: spendLimitMessage)
-    try await Task.sleep(nanoseconds: 300_000_000)
+    await model.waitForPendingItemEdits()
 
     let stored = model.reviews.first { $0.id == review.id }
     #expect(stored?.agentLimitedAt == at)
@@ -4013,11 +4031,11 @@ private func modelWithLiveSession(
     let at = Date(timeIntervalSince1970: 1_700_000_000)
 
     model.handleTranscriptEvent(reviewID: review.id, at: at, snippet: nil, limitMessage: spendLimitMessage)
-    try await Task.sleep(nanoseconds: 300_000_000)
+    await model.waitForPendingItemEdits()
     #expect(model.reviews.first { $0.id == review.id }?.agentLimitedAt != nil)
 
     model.handleTranscriptEvent(reviewID: review.id, at: at.addingTimeInterval(60), snippet: "back at it")
-    try await Task.sleep(nanoseconds: 300_000_000)
+    await model.waitForPendingItemEdits()
 
     let stored = model.reviews.first { $0.id == review.id }
     #expect(stored?.agentLimitedAt == nil)
@@ -4030,7 +4048,7 @@ private func modelWithLiveSession(
     let at = Date(timeIntervalSince1970: 1_700_000_000)
 
     model.handleTranscriptEvent(reviewID: review.id, at: at, snippet: nil, limitMessage: spendLimitMessage)
-    try await Task.sleep(nanoseconds: 300_000_000)
+    await model.waitForPendingItemEdits()
 
     await model.clearAgentLimit(for: review.id)
 
@@ -4073,4 +4091,563 @@ private func modelWithLiveSession(
 
     let posted = await poster.posted
     #expect(posted.count == 2)
+}
+
+// MARK: - codex
+
+/// codex has no `--session-id`, so PR Pilot cannot tell it which session to create. Storing an
+/// invented ID would name a conversation that does not exist: the next open would find no
+/// transcript for it and start fresh again, for ever. The slot must stay empty until the
+/// watcher reports the ID codex actually chose.
+@Test @MainActor func aFreshCodexLaunchStoresNoSessionID() async throws {
+    let worktree = "/tmp/codex-fresh-\(UUID().uuidString)"
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.worktreePath = worktree
+    review.agent = .codex
+    try await store.upsertItem(review)
+    var settings = await store.settings()
+    settings.codexPath = "/usr/bin/true"
+    try await store.updateSettings(settings)
+
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(
+            result: WorktreeReady(clonePath: "/tmp/clone", worktreePath: worktree, remoteName: "origin")
+        ),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    await model.ensureAgentSession(for: review)
+
+    let current = model.reviews.first(where: { $0.id == review.id })
+    #expect(current?.codexSessionID == nil, "codex names its own session; the app must not invent one")
+    #expect(current?.claudeSessionID == nil)
+    model.terminateAgentSession(for: review.id)
+}
+
+/// The other half: an ID that came from a real codex transcript IS stored, because resuming it
+/// works. This proves the launch path distinguishes a resume from a fresh start rather than
+/// simply never writing the codex slot.
+@Test @MainActor func aCodexResumeStoresTheSessionIDItResumed() async throws {
+    let fm = FileManager.default
+    let worktree = "/tmp/codex-resume-\(UUID().uuidString)"
+    try fm.createDirectory(atPath: worktree, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(atPath: worktree) }
+
+    let sessionID = "01a03df8-9e0c-7672-908a-546665225b9b"
+    let dir = AgentTranscriptPath.directoryURL(for: .codex, worktreePath: worktree)
+    try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    // Written into the user's real codex tree, because that is where the backend looks. Only
+    // this one file is created, and only it is removed — the membership filter means no real
+    // session can match this worktree.
+    let transcript = dir.appendingPathComponent("rollout-2026-08-26T14-08-18-\(sessionID).jsonl")
+    let resolvedWorktree = URL(fileURLWithPath: worktree).resolvingSymlinksInPath().path
+    try """
+    {"timestamp":"2026-08-26T12:08:18.414Z","type":"session_meta","payload":{"cwd":"\(resolvedWorktree)","originator":"cli"}}
+    """.write(to: transcript, atomically: true, encoding: .utf8)
+    defer { try? fm.removeItem(at: transcript) }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.worktreePath = worktree
+    review.agent = .codex
+    try await store.upsertItem(review)
+    var settings = await store.settings()
+    settings.codexPath = "/usr/bin/true"
+    try await store.updateSettings(settings)
+
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(
+            result: WorktreeReady(clonePath: "/tmp/clone", worktreePath: worktree, remoteName: "origin")
+        ),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    await model.ensureAgentSession(for: review)
+
+    let current = model.reviews.first(where: { $0.id == review.id })
+    #expect(current?.codexSessionID == sessionID, "an ID read from a real transcript is resumable, so it is stored")
+    model.terminateAgentSession(for: review.id)
+}
+
+/// Switching between all three agents must leave each conversation where it was.
+///
+/// Real transcripts are written for all three, for the reason the two-agent version of this
+/// test explains: a stored session whose transcript has gone is deliberately replaced rather
+/// than resumed, so the promise only holds while every transcript exists.
+@Test @MainActor func switchingAcrossThreeAgentsKeepsEverySessionID() async throws {
+    let fm = FileManager.default
+    let worktree = "/tmp/three-agents-\(UUID().uuidString)"
+    try fm.createDirectory(atPath: worktree, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(atPath: worktree) }
+
+    let claudeSessionID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    let piSessionID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    let codexSessionID = "01a04000-1111-7672-908a-546665225b9b"
+
+    let claudeDir = AgentTranscriptPath.directoryURL(for: .claudeCode, worktreePath: worktree)
+    let piDir = AgentTranscriptPath.directoryURL(for: .pi, worktreePath: worktree)
+    let codexDir = AgentTranscriptPath.directoryURL(for: .codex, worktreePath: worktree)
+    try fm.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+    try fm.createDirectory(at: piDir, withIntermediateDirectories: true)
+    try fm.createDirectory(at: codexDir, withIntermediateDirectories: true)
+
+    try "{}".write(to: claudeDir.appendingPathComponent("\(claudeSessionID).jsonl"), atomically: true, encoding: .utf8)
+    try "{}".write(
+        to: piDir.appendingPathComponent("2026-08-13T11-54-02-626Z_\(piSessionID).jsonl"),
+        atomically: true,
+        encoding: .utf8
+    )
+    // codex shares its day directory with every project, so only this file may be removed —
+    // and only a transcript recording this worktree can match it.
+    let codexTranscript = codexDir.appendingPathComponent("rollout-2026-08-26T14-30-00-\(codexSessionID).jsonl")
+    let resolvedWorktree = URL(fileURLWithPath: worktree).resolvingSymlinksInPath().path
+    try """
+    {"timestamp":"2026-08-26T12:08:18.414Z","type":"session_meta","payload":{"cwd":"\(resolvedWorktree)","originator":"cli"}}
+    """.write(to: codexTranscript, atomically: true, encoding: .utf8)
+    defer {
+        try? fm.removeItem(at: claudeDir)
+        try? fm.removeItem(at: piDir)
+        try? fm.removeItem(at: codexTranscript)
+    }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.worktreePath = worktree
+    review.claudeSessionID = claudeSessionID
+    review.piSessionID = piSessionID
+    review.codexSessionID = codexSessionID
+    try await store.upsertItem(review)
+    var settings = await store.settings()
+    settings.piPath = "/usr/bin/true"
+    settings.codexPath = "/usr/bin/true"
+    try await store.updateSettings(settings)
+
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(
+            result: WorktreeReady(clonePath: "/tmp/clone", worktreePath: worktree, remoteName: "origin")
+        ),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    for kind in [AgentKind.codex, .pi, .claudeCode, .codex] {
+        await model.setAgent(kind, for: review.id)
+        let current = model.reviews.first(where: { $0.id == review.id })
+        #expect(current?.agent == kind)
+        #expect(current?.claudeSessionID == claudeSessionID, "Claude Code survives a switch to \(kind)")
+        #expect(current?.piSessionID == piSessionID, "pi survives a switch to \(kind)")
+        #expect(current?.codexSessionID == codexSessionID, "codex survives a switch to \(kind)")
+    }
+    model.terminateAgentSession(for: review.id)
+}
+
+// MARK: - Failover on a limit
+
+/// Builds a model whose item has a real worktree directory, so the handover note has somewhere
+/// to be written, and whose transcript holds a conversation worth carrying.
+@MainActor
+private func modelReadyToHandOver(
+    mode: AgentFailoverMode = .manual,
+    target: AgentKind = .codex,
+    writeTranscript: Bool = true
+) async throws -> (AppModel, WorkItem, String) {
+    let fm = FileManager.default
+    let worktree = "/tmp/handover-\(UUID().uuidString)"
+    try fm.createDirectory(atPath: worktree, withIntermediateDirectories: true)
+
+    let claudeSessionID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    if writeTranscript {
+        let dir = AgentTranscriptPath.directoryURL(for: .claudeCode, worktreePath: worktree)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let lines = [
+            #"{"type":"user","timestamp":"2026-08-26T12:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Start work on issue 4459."}]}}"#,
+            #"{"type":"assistant","timestamp":"2026-08-26T12:01:00.000Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"I changed the mempool cap and added a test."}]}}"#,
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(
+            to: dir.appendingPathComponent("\(claudeSessionID).jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.worktreePath = worktree
+    review.claudeSessionID = claudeSessionID
+    try await store.upsertItem(review)
+    var settings = await store.settings()
+    settings.agentFailover = mode
+    settings.failoverAgent = target
+    settings.codexPath = "/usr/bin/true"
+    settings.piPath = "/usr/bin/true"
+    try await store.updateSettings(settings)
+
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(
+            result: WorktreeReady(clonePath: "/tmp/clone", worktreePath: worktree, remoteName: "origin")
+        ),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster(),
+        statusReader: AgentStatusReader(idleThresholdSeconds: 0.1)
+    )
+    await model.load()
+    await model.ensureAgentSession(for: review)
+    return (model, review, worktree)
+}
+
+/// The whole feature in one test: a blocked Claude Code item moves to codex, and the note that
+/// explains the work is on disk where the new agent was told to look.
+@Test @MainActor func handingOverWritesTheNoteAndSwitchesTheAgent() async throws {
+    let (model, review, worktree) = try await modelReadyToHandOver()
+    defer { try? FileManager.default.removeItem(atPath: worktree) }
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, limitMessage: spendLimitMessage)
+    await model.waitForPendingItemEdits()
+    #expect(model.canHandOver(model.reviews.first { $0.id == review.id }!))
+
+    let switched = await model.handOverToFailoverAgent(for: review.id)
+    #expect(switched)
+
+    let current = model.reviews.first { $0.id == review.id }
+    #expect(current?.agent == .codex)
+    // Claude Code's own conversation is left intact, so the item can go back to it once the
+    // limit resets.
+    #expect(current?.claudeSessionID == "cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+    let note = try String(
+        contentsOf: URL(fileURLWithPath: worktree).appendingPathComponent(HandoverNote.fileName),
+        encoding: .utf8
+    )
+    #expect(note.contains("Claude Code → Codex"))
+    #expect(note.contains("I changed the mempool cap and added a test."))
+    #expect(note.contains("Start work on issue 4459."))
+    #expect(note.contains(spendLimitMessage))
+
+    model.terminateAgentSession(for: review.id)
+}
+
+/// The badge described the agent that no longer runs this item. Leaving it would make the new
+/// session look blocked from its first frame.
+@Test @MainActor func handingOverClearsTheLimitBadge() async throws {
+    let (model, review, worktree) = try await modelReadyToHandOver()
+    defer { try? FileManager.default.removeItem(atPath: worktree) }
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, limitMessage: spendLimitMessage)
+    await model.waitForPendingItemEdits()
+    await model.handOverToFailoverAgent(for: review.id)
+
+    let current = model.reviews.first { $0.id == review.id }
+    #expect(current?.agentLimitMessage == nil)
+    #expect(current?.agentLimitedAt == nil)
+    if case .limited = model.claudeStatuses[review.id] {
+        Issue.record("the new session must not inherit the old agent's limit")
+    }
+    model.terminateAgentSession(for: review.id)
+}
+
+/// The note reaches the agent only if the launch prompt points at it, and the pointer must be
+/// spent exactly once — a later relaunch is not a handover.
+@Test @MainActor func theHandoverPointerIsSentOnceAndThenCleared() async throws {
+    let (model, review, worktree) = try await modelReadyToHandOver()
+    defer { try? FileManager.default.removeItem(atPath: worktree) }
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, limitMessage: spendLimitMessage)
+    await model.waitForPendingItemEdits()
+    await model.handOverToFailoverAgent(for: review.id)
+
+    let current = model.reviews.first { $0.id == review.id }
+    #expect(current?.pendingHandoverPath == nil, "the launch that sent it must clear it")
+    model.terminateAgentSession(for: review.id)
+}
+
+/// Manual is the default, so a limit must not move anything on its own.
+@Test @MainActor func manualModeDoesNotSwitchOnItsOwn() async throws {
+    let (model, review, worktree) = try await modelReadyToHandOver(mode: .manual)
+    defer { try? FileManager.default.removeItem(atPath: worktree) }
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, limitMessage: spendLimitMessage)
+    model.recomputeStatus(for: review.id, now: Date())
+    await model.waitForPendingItemEdits()
+    // Automatic failover runs as its own task, so give it a moment before asserting that
+    // nothing moved.
+    try await Task.sleep(nanoseconds: 400_000_000)
+    await model.waitForPendingItemEdits()
+
+    let current = model.reviews.first { $0.id == review.id }
+    #expect(current?.agent == nil, "manual mode leaves the agent alone")
+    #expect(!FileManager.default.fileExists(
+        atPath: URL(fileURLWithPath: worktree).appendingPathComponent(HandoverNote.fileName).path
+    ))
+    model.terminateAgentSession(for: review.id)
+}
+
+@Test @MainActor func automaticModeSwitchesWithoutBeingAsked() async throws {
+    let (model, review, worktree) = try await modelReadyToHandOver(mode: .automatic)
+    defer { try? FileManager.default.removeItem(atPath: worktree) }
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, limitMessage: spendLimitMessage)
+    model.recomputeStatus(for: review.id, now: Date())
+    // The switch is started from the status recomputation, so poll for its result rather than
+    // guessing at a duration.
+    for _ in 0..<100 where model.reviews.first(where: { $0.id == review.id })?.agent == nil {
+        try await Task.sleep(nanoseconds: 50_000_000)
+        await model.waitForPendingItemEdits()
+    }
+
+    let current = model.reviews.first { $0.id == review.id }
+    #expect(current?.agent == .codex)
+    #expect(FileManager.default.fileExists(
+        atPath: URL(fileURLWithPath: worktree).appendingPathComponent(HandoverNote.fileName).path
+    ))
+    model.terminateAgentSession(for: review.id)
+}
+
+/// One account cannot rescue itself. An item already running the failover agent must never be
+/// "switched" to it, which would restart the work for nothing.
+@Test @MainActor func anItemAlreadyOnTheFailoverAgentIsNeverSwitched() async throws {
+    let (model, review, worktree) = try await modelReadyToHandOver(mode: .automatic, target: .claudeCode)
+    defer { try? FileManager.default.removeItem(atPath: worktree) }
+
+    #expect(!model.canHandOver(model.reviews.first { $0.id == review.id }!))
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, limitMessage: spendLimitMessage)
+    model.recomputeStatus(for: review.id, now: Date())
+    await model.waitForPendingItemEdits()
+    // Automatic failover runs as its own task, so give it a moment before asserting that
+    // nothing moved.
+    try await Task.sleep(nanoseconds: 400_000_000)
+    await model.waitForPendingItemEdits()
+
+    #expect(await model.handOverToFailoverAgent(for: review.id) == false)
+    #expect(model.reviews.first { $0.id == review.id }?.agent == nil)
+    model.terminateAgentSession(for: review.id)
+}
+
+/// An item that is merely idle or working is not a handover candidate. Offering the switch
+/// there would invite the user to restart healthy work under a different agent.
+@Test @MainActor func anUnblockedItemIsNotAHandoverCandidate() async throws {
+    let (model, review, worktree) = try await modelReadyToHandOver()
+    defer { try? FileManager.default.removeItem(atPath: worktree) }
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: "working away")
+    model.recomputeStatus(for: review.id, now: Date())
+    #expect(!model.canHandOver(model.reviews.first { $0.id == review.id }!))
+    model.terminateAgentSession(for: review.id)
+}
+
+/// A transcript that could not be read must not stop the switch. Losing the summary is bad;
+/// leaving the item stuck on a blocked agent is worse.
+@Test @MainActor func aMissingTranscriptStillHandsOver() async throws {
+    let (model, review, worktree) = try await modelReadyToHandOver(writeTranscript: false)
+    defer { try? FileManager.default.removeItem(atPath: worktree) }
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, limitMessage: spendLimitMessage)
+    await model.waitForPendingItemEdits()
+
+    #expect(await model.handOverToFailoverAgent(for: review.id))
+    #expect(model.reviews.first { $0.id == review.id }?.agent == .codex)
+
+    let note = try String(
+        contentsOf: URL(fileURLWithPath: worktree).appendingPathComponent(HandoverNote.fileName),
+        encoding: .utf8
+    )
+    #expect(note.contains("no readable turns"))
+    model.terminateAgentSession(for: review.id)
+}
+
+// MARK: - The usage gauge
+
+@MainActor
+private func modelWithUsage(
+    warnAt: Int = 90,
+    failoverAgent: AgentKind = .claudeCode,
+    poster: StubNotificationPoster = StubNotificationPoster()
+) async throws -> (AppModel, WorkItem) {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var review = sampleReview()
+    review.agent = .codex
+    try await store.upsertItem(review)
+    var settings = await store.settings()
+    settings.usageWarningPercent = warnAt
+    settings.failoverAgent = failoverAgent
+    settings.codexPath = "/usr/bin/true"
+    try await store.updateSettings(settings)
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: poster,
+        statusReader: AgentStatusReader(idleThresholdSeconds: 0.1)
+    )
+    await model.load()
+    await model.ensureAgentSession(for: review)
+    return (model, review)
+}
+
+private func usageReading(_ percent: Double, readAt: Date = Date()) -> AgentUsage {
+    AgentUsage(
+        usedPercent: percent,
+        windowMinutes: 10080,
+        resetsAt: readAt.addingTimeInterval(3 * 24 * 3600),
+        agent: .codex,
+        readAt: readAt
+    )
+}
+
+@Test @MainActor func aUsageReadingIsShownAndPersisted() async throws {
+    let (model, review) = try await modelWithUsage()
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, usage: usageReading(93))
+    await model.waitForPendingItemEdits()
+
+    #expect(model.usageToShow(for: model.reviews.first { $0.id == review.id }!)?.displayPercent == 93)
+    // Persisted, so eviction or a quit does not lose the figure.
+    #expect(model.reviews.first { $0.id == review.id }?.agentUsage?.displayPercent == 93)
+    model.terminateAgentSession(for: review.id)
+}
+
+/// The whole point of the gauge: the warning arrives while the agent is still working, not
+/// after it has stopped.
+@Test @MainActor func crossingTheThresholdWarnsOnce() async throws {
+    let poster = StubNotificationPoster()
+    let (model, review) = try await modelWithUsage(poster: poster)
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, usage: usageReading(88))
+    await model.waitForPendingItemEdits()
+    await poster.settle()
+    #expect(await poster.posted.isEmpty, "below the threshold is not worth an alert")
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, usage: usageReading(91))
+    await poster.waitForPosts(atLeast: 1)
+    let afterCrossing = await poster.posted
+    #expect(afterCrossing.count == 1)
+    #expect(afterCrossing.first?.title.contains("91%") == true)
+    #expect(afterCrossing.first?.body.contains("7 days") == true)
+
+    // Every codex turn reports usage, so a session sitting above the line must not alert again.
+    for percent in [92.0, 95.0, 99.0] {
+        model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, usage: usageReading(percent))
+    }
+    await model.waitForPendingItemEdits()
+    await poster.settle()
+    #expect(await poster.posted.count == 1, "one crossing is one alert")
+    model.terminateAgentSession(for: review.id)
+}
+
+/// A window that has reset earns a fresh warning next time round.
+@Test @MainActor func aResetWindowCanWarnAgain() async throws {
+    let poster = StubNotificationPoster()
+    let (model, review) = try await modelWithUsage(poster: poster)
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, usage: usageReading(95))
+    await poster.waitForPosts(atLeast: 1)
+    #expect(await poster.posted.count == 1)
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, usage: usageReading(2))
+    await model.waitForPendingItemEdits()
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, usage: usageReading(94))
+    await poster.waitForPosts(atLeast: 2)
+    #expect(await poster.posted.count == 2)
+    model.terminateAgentSession(for: review.id)
+}
+
+@Test @MainActor func theThresholdIsTheUsersSetting() async throws {
+    let poster = StubNotificationPoster()
+    let (model, review) = try await modelWithUsage(warnAt: 75, poster: poster)
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, usage: usageReading(80))
+    await poster.waitForPosts(atLeast: 1)
+    #expect(await poster.posted.count == 1)
+    model.terminateAgentSession(for: review.id)
+}
+
+/// The warning names the escape route, but only when there is one — an item already on the
+/// failover agent has nowhere to go.
+@Test @MainActor func theWarningNamesTheFailoverAgentOnlyWhenItDiffers() async throws {
+    let poster = StubNotificationPoster()
+    let (model, review) = try await modelWithUsage(failoverAgent: .claudeCode, poster: poster)
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, usage: usageReading(95))
+    await poster.waitForPosts(atLeast: 1)
+    #expect(await poster.posted.first?.body.contains("Hand the item to Claude Code") == true)
+    model.terminateAgentSession(for: review.id)
+
+    let otherPoster = StubNotificationPoster()
+    let (sameAgent, item) = try await modelWithUsage(failoverAgent: .codex, poster: otherPoster)
+    sameAgent.handleTranscriptEvent(reviewID: item.id, at: Date(), snippet: nil, usage: usageReading(95))
+    await otherPoster.waitForPosts(atLeast: 1)
+    #expect(await otherPoster.posted.first?.body.contains("Hand the item to") == false)
+    sameAgent.terminateAgentSession(for: item.id)
+}
+
+/// A figure whose window has since reset must not be shown. Acting on it would mean handing
+/// work over for no reason.
+@Test @MainActor func aStaleReadingIsNotShown() async throws {
+    let (model, review) = try await modelWithUsage()
+    let read = Date(timeIntervalSince1970: 1_786_000_000)
+    model.handleTranscriptEvent(reviewID: review.id, at: read, snippet: nil, usage: usageReading(95, readAt: read))
+    await model.waitForPendingItemEdits()
+
+    let stored = model.reviews.first { $0.id == review.id }!
+    #expect(model.usageToShow(for: stored, now: read.addingTimeInterval(60)) != nil)
+    // Past the reset time the reading is dropped, though it stays on the item.
+    #expect(model.usageToShow(for: stored, now: read.addingTimeInterval(4 * 24 * 3600)) == nil)
+    #expect(stored.agentUsage != nil)
+    model.terminateAgentSession(for: review.id)
+}
+
+/// Claude Code publishes nothing, so an item running it has no gauge — and must not inherit
+/// the figure another item read from codex.
+@Test @MainActor func anItemWithNoReadingShowsNothing() async throws {
+    let (model, review) = try await modelWithUsage()
+    #expect(model.usageToShow(for: model.reviews.first { $0.id == review.id }!) == nil)
+    model.terminateAgentSession(for: review.id)
+}
+
+/// Usage arrives on every turn. Writing the store each time would be a write per keystroke of
+/// the agent's output, so only a change to the displayed figure is persisted.
+@Test @MainActor func anUnchangedFigureIsNotWrittenAgain() async throws {
+    let (model, review) = try await modelWithUsage()
+    let read = Date()
+    model.handleTranscriptEvent(reviewID: review.id, at: read, snippet: nil, usage: usageReading(93.1, readAt: read))
+    await model.waitForPendingItemEdits()
+    let first = model.reviews.first { $0.id == review.id }?.agentUsage
+    #expect(first?.displayPercent == 93, "the first reading must land before the comparison")
+
+    // Same whole percentage, later reading: nothing to show differently, so nothing is written.
+    model.handleTranscriptEvent(reviewID: review.id, at: read, snippet: nil, usage: usageReading(93.4, readAt: read))
+    await model.waitForPendingItemEdits()
+    #expect(model.reviews.first { $0.id == review.id }?.agentUsage == first)
+
+    // A different whole percentage is written through.
+    model.handleTranscriptEvent(reviewID: review.id, at: read, snippet: nil, usage: usageReading(94.0, readAt: read))
+    await model.waitForPendingItemEdits()
+    #expect(model.reviews.first { $0.id == review.id }?.agentUsage?.displayPercent == 94)
+    model.terminateAgentSession(for: review.id)
 }

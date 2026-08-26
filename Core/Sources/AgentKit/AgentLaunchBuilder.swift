@@ -69,6 +69,7 @@ public enum AgentLaunchBuilder {
         switch kind {
         case .claudeCode: return settings.claudeEnv
         case .pi: return settings.piEnv
+        case .codex: return settings.codexEnv
         }
     }
 
@@ -76,6 +77,7 @@ public enum AgentLaunchBuilder {
         switch kind {
         case .claudeCode: return settings.claudeLaunchArgs
         case .pi: return settings.piLaunchArgs
+        case .codex: return settings.codexLaunchArgs
         }
     }
 

@@ -10,7 +10,28 @@ import PRPilotModels
 public enum LaunchPrompt {
     static let placeholders = ["{url}", "{number}", "{owner}", "{repo}", "{title}"]
 
+    /// Sentence that points a newly launched agent at the handover note.
+    ///
+    /// Prepended rather than appended: the note explains that this is a continuation, and an
+    /// agent that reads "review the pull request" first will start over before it gets there.
+    static func handoverPointer(_ path: String) -> String {
+        """
+        Another agent was working on this and stopped part-way. Read `\(path)` first. It says \
+        where it had reached and what is left. Then carry on from there rather than starting \
+        again.
+        """
+    }
+
     public static func render(_ template: String, for item: WorkItem, url: URL?) -> String {
+        let body = renderTemplate(template, for: item, url: url)
+        guard let handover = item.pendingHandoverPath else { return body }
+        // A blank template still gets the pointer. Otherwise a user who deliberately launches
+        // with no prompt would silently lose the handover.
+        guard !body.isEmpty else { return handoverPointer(handover) }
+        return handoverPointer(handover) + "\n\n" + body
+    }
+
+    private static func renderTemplate(_ template: String, for item: WorkItem, url: URL?) -> String {
         guard !template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
         var rendered = template
         let values: [String: String] = [

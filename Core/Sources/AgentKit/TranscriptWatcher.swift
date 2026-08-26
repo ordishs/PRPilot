@@ -14,19 +14,24 @@ public struct TranscriptEvent: Sendable, Equatable {
     /// The agent stopped because it ran out of allowance — see `LimitStop`. Nil on every
     /// other line.
     public let limitMessage: String?
+    /// How much allowance the agent says it has spent, when the line reports it. codex only —
+    /// see `AgentUsage`.
+    public let usage: AgentUsage?
 
     public init(
         date: Date,
         snippet: String?,
         turnCompleted: Bool,
         workflowPending: Bool,
-        limitMessage: String? = nil
+        limitMessage: String? = nil,
+        usage: AgentUsage? = nil
     ) {
         self.date = date
         self.snippet = snippet
         self.turnCompleted = turnCompleted
         self.workflowPending = workflowPending
         self.limitMessage = limitMessage
+        self.usage = usage
     }
 }
 
@@ -36,9 +41,16 @@ public struct TranscriptEvent: Sendable, Equatable {
 /// for every agent. What a line *means* is not, so that is delegated to the backend.
 @MainActor
 public final class TranscriptWatcher {
-    private let transcriptDir: URL
+    private let transcriptDirs: [URL]
+    private let worktreePath: String?
     private let backend: any AgentBackend
-    private var directorySource: DispatchSourceFileSystemObject?
+    private var directorySources: [DispatchSourceFileSystemObject] = []
+    /// Whether a transcript belongs to this watcher's worktree, memoised by path.
+    ///
+    /// Membership is read from the file's first line, which never changes, and a rescan runs
+    /// on every write event. Without this cache codex would re-read a `session_meta` line on
+    /// every keystroke of every live session.
+    private var membershipCache: [String: Bool] = [:]
     private var fileSource: DispatchSourceFileSystemObject?
     private var currentFileURL: URL?
     private var readOffset: Int = 0
@@ -52,9 +64,22 @@ public final class TranscriptWatcher {
     /// resume and must reset with the file.
     private var parseState = TranscriptParseState()
 
-    public init(transcriptDir: URL, kind: AgentKind) {
-        self.transcriptDir = transcriptDir
+    /// - Parameters:
+    ///   - transcriptDirs: every directory that could hold this session's transcript. codex
+    ///     supplies two, because a session that crosses midnight keeps writing into the day
+    ///     directory it started in.
+    ///   - worktreePath: the worktree whose transcripts this watcher wants, or nil to accept
+    ///     every transcript in the directories. Only codex distinguishes the two: its day
+    ///     directory mixes every project, so without this the watcher would tail a stranger's
+    ///     session.
+    public init(transcriptDirs: [URL], kind: AgentKind, worktreePath: String? = nil) {
+        self.transcriptDirs = transcriptDirs
+        self.worktreePath = worktreePath
         self.backend = AgentBackends.backend(for: kind)
+    }
+
+    public convenience init(transcriptDir: URL, kind: AgentKind, worktreePath: String? = nil) {
+        self.init(transcriptDirs: [transcriptDir], kind: kind, worktreePath: worktreePath)
     }
 
     /// Fires for each transcript line. `turnCompleted` is true when the agent finished its
@@ -71,16 +96,21 @@ public final class TranscriptWatcher {
         self.onEvent = onEvent
         self.onSessionFile = onSessionFile
         let fm = FileManager.default
-        if !fm.fileExists(atPath: transcriptDir.path) {
-            try? fm.createDirectory(at: transcriptDir, withIntermediateDirectories: true)
+        for dir in transcriptDirs where !fm.fileExists(atPath: dir.path) {
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-        attachDirectorySource()
+        for dir in transcriptDirs {
+            attachDirectorySource(dir)
+        }
         rescanForLatestTranscript()
     }
 
     public func stop() {
-        directorySource?.cancel()
-        directorySource = nil
+        for source in directorySources {
+            source.cancel()
+        }
+        directorySources = []
+        membershipCache = [:]
         fileSource?.cancel()
         fileSource = nil
         currentFileURL = nil
@@ -90,8 +120,8 @@ public final class TranscriptWatcher {
         onSessionFile = nil
     }
 
-    private func attachDirectorySource() {
-        let fd = open(transcriptDir.path, O_EVTONLY)
+    private func attachDirectorySource(_ dir: URL) {
+        let fd = open(dir.path, O_EVTONLY)
         guard fd >= 0 else { return }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,
@@ -105,32 +135,50 @@ public final class TranscriptWatcher {
             close(fd)
         }
         source.resume()
-        directorySource = source
+        directorySources.append(source)
     }
 
     private func rescanForLatestTranscript() {
         let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(atPath: transcriptDir.path) else { return }
-        // Which names count as transcripts is the backend's call: Claude Code uses
-        // "<uuid>.jsonl", pi prefixes a timestamp.
-        let transcripts = entries.filter { backend.sessionID(fromTranscriptFilename: $0) != nil }
         var latestURL: URL?
         var latestMod: Date = .distantPast
-        for name in transcripts {
-            let url = transcriptDir.appendingPathComponent(name)
-            if let attrs = try? fm.attributesOfItem(atPath: url.path),
-               let mod = attrs[.modificationDate] as? Date,
-               mod > latestMod {
-                latestMod = mod
-                latestURL = url
+        for dir in transcriptDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir.path) else { continue }
+            // Which names count as transcripts is the backend's call: Claude Code uses
+            // "<uuid>.jsonl", pi prefixes a timestamp, codex prefixes "rollout-".
+            for name in entries where backend.sessionID(fromTranscriptFilename: name) != nil {
+                let url = dir.appendingPathComponent(name)
+                guard belongsToWorktree(url) else { continue }
+                if let attrs = try? fm.attributesOfItem(atPath: url.path),
+                   let mod = attrs[.modificationDate] as? Date,
+                   mod > latestMod {
+                    latestMod = mod
+                    latestURL = url
+                }
             }
         }
+        // No candidate leaves the current file attached. That is what makes a codex day
+        // directory dropping out of the list at midnight harmless: the file source holds its
+        // own descriptor and keeps tailing.
         guard let latestURL else { return }
         if currentFileURL?.path == latestURL.path {
             readAppended()
         } else {
             attachFileSource(latestURL)
         }
+    }
+
+    /// Whether this file is one of ours, memoised. A file only becomes a candidate once, so
+    /// the cache holds one entry per transcript the directories ever contain.
+    private func belongsToWorktree(_ url: URL) -> Bool {
+        guard let worktreePath else { return true }
+        if let cached = membershipCache[url.path] { return cached }
+        let belongs = backend.transcript(at: url, belongsToWorktreePath: worktreePath)
+        // A negative is cached too. A codex rollout's session_meta line is written before
+        // anything else, so a file that does not claim this worktree on its first line never
+        // will.
+        membershipCache[url.path] = belongs
+        return belongs
     }
 
     private func attachFileSource(_ url: URL) {

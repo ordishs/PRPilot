@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import PRPilotModels
 @testable import AgentKit
 
 @Test func encodesSlashesToHyphens() {
@@ -166,4 +167,104 @@ import Foundation
 
     #expect(AgentTranscriptPath.latestSessionID(in: dir, kind: .pi) == "44444444-5555-6666-7777-888888888888")
     #expect(AgentTranscriptPath.latestSessionID(in: dir, kind: .claudeCode) == "10889bb0-624c-4ef5-94f7-77480418849c")
+}
+
+// MARK: - codex: one directory shared by every project
+
+/// codex keeps every project's sessions in one day directory. So `latestSessionID` must not
+/// simply take the newest file: without the membership filter PR Pilot would resume another
+/// project's conversation in this worktree.
+@Test func codexLatestSessionIgnoresAnotherProjectsNewerTranscript() throws {
+    let (worktree, dir, backend) = try codexFixture()
+    let mine = dir.appendingPathComponent("rollout-2026-08-26T14-00-00-11111111-1111-1111-1111-111111111111.jsonl")
+    let theirs = dir.appendingPathComponent("rollout-2026-08-26T14-05-00-22222222-2222-2222-2222-222222222222.jsonl")
+    try CodexBackendTests.writeRollout(at: mine, cwd: worktree)
+    try CodexBackendTests.writeRollout(at: theirs, cwd: "/Users/me/dev/unrelated")
+    // Make the other project's file the newest in the directory.
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: theirs.path
+    )
+
+    let latest = AgentTranscriptPath.latestSessionID(
+        in: dir, kind: .codex, worktreePath: worktree, backend: backend
+    )
+    #expect(latest == "11111111-1111-1111-1111-111111111111")
+}
+
+/// The destructive case. Archiving the directory wholesale would archive every codex session
+/// started that day, across every project the user touched.
+@Test func codexArchiveLeavesOtherProjectsAlone() throws {
+    let (worktree, dir, backend) = try codexFixture()
+    let mine = dir.appendingPathComponent("rollout-2026-08-26T14-00-00-33333333-3333-3333-3333-333333333333.jsonl")
+    let theirs = dir.appendingPathComponent("rollout-2026-08-26T14-05-00-44444444-4444-4444-4444-444444444444.jsonl")
+    try CodexBackendTests.writeRollout(at: mine, cwd: worktree)
+    try CodexBackendTests.writeRollout(at: theirs, cwd: "/Users/me/dev/unrelated")
+
+    let moved = AgentTranscriptPath.archiveTranscripts(
+        for: .codex, worktreePath: worktree, backend: backend
+    )
+    #expect(moved == 1)
+    #expect(!FileManager.default.fileExists(atPath: mine.path))
+    #expect(FileManager.default.fileExists(atPath: theirs.path))
+    #expect(FileManager.default.fileExists(
+        atPath: dir.appendingPathComponent("archived/\(mine.lastPathComponent)").path
+    ))
+}
+
+@Test func codexTranscriptExistsIsScopedToTheWorktree() throws {
+    let (worktree, dir, backend) = try codexFixture()
+    let theirs = dir.appendingPathComponent("rollout-2026-08-26T14-05-00-55555555-5555-5555-5555-555555555555.jsonl")
+    try CodexBackendTests.writeRollout(at: theirs, cwd: "/Users/me/dev/unrelated")
+
+    #expect(!AgentTranscriptPath.transcriptExists(
+        for: .codex, worktreePath: worktree,
+        sessionID: "55555555-5555-5555-5555-555555555555", backend: backend
+    ))
+
+    let mine = dir.appendingPathComponent("rollout-2026-08-26T14-06-00-66666666-6666-6666-6666-666666666666.jsonl")
+    try CodexBackendTests.writeRollout(at: mine, cwd: worktree)
+    #expect(AgentTranscriptPath.transcriptExists(
+        for: .codex, worktreePath: worktree,
+        sessionID: "66666666-6666-6666-6666-666666666666", backend: backend
+    ))
+}
+
+/// Builds a codex backend whose only candidate directory is a temporary one, so the test never
+/// reads or writes the user's real `~/.codex/sessions`.
+private func codexFixture() throws -> (worktree: String, dir: URL, backend: any AgentBackend) {
+    let dir = try CodexBackendTests.tempDir()
+    let worktree = try CodexBackendTests.tempDir().path
+    return (worktree, dir, FixedDirectoryCodexBackend(directory: dir))
+}
+
+/// codex resolves its candidate directories from the clock and the real home directory. The
+/// tests need a fixed directory instead, and only the directory differs — every other rule,
+/// including membership, is the real backend's.
+private struct FixedDirectoryCodexBackend: AgentBackend {
+    let directory: URL
+    private let wrapped = CodexBackend()
+
+    var kind: AgentKind { .codex }
+    var prependsExecutableDirectoryToPath: Bool { wrapped.prependsExecutableDirectoryToPath }
+    var acceptsAssignedSessionID: Bool { wrapped.acceptsAssignedSessionID }
+
+    func transcriptDirectories(forWorktreePath path: String) -> [URL] { [directory] }
+
+    func sessionID(fromTranscriptFilename name: String) -> String? {
+        wrapped.sessionID(fromTranscriptFilename: name)
+    }
+
+    func transcript(at url: URL, belongsToWorktreePath path: String) -> Bool {
+        wrapped.transcript(at: url, belongsToWorktreePath: path)
+    }
+
+    func launchArguments(
+        settings: Settings, review: WorkItem, sessionID: String, resume: Bool
+    ) -> [String] {
+        wrapped.launchArguments(settings: settings, review: review, sessionID: sessionID, resume: resume)
+    }
+
+    func parse(line: Data, state: inout TranscriptParseState) -> TranscriptEvent? {
+        wrapped.parse(line: line, state: &state)
+    }
 }

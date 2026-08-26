@@ -600,6 +600,18 @@ struct ContentView: View {
                 )
             }
 
+            // Only shown once the allowance is worth watching. Below the threshold the figure
+            // is noise, and a row carrying a badge per agent per item would drown the states
+            // that need acting on.
+            if let usage = model.usageToShow(for: review),
+               usage.hasReached(model.settings.usageWarningPercent) {
+                StateBadge(
+                    text: "\(usage.displayPercent)%",
+                    color: usage.displayPercent >= 99 ? .pink : .orange,
+                    help: usageHelp(usage, for: review)
+                )
+            }
+
             if let changes = model.worktreeLocalChanges[review.id], changes > 0 {
                 StateBadge(
                     text: "Dirty",
@@ -620,6 +632,24 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// Says which agent, how much of which window, and when it resets. All three matter: the
+    /// percentage alone does not tell the user whether they have an hour or a week.
+    private func usageHelp(_ usage: AgentUsage, for review: WorkItem) -> String {
+        var parts = ["\(usage.agent.displayName) has spent \(usage.displayPercent)%"]
+        if let window = usage.windowDescription {
+            parts[0] += " of its \(window) allowance"
+        } else {
+            parts[0] += " of its allowance"
+        }
+        if let resetsAt = usage.resetsAt {
+            parts.append("Resets \(resetsAt.formatted(date: .abbreviated, time: .shortened))")
+        }
+        if model.settings.failoverAgent != review.effectiveAgent(default: model.settings.defaultAgent) {
+            parts.append("Hand it to \(model.settings.failoverAgent.displayName) from the agent menu before it stops")
+        }
+        return parts.joined(separator: ". ") + "."
     }
 
     private func issueStatusColor(_ status: IssueWorkStatus) -> Color {

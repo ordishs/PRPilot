@@ -282,6 +282,14 @@ private struct ClaudeSettingsTab: View {
     @State private var piEnvText: String = ""
     @State private var piReviewPrompt: String = ""
     @State private var piIssuePrompt: String = ""
+    @State private var codexPath: String = ""
+    @State private var codexArgsText: String = ""
+    @State private var codexEnvText: String = ""
+    @State private var codexReviewPrompt: String = ""
+    @State private var codexIssuePrompt: String = ""
+    @State private var agentFailover: AgentFailoverMode = .manual
+    @State private var failoverAgent: AgentKind = .codex
+    @State private var usageWarningPercent: Int = SessionDefaults.usageWarningPercent
 
     var body: some View {
         Form {
@@ -312,6 +320,7 @@ private struct ClaudeSettingsTab: View {
             Section("Agent binaries") {
                 pathRow(label: "claude", binding: $claudePath)
                 pathRow(label: "pi", binding: $piPath)
+                pathRow(label: "codex", binding: $codexPath)
                 Text("Leave empty to auto-detect from your shell PATH — matches what `which claude` returns in your terminal.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -344,37 +353,32 @@ private struct ClaudeSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("pi arguments") {
-                TextField("", text: $piArgsText)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
-                    .labelsHidden()
-                    .multilineTextAlignment(.leading)
-                Text("Appended to the pi command, exactly as typed. Choose the provider and model here, for example --provider anthropic --model '*sonnet*'. Leave empty to use pi's own configured default.")
+            piSections
+
+            codexSections
+
+            Section("When an agent hits its limit") {
+                Picker("", selection: $agentFailover) {
+                    ForEach(AgentFailoverMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Picker("Hand over to", selection: $failoverAgent) {
+                    ForEach(AgentKind.allCases, id: \.self) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+                Stepper(
+                    "Warn at \(usageWarningPercent)% of the allowance",
+                    value: $usageWarningPercent,
+                    in: 50...99
+                )
+                Text("Codex reports what it has spent on every turn, so this warning arrives while the agent is still working. Claude Code says nothing until it is already blocked, so an item running it shows no percentage.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-
-            Section("Extra environment variables for pi") {
-                TextField("", text: $piEnvText)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
-                    .labelsHidden()
-                    .multilineTextAlignment(.leading)
-            }
-
-            Section("pi launch prompts") {
-                promptEditor(
-                    title: "PR review",
-                    text: $piReviewPrompt,
-                    defaultValue: Settings.defaultPiReviewPromptTemplate
-                )
-                promptEditor(
-                    title: "Issue work",
-                    text: $piIssuePrompt,
-                    defaultValue: Settings.defaultPiIssuePromptTemplate
-                )
-                Text("Separate from the Claude Code prompts because pi has no /review or /start-issue command. Same placeholders apply.")
+                Text("A usage limit stops the agent without a trace, so PR Pilot writes a HANDOVER.md into the worktree — the work, why the agent stopped, and the conversation so far — and points the next agent at it. Automatic switches the item on its own. Manual offers the switch on the blocked item and waits. An item already running the chosen agent is never switched.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -397,19 +401,32 @@ private struct ClaudeSettingsTab: View {
             piEnvText = model.settings.piEnv
             piReviewPrompt = model.settings.piReviewPromptTemplate
             piIssuePrompt = model.settings.piIssuePromptTemplate
+            codexPath = model.settings.codexPath ?? ""
+            codexArgsText = model.settings.codexLaunchArgs
+            codexEnvText = model.settings.codexEnv
+            codexReviewPrompt = model.settings.codexReviewPromptTemplate
+            codexIssuePrompt = model.settings.codexIssuePromptTemplate
+            agentFailover = model.settings.agentFailover
+            failoverAgent = model.settings.failoverAgent
+            usageWarningPercent = model.settings.usageWarningPercent
         }
-        .onChange(of: envText) { _, _ in commit() }
-        .onChange(of: claudePath) { _, _ in commit() }
-        .onChange(of: argsText) { _, _ in commit() }
-        .onChange(of: notificationsEnabled) { _, _ in commit() }
-        .onChange(of: reviewPrompt) { _, _ in commit() }
-        .onChange(of: issuePrompt) { _, _ in commit() }
-        .onChange(of: defaultAgent) { _, _ in commit() }
-        .onChange(of: piPath) { _, _ in commit() }
-        .onChange(of: piArgsText) { _, _ in commit() }
-        .onChange(of: piEnvText) { _, _ in commit() }
-        .onChange(of: piReviewPrompt) { _, _ in commit() }
-        .onChange(of: piIssuePrompt) { _, _ in commit() }
+        .onChange(of: editedValues) { _, _ in commit() }
+    }
+
+    /// Every field on this tab, as one comparable value.
+    ///
+    /// One `.onChange` rather than one per field. Three agents' worth of separate modifiers
+    /// made the chain too long for the SwiftUI type-checker to solve, and this keeps the
+    /// behaviour identical: any edit commits.
+    private var editedValues: [String] {
+        [
+            claudePath, argsText, envText, reviewPrompt, issuePrompt,
+            defaultAgent.rawValue,
+            piPath, piArgsText, piEnvText, piReviewPrompt, piIssuePrompt,
+            codexPath, codexArgsText, codexEnvText, codexReviewPrompt, codexIssuePrompt,
+            String(notificationsEnabled),
+            agentFailover.rawValue, failoverAgent.rawValue, String(usageWarningPercent),
+        ]
     }
 
     @ViewBuilder
@@ -434,6 +451,82 @@ private struct ClaudeSettingsTab: View {
         }
     }
 
+    /// Split out of `body` because one Form with every agent's rows in it exceeds what the
+    /// SwiftUI type-checker will solve.
+    @ViewBuilder private var piSections: some View {
+        Section("pi arguments") {
+            TextField("", text: $piArgsText)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+                .labelsHidden()
+                .multilineTextAlignment(.leading)
+            Text("Appended to the pi command, exactly as typed. Choose the provider and model here, for example --provider anthropic --model '*sonnet*'. Leave empty to use pi's own configured default.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        Section("Extra environment variables for pi") {
+            TextField("", text: $piEnvText)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+                .labelsHidden()
+                .multilineTextAlignment(.leading)
+        }
+
+        Section("pi launch prompts") {
+            promptEditor(
+                title: "PR review",
+                text: $piReviewPrompt,
+                defaultValue: Settings.defaultPiReviewPromptTemplate
+            )
+            promptEditor(
+                title: "Issue work",
+                text: $piIssuePrompt,
+                defaultValue: Settings.defaultPiIssuePromptTemplate
+            )
+            Text("Separate from the Claude Code prompts because pi has no /review or /start-issue command. Same placeholders apply.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var codexSections: some View {
+        Section("codex arguments") {
+            TextField("", text: $codexArgsText)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+                .labelsHidden()
+                .multilineTextAlignment(.leading)
+            Text("Appended to the codex command, exactly as typed. Choose the model here, for example --model gpt-5.5. Use options only: the prompt and the resume subcommand are positional, so a bare word here would be read as one of those.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        Section("Extra environment variables for codex") {
+            TextField("", text: $codexEnvText)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+                .labelsHidden()
+                .multilineTextAlignment(.leading)
+        }
+
+        Section("codex launch prompts") {
+            promptEditor(
+                title: "PR review",
+                text: $codexReviewPrompt,
+                defaultValue: Settings.defaultCodexReviewPromptTemplate
+            )
+            promptEditor(
+                title: "Issue work",
+                text: $codexIssuePrompt,
+                defaultValue: Settings.defaultCodexIssuePromptTemplate
+            )
+            Text("codex has no /review or /start-issue command either, so these are prose. codex also refuses to start in a directory its own config does not trust — add a trust_level entry covering your worktree root in ~/.codex/config.toml if a session exits immediately.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private func commit() {
         var updated = model.settings
         updated.reviewPromptTemplate = reviewPrompt
@@ -448,6 +541,14 @@ private struct ClaudeSettingsTab: View {
         updated.piEnv = piEnvText.trimmingCharacters(in: .whitespacesAndNewlines)
         updated.piReviewPromptTemplate = piReviewPrompt
         updated.piIssuePromptTemplate = piIssuePrompt
+        updated.codexPath = codexPath.isEmpty ? nil : codexPath
+        updated.codexLaunchArgs = codexArgsText.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.codexEnv = codexEnvText.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.codexReviewPromptTemplate = codexReviewPrompt
+        updated.codexIssuePromptTemplate = codexIssuePrompt
+        updated.agentFailover = agentFailover
+        updated.failoverAgent = failoverAgent
+        updated.usageWarningPercent = usageWarningPercent
         Task { await model.updateSettings(updated) }
     }
 }

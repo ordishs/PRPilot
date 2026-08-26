@@ -20,6 +20,20 @@ public struct Settings: Codable, Sendable, Equatable {
     public var piPath: String?
     public var piLaunchArgs: String
     public var piEnv: String
+    /// Path to the `codex` executable. Same convention as `piPath`: nil means resolve it from
+    /// the login shell.
+    public var codexPath: String?
+    public var codexLaunchArgs: String
+    public var codexEnv: String
+    /// Whether a limit stop switches the item to another agent on its own, or only offers to.
+    public var agentFailover: AgentFailoverMode
+    /// Agent an item moves to when its own hits a limit. Ignored when it equals the blocked
+    /// agent — an account cannot rescue itself.
+    public var failoverAgent: AgentKind
+    /// Percentage of an agent's allowance at which PR Pilot warns. codex reports what it has
+    /// spent on every turn, so the warning arrives while the agent is still working rather
+    /// than after it has stopped.
+    public var usageWarningPercent: Int
     public var autoLoad: Bool
     public var notificationsEnabled: Bool
     public var diffMode: DiffMode
@@ -41,6 +55,11 @@ public struct Settings: Codable, Sendable, Equatable {
     public var piReviewPromptTemplate: String
     /// First prompt of a pi issue session.
     public var piIssuePromptTemplate: String
+    /// First prompt of a codex review session. codex has no `/review` command either, so this
+    /// is prose for the same reason as the pi template.
+    public var codexReviewPromptTemplate: String
+    /// First prompt of a codex issue session.
+    public var codexIssuePromptTemplate: String
     /// Live `claude` child processes allowed at once. Each costs roughly 550 MB, so an
     /// uncapped one-per-item spread exhausts swap on a large work list.
     public var maxLiveAgentSessions: Int
@@ -85,6 +104,14 @@ public struct Settings: Codable, Sendable, Equatable {
         case piEnv
         case piReviewPromptTemplate
         case piIssuePromptTemplate
+        case codexPath
+        case codexLaunchArgs
+        case codexEnv
+        case agentFailover
+        case failoverAgent
+        case usageWarningPercent
+        case codexReviewPromptTemplate
+        case codexIssuePromptTemplate
         case autoLoad
         case notificationsEnabled
         case diffMode
@@ -122,6 +149,12 @@ public struct Settings: Codable, Sendable, Equatable {
         piPath: String? = nil,
         piLaunchArgs: String = "",
         piEnv: String = "",
+        codexPath: String? = nil,
+        codexLaunchArgs: String = "",
+        codexEnv: String = "",
+        agentFailover: AgentFailoverMode = .manual,
+        failoverAgent: AgentKind = .codex,
+        usageWarningPercent: Int = SessionDefaults.usageWarningPercent,
         autoLoad: Bool = false,
         notificationsEnabled: Bool,
         diffMode: DiffMode,
@@ -135,6 +168,8 @@ public struct Settings: Codable, Sendable, Equatable {
         issuePromptTemplate: String = Settings.defaultIssuePromptTemplate,
         piReviewPromptTemplate: String = Settings.defaultPiReviewPromptTemplate,
         piIssuePromptTemplate: String = Settings.defaultPiIssuePromptTemplate,
+        codexReviewPromptTemplate: String = Settings.defaultCodexReviewPromptTemplate,
+        codexIssuePromptTemplate: String = Settings.defaultCodexIssuePromptTemplate,
         maxLiveAgentSessions: Int = 5,
         maxLiveWebViews: Int = 8,
         idleSessionProtectionMinutes: Int = SessionDefaults.idleProtectionMinutes,
@@ -157,6 +192,12 @@ public struct Settings: Codable, Sendable, Equatable {
         self.piPath = piPath
         self.piLaunchArgs = piLaunchArgs
         self.piEnv = piEnv
+        self.codexPath = codexPath
+        self.codexLaunchArgs = codexLaunchArgs
+        self.codexEnv = codexEnv
+        self.agentFailover = agentFailover
+        self.failoverAgent = failoverAgent
+        self.usageWarningPercent = usageWarningPercent
         self.autoLoad = autoLoad
         self.notificationsEnabled = notificationsEnabled
         self.diffMode = diffMode
@@ -170,6 +211,8 @@ public struct Settings: Codable, Sendable, Equatable {
         self.issuePromptTemplate = issuePromptTemplate
         self.piReviewPromptTemplate = piReviewPromptTemplate
         self.piIssuePromptTemplate = piIssuePromptTemplate
+        self.codexReviewPromptTemplate = codexReviewPromptTemplate
+        self.codexIssuePromptTemplate = codexIssuePromptTemplate
         self.maxLiveAgentSessions = maxLiveAgentSessions
         self.maxLiveWebViews = maxLiveWebViews
         self.idleSessionProtectionMinutes = idleSessionProtectionMinutes
@@ -199,6 +242,13 @@ public struct Settings: Codable, Sendable, Equatable {
         piPath = try c.decodeIfPresent(String.self, forKey: .piPath)
         piLaunchArgs = try c.decodeIfPresent(String.self, forKey: .piLaunchArgs) ?? ""
         piEnv = try c.decodeIfPresent(String.self, forKey: .piEnv) ?? ""
+        codexPath = try c.decodeIfPresent(String.self, forKey: .codexPath)
+        codexLaunchArgs = try c.decodeIfPresent(String.self, forKey: .codexLaunchArgs) ?? ""
+        codexEnv = try c.decodeIfPresent(String.self, forKey: .codexEnv) ?? ""
+        agentFailover = try c.decodeIfPresent(AgentFailoverMode.self, forKey: .agentFailover) ?? .manual
+        failoverAgent = try c.decodeIfPresent(AgentKind.self, forKey: .failoverAgent) ?? .codex
+        usageWarningPercent = try c.decodeIfPresent(Int.self, forKey: .usageWarningPercent)
+            ?? SessionDefaults.usageWarningPercent
         autoLoad = try c.decodeIfPresent(Bool.self, forKey: .autoLoad) ?? false
         notificationsEnabled = try c.decode(Bool.self, forKey: .notificationsEnabled)
         diffMode = try c.decode(DiffMode.self, forKey: .diffMode)
@@ -225,6 +275,10 @@ public struct Settings: Codable, Sendable, Equatable {
             ?? Settings.defaultPiReviewPromptTemplate
         piIssuePromptTemplate = try c.decodeIfPresent(String.self, forKey: .piIssuePromptTemplate)
             ?? Settings.defaultPiIssuePromptTemplate
+        codexReviewPromptTemplate = try c.decodeIfPresent(String.self, forKey: .codexReviewPromptTemplate)
+            ?? Settings.defaultCodexReviewPromptTemplate
+        codexIssuePromptTemplate = try c.decodeIfPresent(String.self, forKey: .codexIssuePromptTemplate)
+            ?? Settings.defaultCodexIssuePromptTemplate
         maxLiveAgentSessions = try c.decodeIfPresent(Int.self, forKey: .maxLiveAgentSessions) ?? 5
         maxLiveWebViews = try c.decodeIfPresent(Int.self, forKey: .maxLiveWebViews) ?? 8
         idleSessionProtectionMinutes = try c.decodeIfPresent(Int.self, forKey: .idleSessionProtectionMinutes)
@@ -254,6 +308,11 @@ public struct Settings: Codable, Sendable, Equatable {
     /// these, exactly as with the Claude Code templates.
     public static let defaultPiReviewPromptTemplate = "Review the pull request at {url}."
     public static let defaultPiIssuePromptTemplate = "Start work on issue {number}."
+
+    /// codex has no `/review` command either, and its prompt is a positional argument rather
+    /// than a flag, so the same prose defaults apply.
+    public static let defaultCodexReviewPromptTemplate = "Review the pull request at {url}."
+    public static let defaultCodexIssuePromptTemplate = "Start work on issue {number}."
 
     public static let defaultReviewRequestQueries: [DiscoveryQuery] = [
         DiscoveryQuery(text: "review-requested:@me is:open"),

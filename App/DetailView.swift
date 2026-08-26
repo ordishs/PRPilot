@@ -114,6 +114,14 @@ struct DetailView: View {
                     Label(kind.displayName, systemImage: review.agent == kind ? "checkmark" : "")
                 }
             }
+            // Only offered while the item is actually blocked. A plain switch loses the
+            // context; this one writes the handover note first.
+            if model.canHandOver(review) {
+                Divider()
+                Button("Hand over to \(model.settings.failoverAgent.displayName)…") {
+                    Task { await model.handOverToFailoverAgent(for: review.id) }
+                }
+            }
         } label: {
             Label(effectiveAgent.displayName, systemImage: "cpu")
         }

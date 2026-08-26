@@ -7,11 +7,13 @@ import Foundation
 public enum AgentKind: String, Codable, Sendable, CaseIterable {
     case claudeCode
     case pi
+    case codex
 
     public var displayName: String {
         switch self {
         case .claudeCode: return "Claude Code"
         case .pi: return "pi"
+        case .codex: return "Codex"
         }
     }
 
@@ -20,6 +22,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         switch self {
         case .claudeCode: return "claude"
         case .pi: return "pi"
+        case .codex: return "codex"
         }
     }
 }

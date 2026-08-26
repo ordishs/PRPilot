@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import AgentKit
+import PRPilotModels
 
 private func makeTempDir() throws -> URL {
     let dir = FileManager.default.temporaryDirectory
@@ -282,4 +283,75 @@ private let turnDurationSettledLine = """
     try await Task.sleep(nanoseconds: 300_000_000)
 
     #expect(received.count == 1)
+}
+
+// MARK: - codex: two candidate directories, one shared with every other project
+
+/// codex writes every project's sessions into one day directory, so "newest file in the
+/// directory" is the wrong answer. The watcher must tail this worktree's transcript even when
+/// another project's is newer.
+@Test @MainActor func watcherIgnoresANewerTranscriptFromAnotherProject() async throws {
+    let dir = try makeTempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let worktree = try makeTempDir()
+    defer { try? FileManager.default.removeItem(at: worktree) }
+
+    let mine = dir.appendingPathComponent("rollout-2026-08-26T14-00-00-11111111-1111-1111-1111-111111111111.jsonl")
+    try codexRollout(cwd: worktree.path, message: "mine").write(to: mine, atomically: true, encoding: .utf8)
+
+    let theirs = dir.appendingPathComponent("rollout-2026-08-26T14-05-00-22222222-2222-2222-2222-222222222222.jsonl")
+    try codexRollout(cwd: "/Users/me/dev/unrelated", message: "theirs")
+        .write(to: theirs, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: theirs.path
+    )
+
+    let watcher = TranscriptWatcher(transcriptDirs: [dir], kind: .codex, worktreePath: worktree.path)
+    var received: [TranscriptEvent] = []
+    var sessionIDs: [String] = []
+    watcher.start(onEvent: { received.append($0) }, onSessionFile: { sessionIDs.append($0) })
+    try await Task.sleep(nanoseconds: 300_000_000)
+    watcher.stop()
+
+    #expect(sessionIDs == ["11111111-1111-1111-1111-111111111111"])
+    #expect(received.contains { $0.snippet == "mine" })
+    #expect(!received.contains { $0.snippet == "theirs" })
+}
+
+/// A session that starts before midnight keeps appending to the previous day's directory, so
+/// the watcher covers more than one. It must find the transcript in either.
+@Test @MainActor func watcherFindsATranscriptInASecondCandidateDirectory() async throws {
+    let today = try makeTempDir()
+    let yesterday = try makeTempDir()
+    defer {
+        try? FileManager.default.removeItem(at: today)
+        try? FileManager.default.removeItem(at: yesterday)
+    }
+    let worktree = try makeTempDir()
+    defer { try? FileManager.default.removeItem(at: worktree) }
+
+    let url = yesterday.appendingPathComponent("rollout-2026-08-25T23-59-00-33333333-3333-3333-3333-333333333333.jsonl")
+    try codexRollout(cwd: worktree.path, message: "across midnight")
+        .write(to: url, atomically: true, encoding: .utf8)
+
+    let watcher = TranscriptWatcher(
+        transcriptDirs: [today, yesterday], kind: .codex, worktreePath: worktree.path
+    )
+    var received: [TranscriptEvent] = []
+    watcher.start { received.append($0) }
+    try await Task.sleep(nanoseconds: 300_000_000)
+    watcher.stop()
+
+    #expect(received.contains { $0.snippet == "across midnight" })
+    #expect(received.last?.turnCompleted == true)
+}
+
+/// A codex transcript with `session_meta`, one agent message and a completed turn.
+private func codexRollout(cwd: String, message: String) -> String {
+    let lines = [
+        #"{"timestamp":"2026-08-26T12:00:00.000Z","type":"session_meta","payload":{"cwd":"\#(cwd)","originator":"cli"}}"#,
+        #"{"timestamp":"2026-08-26T12:00:01.000Z","type":"event_msg","payload":{"type":"agent_message","message":"\#(message)"}}"#,
+        #"{"timestamp":"2026-08-26T12:00:02.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1"}}"#,
+    ]
+    return lines.joined(separator: "\n") + "\n"
 }

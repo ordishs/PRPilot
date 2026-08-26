@@ -12,6 +12,10 @@ public struct PiBackend: AgentBackend {
 
     // MARK: - Transcript location
 
+    public func transcriptDirectories(forWorktreePath path: String) -> [URL] {
+        [transcriptDirectory(forWorktreePath: path)]
+    }
+
     public func transcriptDirectory(forWorktreePath path: String) -> URL {
         // pi derives the folder name by dropping the leading '/', replacing the remaining
         // '/' with '-', and wrapping the result in '--'. Unlike Claude Code it does NOT
@@ -67,6 +71,43 @@ public struct PiBackend: AgentBackend {
             }
         }
         return args
+    }
+
+    // MARK: - Handover
+
+    /// pi wraps every turn in a `message` envelope and types it by `message.role`. Text lives
+    /// in `content[]` blocks of type `text`, the same shape `parse` reads for its snippet.
+    public func conversationEntry(line: Data) -> HandoverEntry? {
+        struct Line: Decodable {
+            let type: String?
+            let timestamp: String?
+            let message: Message?
+
+            struct Message: Decodable {
+                let role: String?
+                let content: [Block]?
+
+                struct Block: Decodable {
+                    let type: String?
+                    let text: String?
+                }
+            }
+        }
+        guard let event = try? JSONDecoder().decode(Line.self, from: line) else { return nil }
+        guard event.type == "message" else { return nil }
+        guard let ts = event.timestamp, let date = TranscriptTimestamp.date(from: ts) else { return nil }
+        let role: HandoverEntry.Role
+        switch event.message?.role {
+        case "assistant": role = .assistant
+        case "user": role = .user
+        default: return nil
+        }
+        let text = (event.message?.content ?? [])
+            .compactMap { $0.type == "text" ? $0.text : nil }
+            .joined(separator: "\n\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        return HandoverEntry(role: role, date: date, text: text)
     }
 
     // MARK: - Transcript parsing

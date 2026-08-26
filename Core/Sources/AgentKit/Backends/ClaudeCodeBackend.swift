@@ -11,6 +11,10 @@ public struct ClaudeCodeBackend: AgentBackend {
 
     // MARK: - Transcript location
 
+    public func transcriptDirectories(forWorktreePath path: String) -> [URL] {
+        [transcriptDirectory(forWorktreePath: path)]
+    }
+
     public func transcriptDirectory(forWorktreePath path: String) -> URL {
         // Claude Code derives the transcript folder name from the working directory by
         // replacing every character that is not ASCII-alphanumeric or '-' with '-'.
@@ -90,6 +94,68 @@ public struct ClaudeCodeBackend: AgentBackend {
             workflowPending: state.pendingWorkflows > 0,
             limitMessage: limitMessage(from: line, type: event.type)
         )
+    }
+
+    // MARK: - Handover
+
+    /// Claude Code types a line by role at the top level, and puts the text in
+    /// `message.content[]` as `text` blocks. A user line whose content is a tool result is not
+    /// a turn the user typed, so it is skipped.
+    public func conversationEntry(line: Data) -> HandoverEntry? {
+        struct Line: Decodable {
+            let type: String?
+            let timestamp: String?
+            let message: Message?
+
+            struct Message: Decodable {
+                let content: ContentField?
+                enum CodingKeys: String, CodingKey { case content }
+
+                /// A user turn can carry either a bare string or an array of blocks.
+                enum ContentField: Decodable {
+                    case text(String)
+                    case blocks([Block])
+
+                    init(from decoder: Decoder) throws {
+                        if let single = try? decoder.singleValueContainer().decode(String.self) {
+                            self = .text(single)
+                            return
+                        }
+                        self = .blocks(try decoder.singleValueContainer().decode([Block].self))
+                    }
+                }
+
+                struct Block: Decodable {
+                    let type: String?
+                    let text: String?
+                }
+            }
+        }
+        guard let event = try? JSONDecoder().decode(Line.self, from: line) else { return nil }
+        let role: HandoverEntry.Role
+        switch event.type {
+        case "assistant": role = .assistant
+        case "user": role = .user
+        default: return nil
+        }
+        guard let ts = event.timestamp, let date = TranscriptTimestamp.date(from: ts) else { return nil }
+        let text: String
+        switch event.message?.content {
+        case .text(let single):
+            text = single
+        case .blocks(let blocks):
+            // A tool_result block means this "user" line is the harness reporting back, not the
+            // person. Carrying those into a handover would drown the actual conversation.
+            guard !blocks.contains(where: { $0.type == "tool_result" }) else { return nil }
+            text = blocks.compactMap { $0.type == "text" ? $0.text : nil }.joined(separator: "\n\n")
+        case nil:
+            return nil
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        // A system reminder is harness plumbing, not conversation.
+        guard !trimmed.hasPrefix("<system-reminder>") else { return nil }
+        return HandoverEntry(role: role, date: date, text: trimmed)
     }
 
     /// The message of a limit stop, or nil. Reads the same assistant text `extractSnippet`

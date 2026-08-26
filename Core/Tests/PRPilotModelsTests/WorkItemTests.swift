@@ -344,3 +344,55 @@ private let storedLimitMessage =
     #expect(decoded.agentLimitedAt == nil)
     #expect(decoded.agentLimitMessage == nil)
 }
+
+// MARK: - codex
+
+/// An item stored before codex existed must decode with an empty codex slot and every other
+/// session ID untouched. `ReviewStore` migrates additively, so this is the whole migration.
+@Test func itemStoredBeforeCodexDecodesWithNoCodexSession() throws {
+    let json = """
+    {
+      "id": "X", "title": "t", "repoKey": "github.com/o/r",
+      "baseBranch": "main", "origin": "added", "autoReview": false,
+      "addedAt": "2023-11-14T22:13:20Z", "disabled": false, "viewedFiles": [], "approvedByMe": false,
+      "claudeSessionID": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "piSessionID": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    }
+    """
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let decoded = try decoder.decode(WorkItem.self, from: Data(json.utf8))
+    #expect(decoded.codexSessionID == nil)
+    #expect(decoded.claudeSessionID == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    #expect(decoded.piSessionID == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    #expect(decoded.agent == nil)
+}
+
+/// Each agent owns its own slot, so switching an item between agents never overwrites another
+/// agent's conversation.
+@Test func eachAgentKeepsItsOwnSessionSlot() {
+    var item = sampleIssue()
+    item.setSessionID("claude-1", for: .claudeCode)
+    item.setSessionID("pi-1", for: .pi)
+    item.setSessionID("codex-1", for: .codex)
+
+    #expect(item.sessionID(for: .claudeCode) == "claude-1")
+    #expect(item.sessionID(for: .pi) == "pi-1")
+    #expect(item.sessionID(for: .codex) == "codex-1")
+
+    item.setSessionID(nil, for: .codex)
+    #expect(item.sessionID(for: .codex) == nil)
+    #expect(item.sessionID(for: .claudeCode) == "claude-1")
+    #expect(item.sessionID(for: .pi) == "pi-1")
+}
+
+@Test func codexSessionIDRoundTrips() throws {
+    var item = sampleIssue()
+    item.codexSessionID = "01a03df8-9e0c-7672-908a-546665225b9b"
+    item.agent = .codex
+    let data = try JSONEncoder().encode(item)
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: data)
+    #expect(decoded.codexSessionID == "01a03df8-9e0c-7672-908a-546665225b9b")
+    #expect(decoded.agent == .codex)
+    #expect(decoded == item)
+}
