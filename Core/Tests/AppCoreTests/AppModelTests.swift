@@ -2423,6 +2423,8 @@ private func authorUpdateSnapshotJSON(committedDate: String) -> String {
     let client = GitHubClient(runner: StubRunner(results: [
         CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
         CommandResult(exitCode: 0, standardOutput: authorUpdateSnapshotJSON(committedDate: "2026-08-06T11:00:00Z"), standardError: ""),
+        // The first refresh of a repo also reads its merge rules, before the second refresh.
+        CommandResult(exitCode: 0, standardOutput: twoApprovalsRuleJSON, standardError: ""),
         CommandResult(exitCode: 0, standardOutput: authorUpdateSnapshotJSON(committedDate: "2026-08-06T15:30:00Z"), standardError: ""),
     ]), ghPath: "gh")
     let model = AppModel(store: store, client: client, diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
@@ -3137,7 +3139,7 @@ private func waitForItem(
         await model.ensureAgentSession(for: item)
     }
     model.setPRStatusForTesting(
-        PRStatus(ci: .passing, isBehind: false, readiness: .reviewRequired),
+        PRStatus(ci: .passing, mergeState: .clean, readiness: .reviewRequired),
         for: oldest.id
     )
 
@@ -4650,4 +4652,149 @@ private func usageReading(_ percent: Double, readAt: Date = Date()) -> AgentUsag
     await model.waitForPendingItemEdits()
     #expect(model.reviews.first { $0.id == review.id }?.agentUsage?.displayPercent == 94)
     model.terminateAgentSession(for: review.id)
+}
+
+private let secondReviewID = "AAAAAAAA-0000-0000-0000-000000000945"
+
+private func secondReviewInSameRepo() -> WorkItem {
+    WorkItem(
+        id: secondReviewID,
+        title: "second PR on the same base",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        headBranch: "fix/other",
+        prRef: PRRef(
+            owner: "bsv-blockchain", repo: "teranode", number: 945,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/945")!,
+            authorLogin: "ordishs"
+        ),
+        prState: .open,
+        origin: .added,
+        addedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+}
+
+private let blockedSnapshotJSON = """
+{"data":{"repository":{"pullRequest":{
+  "state":"OPEN","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","mergeStateStatus":"BLOCKED",
+  "author":{"login":"ordishs"},
+  "commits":{"nodes":[{"commit":{"committedDate":"2026-08-06T11:00:00Z","statusCheckRollup":null}}]},
+  "reviews":{"nodes":[{"author":{"login":"liam"},"state":"APPROVED","submittedAt":"2026-08-06T09:00:00Z"}]},
+  "reviewThreads":{"nodes":[{"isResolved":false,"resolvedBy":null,"comments":{"nodes":[]}}]},
+  "timelineItems":{"nodes":[]}
+}}}}
+"""
+
+private let twoApprovalsRuleJSON = """
+[{"type":"pull_request","parameters":{"required_approving_review_count":2},"ruleset_id":1}]
+"""
+
+@MainActor private func modelWith(_ runner: StubRunner, store: ReviewStore) -> AppModel {
+    AppModel(
+        store: store,
+        client: GitHubClient(runner: runner, ghPath: "gh"),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+}
+
+@Test @MainActor func refreshReadsTheMergeRulesOncePerRepoAndBase() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    try await store.upsertItem(secondReviewInSameRepo())
+    let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: blockedSnapshotJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: twoApprovalsRuleJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: blockedSnapshotJSON, standardError: ""),
+    ])
+    let model = modelWith(runner, store: store)
+    await model.load()
+
+    await model.refreshReviewState(for: sampleReviewID)
+    await model.refreshReviewState(for: secondReviewID)
+
+    let key = MergeRules.key(owner: "bsv-blockchain", repo: "teranode", branch: "main")
+    #expect(model.mergeRules[key]?.requiredApprovals == 2)
+    let ruleCalls = await runner.recordedArguments.filter { $0.contains("repos/bsv-blockchain/teranode/rules/branches/main") }
+    #expect(ruleCalls.count == 1, "the second PR on the same base must reuse the cached rules")
+    // The snapshot itself still lands, and now carries the blocking detail.
+    #expect(model.prStatuses[sampleReviewID]?.approvalCount == 1)
+    #expect(model.prStatuses[sampleReviewID]?.unresolvedThreads == 1)
+    #expect(model.prStatuses[secondReviewID]?.mergeState == .blocked)
+}
+
+@Test @MainActor func staleMergeRulesAreReadAgainAfterTheTTL() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: blockedSnapshotJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: twoApprovalsRuleJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: blockedSnapshotJSON, standardError: ""),
+        CommandResult(
+            exitCode: 0,
+            standardOutput: """
+            [{"type":"pull_request","parameters":{"required_approving_review_count":3},"ruleset_id":1}]
+            """,
+            standardError: ""
+        ),
+    ])
+    let model = modelWith(runner, store: store)
+    await model.load()
+
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+    await model.refreshReviewState(for: sampleReviewID, now: start)
+    await model.refreshReviewState(for: sampleReviewID, now: start.addingTimeInterval(7 * 3600))
+
+    let key = MergeRules.key(owner: "bsv-blockchain", repo: "teranode", branch: "main")
+    #expect(model.mergeRules[key]?.requiredApprovals == 3)
+}
+
+@Test @MainActor func mergeRulesWithinTheTTLAreNotReadAgain() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: blockedSnapshotJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: twoApprovalsRuleJSON, standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: blockedSnapshotJSON, standardError: ""),
+    ])
+    let model = modelWith(runner, store: store)
+    await model.load()
+
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+    await model.refreshReviewState(for: sampleReviewID, now: start)
+    await model.refreshReviewState(for: sampleReviewID, now: start.addingTimeInterval(600))
+
+    let ruleCalls = await runner.recordedArguments.filter { $0.contains("repos/bsv-blockchain/teranode/rules/branches/main") }
+    #expect(ruleCalls.count == 1)
+}
+
+@Test @MainActor func aFailedMergeRulesReadIsNotRetriedWithinTheTTL() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "ordishs\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: blockedSnapshotJSON, standardError: ""),
+        CommandResult(exitCode: 1, standardOutput: "", standardError: "HTTP 403"),
+        CommandResult(exitCode: 0, standardOutput: blockedSnapshotJSON, standardError: ""),
+    ])
+    let model = modelWith(runner, store: store)
+    await model.load()
+
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+    await model.refreshReviewState(for: sampleReviewID, now: start)
+    await model.refreshReviewState(for: sampleReviewID, now: start.addingTimeInterval(600))
+
+    let key = MergeRules.key(owner: "bsv-blockchain", repo: "teranode", branch: "main")
+    // The failure is remembered as "requirement unknown", so the row falls back to a plain
+    // count instead of asking again on every poll.
+    #expect(model.mergeRules[key] == MergeRules(requiredApprovals: nil))
+    let ruleCalls = await runner.recordedArguments.filter { $0.contains("repos/bsv-blockchain/teranode/rules/branches/main") }
+    #expect(ruleCalls.count == 1)
 }

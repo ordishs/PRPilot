@@ -96,6 +96,35 @@ public struct GitHubClient: Sendable {
         return view.defaultBranchRef?.name ?? "main"
     }
 
+    /// What the base branch demands before it merges. One call per repository and branch,
+    /// not per pull request — the caller caches it.
+    ///
+    /// `rules/branches/{branch}` reports the rulesets that apply to the branch. It answers
+    /// for anyone who can read the repository, unlike the GraphQL `branchProtectionRule`,
+    /// which needs push access and reports nothing at all for a ruleset.
+    public func fetchMergeRules(owner: String, repo: String, branch: String) async throws -> MergeRules {
+        let result = try await runner.run(
+            executable: ghPath,
+            arguments: ["api", "repos/\(owner)/\(repo)/rules/branches/\(branch)"]
+        )
+        guard result.exitCode == 0 else {
+            throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
+        }
+        let rules: [GHBranchRule]
+        do {
+            rules = try JSONDecoder().decode([GHBranchRule].self, from: Data(result.standardOutput.utf8))
+        } catch {
+            throw GitHubError.decodingFailed(String(describing: error))
+        }
+        // A rule that demands zero approvals demands nothing, so it reads as unknown and
+        // the row shows a plain count rather than a "0/0" that means nothing.
+        let required = rules
+            .first { $0.type == "pull_request" }?
+            .parameters?
+            .requiredApprovingReviewCount
+        return MergeRules(requiredApprovals: (required ?? 0) > 0 ? required : nil)
+    }
+
     private func fetchRepoView(owner: String, repo: String) async throws -> GHRepoView {
         let result = try await runner.run(
             executable: ghPath,
@@ -195,8 +224,13 @@ public struct GitHubClient: Sendable {
             myLastReviewAt: resolved.lastSubmittedAt,
             status: PRStatus(
                 ci: Self.aggregateCI(rollup: headCommit?.statusCheckRollup),
-                isBehind: pr.mergeStateStatus == "BEHIND",
+                mergeState: PRStatus.mergeState(from: pr.mergeStateStatus),
                 readiness: PRStatus.readiness(isDraft: pr.isDraft, reviewDecision: pr.reviewDecision),
+                approvalCount: PRStatus.approvalCount(from: pr.reviews.nodes.compactMap {
+                    guard let login = $0.author?.login else { return nil }
+                    return ReviewSubmission(authorLogin: login, state: $0.state, submittedAt: $0.submittedAt)
+                }),
+                unresolvedThreads: threads.filter { !$0.isResolved }.count,
                 authorUpdatedAt: authorUpdatedAt
             )
         )
@@ -442,6 +476,22 @@ struct GHRepoView: Decodable {
     let isFork: Bool
     let parent: Parent?
     let defaultBranchRef: Ref?
+}
+
+/// One entry from `gh api repos/{o}/{r}/rules/branches/{branch}`. Every rule type shares
+/// the envelope; only the `pull_request` rule carries parameters this app reads, and other
+/// rule types carry a `parameters` object of an entirely different shape — hence the
+/// optional and the single field.
+struct GHBranchRule: Decodable {
+    struct Parameters: Decodable {
+        let requiredApprovingReviewCount: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case requiredApprovingReviewCount = "required_approving_review_count"
+        }
+    }
+    let type: String
+    let parameters: Parameters?
 }
 
 struct GHSnapshotResponse: Decodable {

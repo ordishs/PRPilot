@@ -724,3 +724,56 @@ private let mixedReviewsSnapshotJSON = """
     #expect(snapshot.myReviewState == .commented)
     #expect(snapshot.approvedByMe == false)
 }
+
+@Test func snapshotMapsMergeStateStatus() async throws {
+    let cases: [(String, MergeState)] = [
+        ("CLEAN", .clean),
+        ("DIRTY", .conflict),
+        ("BEHIND", .behind),
+        ("BLOCKED", .blocked),
+        ("UNSTABLE", .unstable),
+        ("DRAFT", .unknown),
+    ]
+    for (reported, expected) in cases {
+        let (client, _) = snapshotClient(snapshotJSON(mergeStateStatus: reported))
+        let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+        #expect(snapshot.status.mergeState == expected)
+    }
+}
+
+@Test func snapshotCountsApprovalsFromEveryReviewer() async throws {
+    let reviews = """
+    [{"author":{"login":"alice"},"state":"APPROVED","submittedAt":"2026-08-01T10:00:00Z"},
+     {"author":{"login":"bob"},"state":"COMMENTED","submittedAt":"2026-08-01T10:30:00Z"},
+     {"author":{"login":"bob"},"state":"APPROVED","submittedAt":"2026-08-01T11:00:00Z"},
+     {"author":{"login":"carol"},"state":"APPROVED","submittedAt":"2026-08-01T11:30:00Z"},
+     {"author":{"login":"carol"},"state":"DISMISSED","submittedAt":"2026-08-01T12:00:00Z"},
+     {"author":{"login":"dave"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-01T12:30:00Z"}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(reviewsJSON: reviews))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.approvalCount == 2)
+}
+
+@Test func snapshotCountsNoApprovalsWithoutReviews() async throws {
+    let (client, _) = snapshotClient(snapshotJSON())
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.approvalCount == 0)
+}
+
+@Test func snapshotCountsUnresolvedReviewThreads() async throws {
+    let threads = """
+    [{"isResolved":false,"resolvedBy":null,"comments":{"nodes":[{"author":{"login":"liam"},"createdAt":"2026-08-01T10:00:00Z"}]}},
+     {"isResolved":true,"resolvedBy":{"login":"ordishs"},"comments":{"nodes":[{"author":{"login":"liam"},"createdAt":"2026-08-01T10:05:00Z"}]}},
+     {"isResolved":false,"resolvedBy":null,"comments":{"nodes":[{"author":{"login":"ctnguyen"},"createdAt":"2026-08-01T10:10:00Z"}]}}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(threadsJSON: threads))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.unresolvedThreads == 2)
+}
+
+@Test func snapshotCountsNoUnresolvedThreadsWhenThereAreNone() async throws {
+    let (client, _) = snapshotClient(snapshotJSON())
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.unresolvedThreads == 0)
+}

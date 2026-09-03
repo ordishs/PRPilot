@@ -39,6 +39,11 @@ public final class AppModel {
     public private(set) var claudePrepLog: [String: [PrepLogEntry]] = [:]
     public private(set) var claudeStatuses: [String: AgentStatus] = [:]
     public private(set) var prStatuses: [String: PRStatus] = [:]
+    /// What each base branch demands before it merges, keyed by `MergeRules.key`. Keyed by
+    /// repository and branch rather than by item, because that is what the rules describe —
+    /// twenty PRs onto one branch read it once.
+    public private(set) var mergeRules: [String: MergeRules] = [:]
+    private var mergeRulesReadAt: [String: Date] = [:]
     /// Items autoLoad wants reviewed that have no session yet, most recently opened first.
     public private(set) var queuedReviewIDs: [String] = []
     /// Items autoLoad has had its turn at this run: everything the drain started, and
@@ -92,6 +97,9 @@ public final class AppModel {
     private var notifiedAwaitingForSession: Set<String> = []
     private var lastRefreshedAt: [String: Date] = [:]
     private static let refreshBatchSize = 4
+    /// Merge rules change when somebody edits a ruleset — rarely. A long life keeps the
+    /// extra call off the poll path while still picking up a change the same day.
+    static let mergeRulesTTL: TimeInterval = 6 * 3600
     private var tickTask: Task<Void, Never>?
     private var discoveryTask: Task<Void, Never>?
     private static let tickIntervalNanoseconds: UInt64 = 5_000_000_000
@@ -1711,7 +1719,7 @@ public final class AppModel {
         await refreshWorktreeCleanliness(for: id)
     }
 
-    func refreshReviewState(for id: String) async {
+    func refreshReviewState(for id: String, now: Date = Date()) async {
         await refreshWorktreeCleanliness(for: id)
         guard let login = currentLogin,
               let review = reviews.first(where: { $0.id == id }),
@@ -1741,6 +1749,20 @@ public final class AppModel {
         }
 
         prStatuses[id] = snapshot.status
+        await refreshMergeRules(owner: r.owner, repo: r.repo, branch: review.baseBranch, now: now)
+    }
+
+    /// Reads the base branch's merge rules when the app has none, or a stale copy. A read
+    /// that fails caches the unknown answer: a repository the token cannot see must not
+    /// cost a call on every poll, and the row falls back to a plain approval count.
+    private func refreshMergeRules(owner: String, repo: String, branch: String, now: Date) async {
+        let key = MergeRules.key(owner: owner, repo: repo, branch: branch)
+        if let readAt = mergeRulesReadAt[key], now.timeIntervalSince(readAt) < Self.mergeRulesTTL {
+            return
+        }
+        mergeRulesReadAt[key] = now
+        mergeRules[key] = (try? await client.fetchMergeRules(owner: owner, repo: repo, branch: branch))
+            ?? MergeRules()
     }
 
     func refreshReviewStates() async {

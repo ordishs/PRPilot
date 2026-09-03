@@ -93,6 +93,8 @@ private let noSelection = SidebarFilterSelection()
         (.ciFailing, SidebarItemFacts(ciFailing: true)),
         (.behind, SidebarItemFacts(isBehind: true)),
         (.dirty, SidebarItemFacts(hasLocalChanges: true)),
+        (.conflict, SidebarItemFacts(hasConflict: true)),
+        (.ready, SidebarItemFacts(isReady: true)),
     ]
     for (signal, facts) in cases {
         #expect(facts.has(signal), "\(signal.displayName) should read its own fact")
@@ -143,7 +145,7 @@ private let noSelection = SidebarFilterSelection()
 }
 
 @Test func orderedListsCoverEveryOption() {
-    #expect(SignalFilter.ordered.count == 7)
+    #expect(SignalFilter.ordered.count == 9)
     #expect(ResourceFilter.ordered.count == 3)
     #expect(SignalFilter.ordered.allSatisfy { !$0.displayName.isEmpty })
     #expect(ResourceFilter.ordered.allSatisfy { !$0.displayName.isEmpty })

@@ -22,10 +22,14 @@ public struct SignalFilter: OptionSet, Sendable, Hashable {
     public static let behind = SignalFilter(rawValue: 1 << 5)
     /// A review worktree holds local edits, so it cannot be fast-forwarded to the PR head.
     public static let dirty = SignalFilter(rawValue: 1 << 6)
+    /// The merge has conflicts — the CONFLICT badge.
+    public static let conflict = SignalFilter(rawValue: 1 << 7)
+    /// Nothing but a click stands between the PR and a merge — the READY badge.
+    public static let ready = SignalFilter(rawValue: 1 << 8)
 
     /// Display order of the filter pills. Also the list the counts are built from.
     public static let ordered: [SignalFilter] = [
-        .agent, .needsInput, .working, .author, .ciFailing, .behind, .dirty,
+        .agent, .needsInput, .working, .author, .ciFailing, .behind, .dirty, .conflict, .ready,
     ]
 
     public var displayName: String {
@@ -35,8 +39,10 @@ public struct SignalFilter: OptionSet, Sendable, Hashable {
         case .working: return "Working"
         case .author: return "Author"
         case .ciFailing: return "CI ✗"
-        case .behind: return "Behind"
+        case .behind: return "Rebase"
         case .dirty: return "Dirty"
+        case .conflict: return "Conflict"
+        case .ready: return "Ready"
         default: return ""
         }
     }
@@ -48,8 +54,10 @@ public struct SignalFilter: OptionSet, Sendable, Hashable {
         case .working: return "The agent is running right now"
         case .author: return "The PR author pushed or replied since your last review"
         case .ciFailing: return "CI is failing"
-        case .behind: return "The branch is behind its base"
+        case .behind: return "The branch is behind its base, so it needs a rebase"
         case .dirty: return "This review worktree has local edits, so it was not refreshed to the PR head"
+        case .conflict: return "The merge has conflicts that someone must resolve by hand"
+        case .ready: return "The PR merges cleanly and passes every branch protection rule"
         default: return ""
         }
     }
@@ -108,6 +116,8 @@ public struct SidebarItemFacts: Sendable, Equatable {
     public var hasAuthorUpdate: Bool
     public var ciFailing: Bool
     public var isBehind: Bool
+    public var hasConflict: Bool
+    public var isReady: Bool
     /// Local edits in a review worktree. Only meaningful where the app never writes: an
     /// editable worktree is the user's own branch, and edits there are the point.
     public var hasLocalChanges: Bool
@@ -124,6 +134,8 @@ public struct SidebarItemFacts: Sendable, Equatable {
         hasAuthorUpdate: Bool = false,
         ciFailing: Bool = false,
         isBehind: Bool = false,
+        hasConflict: Bool = false,
+        isReady: Bool = false,
         hasLocalChanges: Bool = false,
         hasWorktree: Bool = false,
         hasSession: Bool = false,
@@ -136,6 +148,8 @@ public struct SidebarItemFacts: Sendable, Equatable {
         self.hasAuthorUpdate = hasAuthorUpdate
         self.ciFailing = ciFailing
         self.isBehind = isBehind
+        self.hasConflict = hasConflict
+        self.isReady = isReady
         self.hasLocalChanges = hasLocalChanges
         self.hasWorktree = hasWorktree
         self.hasSession = hasSession
@@ -152,6 +166,8 @@ public struct SidebarItemFacts: Sendable, Equatable {
         case .ciFailing: return ciFailing
         case .behind: return isBehind
         case .dirty: return hasLocalChanges
+        case .conflict: return hasConflict
+        case .ready: return isReady
         default: return false
         }
     }

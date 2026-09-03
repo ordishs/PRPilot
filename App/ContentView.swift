@@ -31,6 +31,8 @@ struct ContentView: View {
             hasAuthorUpdate: model.hasUnseenAuthorUpdate(review),
             ciFailing: prStatus?.ci == .failing,
             isBehind: prStatus?.isBehind ?? false,
+            hasConflict: prStatus?.mergeState == .conflict,
+            isReady: prStatus?.isReadyToMerge(prState: review.prState) ?? false,
             hasLocalChanges: (model.worktreeLocalChanges[review.id] ?? 0) > 0,
             hasWorktree: review.worktreePath != nil,
             hasSession: model.claudeSessions[review.id] != nil,
@@ -531,6 +533,37 @@ struct ContentView: View {
         }
     }
 
+    /// Approvals against the requirement, when the app could read one. A short count is
+    /// amber because it is the reason a PR sits blocked; a met one is green. Without a
+    /// known requirement the badge falls back to the plain count and claims nothing about
+    /// what the merge needs.
+    @ViewBuilder
+    private func approvalBadge(for review: WorkItem, status: PRStatus) -> some View {
+        let rules = mergeRules(for: review)
+        if let required = rules.requiredApprovals {
+            let short = rules.isApprovalCountShort(status.approvalCount)
+            StateBadge(
+                text: "\(status.approvalCount)/\(required) ✓",
+                color: short ? .orange : .green,
+                help: short
+                    ? "\(status.approvalCount) of the \(required) approvals \(review.baseBranch) requires"
+                    : "\(status.approvalCount) approvals — \(review.baseBranch) requires \(required)"
+            )
+        } else if status.approvalCount > 0 {
+            StateBadge(
+                text: "\(status.approvalCount) ✓",
+                color: .green,
+                help: "\(status.approvalCount) reviewer\(status.approvalCount == 1 ? "" : "s") approved this PR"
+            )
+        }
+    }
+
+    private func mergeRules(for review: WorkItem) -> MergeRules {
+        guard let ref = review.prRef else { return MergeRules() }
+        let key = MergeRules.key(owner: ref.owner, repo: ref.repo, branch: review.baseBranch)
+        return model.mergeRules[key] ?? MergeRules()
+    }
+
     @ViewBuilder
     private func badgeLine(for review: WorkItem) -> some View {
         WrappingHStack(spacing: 4, lineSpacing: 4) {
@@ -575,11 +608,41 @@ struct ContentView: View {
                 case .pending: StateBadge(text: "◷ CI", color: .orange, help: "CI is still running")
                 case .none: EmptyView()
                 }
+                approvalBadge(for: review, status: status)
+                if status.mergeState == .conflict {
+                    StateBadge(
+                        text: "Conflict",
+                        color: .red,
+                        help: "The merge into \(review.baseBranch) has conflicts. Resolve them by hand."
+                    )
+                }
                 if status.isBehind {
-                    StateBadge(text: "behind", color: .orange, help: "The branch is behind \(review.baseBranch)")
+                    StateBadge(
+                        text: "Rebase",
+                        color: .orange,
+                        help: "The branch is behind \(review.baseBranch) and the repo wants it current"
+                    )
                 }
                 if status.readiness == .changesRequested {
                     StateBadge(text: "changes", color: .red, help: "A reviewer requested changes")
+                }
+                // Only on your own work. On a PR you are reviewing, an unresolved thread is
+                // usually your own comment waiting on the author, not a job for you.
+                if status.unresolvedThreads > 0,
+                   [.myPR, .task].contains(review.category(myLogin: model.currentLogin)) {
+                    StateBadge(
+                        text: "\(status.unresolvedThreads) thread\(status.unresolvedThreads == 1 ? "" : "s")",
+                        color: .blue,
+                        help: "\(status.unresolvedThreads) review thread\(status.unresolvedThreads == 1 ? " is" : "s are") "
+                            + "unresolved"
+                    )
+                }
+                if status.isReadyToMerge(prState: review.prState) {
+                    StateBadge(
+                        text: "Ready",
+                        color: .green,
+                        help: "The PR merges cleanly and passes every branch protection rule"
+                    )
                 }
                 if model.hasUnseenAuthorUpdate(review) {
                     StateBadge(
