@@ -4966,11 +4966,18 @@ private func managedRootFixture() -> String {
     )
     await model.load()
 
-    // Neither directory exists yet on a first launch, so the call has to create them.
+    // The directory does not exist yet on a first launch, so the call has to create it.
     model.excludeManagedTreesFromBackups()
 
-    for path in [WorktreeLayout.directory(managedRoot: managedRoot), managedRoot + "/repos"] {
-        let values = try URL(fileURLWithPath: path).resourceValues(forKeys: [.isExcludedFromBackupKey])
-        #expect(values.isExcludedFromBackup == true, "not excluded: \(path)")
-    }
+    let worktrees = WorktreeLayout.directory(managedRoot: managedRoot)
+    let excluded = try URL(fileURLWithPath: worktrees).resourceValues(forKeys: [.isExcludedFromBackupKey])
+    #expect(excluded.isExcludedFromBackup == true)
+
+    // The clone root must stay in the backup. It can hold a branch that exists nowhere else,
+    // and excluding it would leave no copy of that work anywhere.
+    let repos = managedRoot + "/repos"
+    try FileManager.default.createDirectory(atPath: repos, withIntermediateDirectories: true)
+    model.excludeManagedTreesFromBackups()
+    let clones = try URL(fileURLWithPath: repos).resourceValues(forKeys: [.isExcludedFromBackupKey])
+    #expect(clones.isExcludedFromBackup != true, "clones must not be excluded from backups")
 }

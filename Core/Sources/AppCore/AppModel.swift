@@ -1849,19 +1849,21 @@ public final class AppModel {
         return removed
     }
 
-    /// Marks the managed checkouts as excluded from backups.
+    /// Marks the worktree root as excluded from backups.
+    ///
+    /// Only the worktree root. A checkout rebuilds from its clone, so a backup of one buys
+    /// nothing. A clone is different: it can hold a branch that exists nowhere else, because
+    /// nothing forces the user to push before the work item goes away. Excluding `repos/` would
+    /// make the app the only copy of that work and no backup would hold it.
     ///
     /// Called by the app at startup, next to `migrateWorktreeRoot()`, and for the same reason:
-    /// `load()` must not touch the filesystem outside the store. The directories are created
+    /// `load()` must not touch the filesystem outside the store. The directory is created
     /// first, because the flag cannot be set on a path that does not exist yet and a first
     /// launch would otherwise stay unexcluded until the run after it.
     public func excludeManagedTreesFromBackups() {
-        let root = settings.managedRoot
-        let targets = [WorktreeLayout.directory(managedRoot: root), root + "/repos"]
-        for path in targets {
-            try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
-        }
-        BackupExclusion.exclude(paths: targets)
+        let target = WorktreeLayout.directory(managedRoot: settings.managedRoot)
+        try? FileManager.default.createDirectory(atPath: target, withIntermediateDirectories: true)
+        BackupExclusion.exclude(paths: [target])
     }
 
     /// Moves the managed worktree root to a `.noindex` name so Spotlight stops indexing it,
