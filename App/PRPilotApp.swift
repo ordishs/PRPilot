@@ -54,6 +54,7 @@ struct PRPilotApp: App {
                     // Before anything opens a worktree. Deliberately not inside load(),
                     // which must not touch the filesystem outside the store.
                     await created.migrateWorktreeRoot()
+                    created.excludeManagedTreesFromBackups()
                     created.startDiscoveryPolling()
                     created.prewarmClaude()
                     webViewCache.cap = created.settings.maxLiveWebViews

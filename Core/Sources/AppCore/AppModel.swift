@@ -293,11 +293,25 @@ public final class AppModel {
             return item.id
         }
         for id in staleIDs {
+            await releaseWorktree(for: id)
             do { try await store.removeItem(id: id) } catch { continue }
         }
         if !staleIDs.isEmpty {
             reviews = await store.allItems()
         }
+    }
+
+    /// Gives back the worktree of an item that is about to leave the store.
+    ///
+    /// Without this the managed root grows by one checkout for every PR that merges: the item
+    /// goes, and nothing is left to say which directory belonged to it. A dirty worktree is
+    /// left alone — unpushed work outweighs the disk — and the orphan prune, which warns
+    /// before it deletes, still reaches it later.
+    private func releaseWorktree(for id: String) async {
+        guard let item = reviews.first(where: { $0.id == id }),
+              let path = item.worktreePath else { return }
+        guard (try? await worktreeOps.isClean(worktreePath: path)) == true else { return }
+        try? await worktreeOps.removeOrphanWorktree(worktreePath: path)
     }
 
     private func prKey(_ item: WorkItem) -> String? {
@@ -345,6 +359,7 @@ public final class AppModel {
             return item.id
         }
         for id in staleIDs {
+            await releaseWorktree(for: id)
             do { try await store.removeItem(id: id) } catch { continue }
         }
         if !staleIDs.isEmpty {
@@ -1816,18 +1831,37 @@ public final class AppModel {
     }
 
     /// Deletes worktree directories no work item points at. Returns how many went.
+    ///
+    /// Removal goes through git, not the file manager. Deleting the directory alone leaves the
+    /// clone's administrative entry and the branch behind, and the branch pins every object on
+    /// it, so the clone keeps growing after the checkout is gone.
     @discardableResult
     public func pruneOrphanedWorktrees() async -> Int {
         var removed = 0
         for path in orphanedWorktreePaths() {
             do {
-                try FileManager.default.removeItem(atPath: path)
+                try await worktreeOps.removeOrphanWorktree(worktreePath: path)
                 removed += 1
             } catch {
                 errorMessage = "Could not remove \(path): \(error)"
             }
         }
         return removed
+    }
+
+    /// Marks the managed checkouts as excluded from backups.
+    ///
+    /// Called by the app at startup, next to `migrateWorktreeRoot()`, and for the same reason:
+    /// `load()` must not touch the filesystem outside the store. The directories are created
+    /// first, because the flag cannot be set on a path that does not exist yet and a first
+    /// launch would otherwise stay unexcluded until the run after it.
+    public func excludeManagedTreesFromBackups() {
+        let root = settings.managedRoot
+        let targets = [WorktreeLayout.directory(managedRoot: root), root + "/repos"]
+        for path in targets {
+            try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        }
+        BackupExclusion.exclude(paths: targets)
     }
 
     /// Moves the managed worktree root to a `.noindex` name so Spotlight stops indexing it,

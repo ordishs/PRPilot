@@ -263,7 +263,7 @@ private func makeFixture(prNumber: Int) async throws -> GitFixture {
 
     let updated = try await manager.refreshWorktree(
         clonePath: "/tmp/clone",
-        worktreePath: "/tmp/wt",
+        worktreePath: "/tmp/managed/" + WorktreeLayout.directoryName + "/wt",
         number: 42,
         remoteName: "origin"
     )
@@ -284,14 +284,14 @@ private func makeFixture(prNumber: Int) async throws -> GitFixture {
 
     let updated = try await manager.refreshWorktree(
         clonePath: "/tmp/clone",
-        worktreePath: "/tmp/wt",
+        worktreePath: "/tmp/managed/" + WorktreeLayout.directoryName + "/wt",
         number: 42,
         remoteName: "origin"
     )
 
     #expect(updated == true)
     let args = await runner.recordedArguments
-    #expect(args.contains(["-C", "/tmp/wt", "reset", "--hard", "new789"]))
+    #expect(args.contains(["-C", "/tmp/managed/" + WorktreeLayout.directoryName + "/wt", "reset", "--hard", "new789"]))
 }
 
 @Test func refreshWorktreeRefusesToClobberDirtyWorktree() async throws {
@@ -307,7 +307,7 @@ private func makeFixture(prNumber: Int) async throws -> GitFixture {
     do {
         _ = try await manager.refreshWorktree(
             clonePath: "/tmp/clone",
-            worktreePath: "/tmp/wt",
+            worktreePath: "/tmp/managed/" + WorktreeLayout.directoryName + "/wt",
             number: 42,
             remoteName: "origin"
         )
@@ -885,4 +885,122 @@ private func makeLocalRepo(root: String, name: String) async throws -> String {
 
     #expect(listed.standardOutput.contains(newRoot + "/wt1"))
     #expect(!listed.standardOutput.contains(legacyRoot + "/wt1"))
+}
+
+// MARK: - Managed-root guards
+//
+// `checkoutBranchWorktree` can attach to a checkout git already holds the branch in, and that
+// checkout can be the user's own clone. Every operation that rewrites a worktree must refuse
+// such a path, or a PRPilot button reaches a repository PRPilot does not own.
+
+@Test func discardLocalChangesRefusesNonManagedPathAndKeepsTheWork() async throws {
+    let fixture = try await makeFixture(prNumber: 20)
+    defer { try? FileManager.default.removeItem(atPath: fixture.root) }
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: fixture.managedRoot)
+    let work = fixture.root + "/work"
+    try "local edit\n".write(toFile: work + "/README.md", atomically: true, encoding: .utf8)
+    try "scratch\n".write(toFile: work + "/scratch.txt", atomically: true, encoding: .utf8)
+
+    await #expect(throws: WorktreeError.refusedNonManagedWorktree(path: work)) {
+        try await manager.discardLocalChanges(worktreePath: work)
+    }
+
+    #expect(try String(contentsOfFile: work + "/README.md", encoding: .utf8) == "local edit\n")
+    #expect(FileManager.default.fileExists(atPath: work + "/scratch.txt"))
+}
+
+@Test func refreshWorktreeRefusesNonManagedPath() async throws {
+    let fixture = try await makeFixture(prNumber: 21)
+    defer { try? FileManager.default.removeItem(atPath: fixture.root) }
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: fixture.managedRoot)
+    let work = fixture.root + "/work"
+    let headBefore = try await git(["-C", work, "rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+    await #expect(throws: WorktreeError.refusedNonManagedWorktree(path: work)) {
+        _ = try await manager.refreshWorktree(clonePath: work, worktreePath: work, number: 21, remoteName: "origin")
+    }
+
+    let headAfter = try await git(["-C", work, "rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+    #expect(headAfter == headBefore)
+}
+
+@Test func rebaseAndPushRefuseNonManagedPath() async throws {
+    let fixture = try await makeFixture(prNumber: 22)
+    defer { try? FileManager.default.removeItem(atPath: fixture.root) }
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: fixture.managedRoot)
+    let work = fixture.root + "/work"
+
+    await #expect(throws: WorktreeError.refusedNonManagedWorktree(path: work)) {
+        _ = try await manager.rebaseOnto(worktreePath: work, upstream: "origin/main")
+    }
+    await #expect(throws: WorktreeError.refusedNonManagedWorktree(path: work)) {
+        _ = try await manager.rebaseContinue(worktreePath: work)
+    }
+    await #expect(throws: WorktreeError.refusedNonManagedWorktree(path: work)) {
+        try await manager.rebaseAbort(worktreePath: work)
+    }
+    await #expect(throws: WorktreeError.refusedNonManagedWorktree(path: work)) {
+        try await manager.push(worktreePath: work, remoteName: "origin", branch: "pr-branch", force: true)
+    }
+}
+
+@Test func managedWorktreeStillAcceptsTheSameOperations() async throws {
+    let fixture = try await makeFixture(prNumber: 23)
+    defer { try? FileManager.default.removeItem(atPath: fixture.root) }
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: fixture.managedRoot)
+    let clone = try await manager.resolveClone(owner: "o", repo: "r", remoteURL: fixture.remoteURL, registeredClonePath: nil)
+    let worktree = try await manager.createWorktree(clonePath: clone, owner: "o", repo: "r", number: 23)
+    try "dirty\n".write(toFile: worktree + "/README.md", atomically: true, encoding: .utf8)
+    #expect(try await manager.isClean(worktreePath: worktree) == false)
+
+    // The guard must not block the managed case it exists to distinguish from.
+    try await manager.discardLocalChanges(worktreePath: worktree)
+
+    #expect(try await manager.isClean(worktreePath: worktree) == true)
+}
+
+// MARK: - Orphan removal
+
+@Test func removeOrphanWorktreeDropsTheDirectoryAndTheRegistration() async throws {
+    let fixture = try await makeFixture(prNumber: 24)
+    defer { try? FileManager.default.removeItem(atPath: fixture.root) }
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: fixture.managedRoot)
+    let clone = try await manager.resolveClone(owner: "o", repo: "r", remoteURL: fixture.remoteURL, registeredClonePath: nil)
+    let worktree = try await manager.createWorktree(clonePath: clone, owner: "o", repo: "r", number: 24)
+    let listedBefore = try await git(["-C", clone, "worktree", "list", "--porcelain"])
+    #expect(listedBefore.contains("bsv-blockchain-teranode-pr24") || listedBefore.contains("o-r-pr24"))
+
+    // No clone path is passed. The manager has to find it from the worktree itself.
+    try await manager.removeOrphanWorktree(worktreePath: worktree)
+
+    #expect(!FileManager.default.fileExists(atPath: worktree))
+    let listedAfter = try await git(["-C", clone, "worktree", "list", "--porcelain"])
+    #expect(!listedAfter.contains("o-r-pr24"))
+    #expect(!FileManager.default.fileExists(atPath: clone + "/.git/worktrees/o-r-pr24"))
+}
+
+@Test func removeOrphanWorktreeRemovesADirectoryGitNoLongerKnows() async throws {
+    let fixture = try await makeFixture(prNumber: 25)
+    defer { try? FileManager.default.removeItem(atPath: fixture.root) }
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: fixture.managedRoot)
+    let stray = WorktreeLayout.directory(managedRoot: fixture.managedRoot) + "/o-r-pr25"
+    try FileManager.default.createDirectory(atPath: stray, withIntermediateDirectories: true)
+    try "junk\n".write(toFile: stray + "/leftover.txt", atomically: true, encoding: .utf8)
+
+    try await manager.removeOrphanWorktree(worktreePath: stray)
+
+    #expect(!FileManager.default.fileExists(atPath: stray))
+}
+
+@Test func removeOrphanWorktreeRefusesNonManagedPath() async throws {
+    let fixture = try await makeFixture(prNumber: 26)
+    defer { try? FileManager.default.removeItem(atPath: fixture.root) }
+    let manager = WorktreeManager(runner: ProcessCommandRunner(), gitPath: gitPath, managedRoot: fixture.managedRoot)
+    let work = fixture.root + "/work"
+
+    await #expect(throws: WorktreeError.refusedNonManagedWorktree(path: work)) {
+        try await manager.removeOrphanWorktree(worktreePath: work)
+    }
+
+    #expect(FileManager.default.fileExists(atPath: work + "/README.md"))
 }

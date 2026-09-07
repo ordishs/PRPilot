@@ -83,7 +83,7 @@ private func provider(_ runner: CommandRunner, managedRoot: String) -> WorktreeP
 @Test func aDirtyReviewWorktreeStillOpensItsSession() async throws {
     let root = try tempDirectory()
     defer { try? FileManager.default.removeItem(atPath: root) }
-    let worktree = root + "/wt"
+    let worktree = WorktreeLayout.directory(managedRoot: root) + "/wt"
     try FileManager.default.createDirectory(atPath: worktree, withIntermediateDirectories: true)
     let git = ArgumentMatchingGit(status: " M cmd/seeder/seeder.go\n")
 
@@ -109,7 +109,7 @@ private func provider(_ runner: CommandRunner, managedRoot: String) -> WorktreeP
 @Test func aCleanReviewWorktreeIsStillFastForwarded() async throws {
     let root = try tempDirectory()
     defer { try? FileManager.default.removeItem(atPath: root) }
-    let worktree = root + "/wt"
+    let worktree = WorktreeLayout.directory(managedRoot: root) + "/wt"
     try FileManager.default.createDirectory(atPath: worktree, withIntermediateDirectories: true)
     let git = ArgumentMatchingGit(status: "")
 
@@ -129,7 +129,7 @@ private func provider(_ runner: CommandRunner, managedRoot: String) -> WorktreeP
 @Test func aRefreshThatFailsForAnyOtherReasonAlsoOpensTheSession() async throws {
     let root = try tempDirectory()
     defer { try? FileManager.default.removeItem(atPath: root) }
-    let worktree = root + "/wt"
+    let worktree = WorktreeLayout.directory(managedRoot: root) + "/wt"
     try FileManager.default.createDirectory(atPath: worktree, withIntermediateDirectories: true)
 
     // Every git call fails, which is what an unreachable remote looks like from here.

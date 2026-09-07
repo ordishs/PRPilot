@@ -11,6 +11,7 @@ public protocol WorktreeManaging: Sendable {
     func push(worktreePath: String, remoteName: String, branch: String, force: Bool) async throws
     func aheadBehind(worktreePath: String, upstream: String) async throws -> (ahead: Int, behind: Int)
     func repairWorktree(worktreePath: String) async throws
+    func removeOrphanWorktree(worktreePath: String) async throws
 }
 
 extension WorktreeManager: WorktreeManaging {}

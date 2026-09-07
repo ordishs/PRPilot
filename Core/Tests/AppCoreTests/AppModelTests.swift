@@ -184,6 +184,16 @@ private actor StubWorktreeOps: WorktreeManaging {
     func repairWorktree(worktreePath: String) async throws {
         repairedWorktreePaths.append(worktreePath)
     }
+
+    private(set) var removedOrphanPaths: [String] = []
+    var orphanRemovalError: WorktreeError?
+    func removeOrphanWorktree(worktreePath: String) async throws {
+        if let orphanRemovalError { throw orphanRemovalError }
+        removedOrphanPaths.append(worktreePath)
+    }
+
+    func set(isCleanResult: Bool) { self.isCleanResult = isCleanResult }
+    func set(orphanRemovalError: WorktreeError?) { self.orphanRemovalError = orphanRemovalError }
 }
 
 private let sampleReviewID = "AAAAAAAA-0000-0000-0000-000000000944"
@@ -2472,14 +2482,14 @@ private func cappedReview(_ suffix: String, number: Int, openedMinutesAgo: Int) 
 }
 
 @MainActor
-private func cappedModel(store: ReviewStore) -> AppModel {
+private func cappedModel(store: ReviewStore, worktreeOps: WorktreeManaging = StubWorktreeOps()) -> AppModel {
     AppModel(
         store: store,
         client: stubClient(),
         diffLoader: StubDiffLoader(),
         worktreeProvider: StubWorktreeProvider(),
         cloneRegistrar: StubRegistrar(),
-        worktreeOps: StubWorktreeOps(),
+        worktreeOps: worktreeOps,
         claudePath: "/usr/bin/true",
         notificationPoster: StubNotificationPoster()
     )
@@ -2832,7 +2842,10 @@ private func waitForItem(
     settings.managedRoot = managedRoot.path
     try await store.updateSettings(settings)
 
-    let model = cappedModel(store: store)
+    // A real manager, so the assertions below measure the filesystem and not a stub.
+    let model = cappedModel(store: store, worktreeOps: WorktreeManager(
+        runner: ProcessCommandRunner(), gitPath: "git", managedRoot: managedRoot.path
+    ))
     await model.load()
 
     #expect(model.orphanedWorktreePaths().count == 2)
@@ -4797,4 +4810,167 @@ private let twoApprovalsRuleJSON = """
     #expect(model.mergeRules[key] == MergeRules(requiredApprovals: nil))
     let ruleCalls = await runner.recordedArguments.filter { $0.contains("repos/bsv-blockchain/teranode/rules/branches/main") }
     #expect(ruleCalls.count == 1)
+}
+
+// MARK: - Worktree lifecycle
+//
+// A merged PR used to leave its checkout behind for good: the work item went, and nothing was
+// left to say which directory had belonged to it. The managed root then grew by one checkout
+// per merge, and only a manual menu command could reclaim the space.
+
+private func managedRootFixture() -> String {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("managed-\(UUID().uuidString)", isDirectory: true).path
+}
+
+@Test @MainActor func pruningAMergedDiscoveredItemGivesBackItsWorktree() async throws {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.managedRoot = managedRootFixture()
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "review-requested:@me is:open")]
+    seed.myPRsEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    var merged = sampleReview()
+    merged.origin = .discovered
+    merged.prState = .merged
+    merged.worktreePath = WorktreeLayout.directory(managedRoot: seed.managedRoot) + "/bsv-blockchain-teranode-pr944"
+    try await store.upsertItem(merged)
+    let ops = StubWorktreeOps()
+    await ops.set(isCleanResult: true)
+    // Every query answers empty, so the merged PR falls out of the results and gets pruned.
+    let client = GitHubClient(
+        runner: StubRunner(result: CommandResult(exitCode: 0, standardOutput: emptySearchJSON, standardError: "")),
+        ghPath: "gh"
+    )
+    let model = AppModel(
+        store: store, client: client, diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(),
+        worktreeOps: ops, claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.discoverNow()
+
+    #expect(model.reviews.isEmpty)
+    #expect(await ops.removedOrphanPaths == [merged.worktreePath!])
+}
+
+@Test @MainActor func pruningAMergedItemKeepsADirtyWorktree() async throws {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.managedRoot = managedRootFixture()
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "review-requested:@me is:open")]
+    seed.myPRsEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    var merged = sampleReview()
+    merged.origin = .discovered
+    merged.prState = .merged
+    merged.worktreePath = WorktreeLayout.directory(managedRoot: seed.managedRoot) + "/bsv-blockchain-teranode-pr944"
+    try await store.upsertItem(merged)
+    let ops = StubWorktreeOps()
+    // Unpushed work outweighs the disk. The orphan prune, which warns first, still reaches it.
+    await ops.set(isCleanResult: false)
+    // Every query answers empty, so the merged PR falls out of the results and gets pruned.
+    let client = GitHubClient(
+        runner: StubRunner(result: CommandResult(exitCode: 0, standardOutput: emptySearchJSON, standardError: "")),
+        ghPath: "gh"
+    )
+    let model = AppModel(
+        store: store, client: client, diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(),
+        worktreeOps: ops, claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.discoverNow()
+
+    #expect(model.reviews.isEmpty)
+    #expect(await ops.removedOrphanPaths.isEmpty)
+}
+
+@Test @MainActor func pruneOrphanedWorktreesRemovesThroughGit() async throws {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    let managedRoot = managedRootFixture()
+    defer { try? FileManager.default.removeItem(atPath: managedRoot) }
+    seed.managedRoot = managedRoot
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    var live = sampleReview()
+    let worktrees = WorktreeLayout.directory(managedRoot: managedRoot)
+    live.worktreePath = worktrees + "/kept"
+    try await store.upsertItem(live)
+    for name in ["kept", "orphan-a", "orphan-b"] {
+        try FileManager.default.createDirectory(atPath: worktrees + "/" + name, withIntermediateDirectories: true)
+    }
+    let ops = StubWorktreeOps()
+    let model = AppModel(
+        store: store, client: stubClient(), diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(),
+        worktreeOps: ops, claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    #expect(model.orphanedWorktreePaths() == [worktrees + "/orphan-a", worktrees + "/orphan-b"])
+    let removed = await model.pruneOrphanedWorktrees()
+
+    #expect(removed == 2)
+    // Through git, so the clone's administrative entry and the branch go with the directory.
+    #expect(await ops.removedOrphanPaths == [worktrees + "/orphan-a", worktrees + "/orphan-b"])
+}
+
+@Test @MainActor func pruneOrphanedWorktreesReportsAFailureAndCountsOnlyWhatWent() async throws {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    let managedRoot = managedRootFixture()
+    defer { try? FileManager.default.removeItem(atPath: managedRoot) }
+    seed.managedRoot = managedRoot
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    let worktrees = WorktreeLayout.directory(managedRoot: managedRoot)
+    try FileManager.default.createDirectory(atPath: worktrees + "/orphan-a", withIntermediateDirectories: true)
+    let ops = StubWorktreeOps()
+    await ops.set(orphanRemovalError: .refusedNonManagedWorktree(path: worktrees + "/orphan-a"))
+    let model = AppModel(
+        store: store, client: stubClient(), diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(),
+        worktreeOps: ops, claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    let removed = await model.pruneOrphanedWorktrees()
+
+    #expect(removed == 0)
+    #expect(model.errorMessage?.contains("orphan-a") == true)
+}
+
+@Test @MainActor func startupExcludesTheManagedTreesFromBackups() async throws {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    let managedRoot = managedRootFixture()
+    defer { try? FileManager.default.removeItem(atPath: managedRoot) }
+    seed.managedRoot = managedRoot
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    let model = AppModel(
+        store: store, client: stubClient(), diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    // Neither directory exists yet on a first launch, so the call has to create them.
+    model.excludeManagedTreesFromBackups()
+
+    for path in [WorktreeLayout.directory(managedRoot: managedRoot), managedRoot + "/repos"] {
+        let values = try URL(fileURLWithPath: path).resourceValues(forKeys: [.isExcludedFromBackupKey])
+        #expect(values.isExcludedFromBackup == true, "not excluded: \(path)")
+    }
 }

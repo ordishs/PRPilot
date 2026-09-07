@@ -66,9 +66,7 @@ public struct WorktreeManager: Sendable {
     }
 
     public func removeWorktree(clonePath: String, worktreePath: String) async throws {
-        guard isManagedWorktreePath(worktreePath) else {
-            throw WorktreeError.refusedNonManagedWorktree(path: worktreePath)
-        }
+        try requireManagedWorktree(worktreePath)
         try await runGit(["-C", clonePath, "worktree", "remove", worktreePath])
     }
 
@@ -127,6 +125,49 @@ public struct WorktreeManager: Sendable {
         path.hasPrefix(WorktreeLayout.directory(managedRoot: managedRoot) + "/")
     }
 
+    /// Gate for every operation that rewrites a worktree.
+    ///
+    /// `checkoutBranchWorktree` attaches to a checkout git already holds the branch in, and
+    /// that checkout can be the user's own clone. The path then reaches the store, and a
+    /// reset, a clean, a rebase or a push would land on a repository PRPilot does not own.
+    /// Reading such a worktree stays fine; writing to it never is.
+    private func requireManagedWorktree(_ path: String) throws {
+        guard isManagedWorktreePath(path) else {
+            throw WorktreeError.refusedNonManagedWorktree(path: path)
+        }
+    }
+
+    /// Removes a worktree directory no work item points at.
+    ///
+    /// `removeWorktree` needs the clone path, and an orphan has no work item left to carry
+    /// one. Git knows it anyway: the worktree's own `.git` file points back at the clone, so
+    /// read the clone from there and let git drop its registration with the directory. A
+    /// plain `removeItem` would leave the administrative directory and the branch behind.
+    public func removeOrphanWorktree(worktreePath: String) async throws {
+        try requireManagedWorktree(worktreePath)
+        let clonePath = try? await owningClone(worktreePath: worktreePath)
+        if let clonePath,
+           (try? await runGit(["-C", clonePath, "worktree", "remove", "--force", worktreePath])) != nil {
+            return
+        }
+        // A directory git no longer recognises still has to go, or the managed root never
+        // shrinks. Prune afterwards so the clone stops listing what is gone.
+        try FileManager.default.removeItem(atPath: worktreePath)
+        if let clonePath {
+            _ = try? await runGit(["-C", clonePath, "worktree", "prune"])
+        }
+    }
+
+    /// The clone a worktree belongs to. `--git-common-dir` names the clone's own `.git`
+    /// directory, so its parent is the clone root. Git answers with a relative path when the
+    /// target is the clone itself, hence the prefix check.
+    private func owningClone(worktreePath: String) async throws -> String {
+        let out = try await runGit(["-C", worktreePath, "rev-parse", "--git-common-dir"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let common = out.hasPrefix("/") ? out : worktreePath + "/" + out
+        return URL(fileURLWithPath: common).deletingLastPathComponent().path
+    }
+
     private func worktreeForCheckedOutBranch(_ branch: String, clonePath: String) async throws -> String? {
         let listing = try await runGit(["-C", clonePath, "worktree", "list", "--porcelain"])
         var path: String?
@@ -169,6 +210,7 @@ public struct WorktreeManager: Sendable {
         number: Int,
         remoteName: String = "origin"
     ) async throws -> Bool {
+        try requireManagedWorktree(worktreePath)
         // Editable (branch-based) worktrees may hold unpushed local commits — never hard-reset them.
         if (try? await currentBranch(worktreePath: worktreePath)) ?? nil != nil {
             return false
@@ -224,6 +266,7 @@ public struct WorktreeManager: Sendable {
     /// `clean` is deliberately without `-x`: ignored files are build output, they never blocked
     /// the refresh, and deleting them would cost a rebuild for no gain.
     public func discardLocalChanges(worktreePath: String) async throws {
+        try requireManagedWorktree(worktreePath)
         try await runGit(["-C", worktreePath, "reset", "--hard"])
         try await runGit(["-C", worktreePath, "clean", "-fd"])
     }
@@ -261,13 +304,12 @@ public struct WorktreeManager: Sendable {
     }
 
     public func removeWorktreeForcing(clonePath: String, worktreePath: String) async throws {
-        guard isManagedWorktreePath(worktreePath) else {
-            throw WorktreeError.refusedNonManagedWorktree(path: worktreePath)
-        }
+        try requireManagedWorktree(worktreePath)
         try await runGit(["-C", clonePath, "worktree", "remove", "--force", worktreePath])
     }
 
     public func rebaseOnto(worktreePath: String, upstream: String) async throws -> RebaseOutcome {
+        try requireManagedWorktree(worktreePath)
         let result = try await runner.run(executable: gitPath, arguments: ["-C", worktreePath, "-c", "core.editor=true", "rebase", upstream])
         if result.exitCode == 0 { return .clean }
         let conflicted = try await conflictedFiles(worktreePath)
@@ -276,6 +318,7 @@ public struct WorktreeManager: Sendable {
     }
 
     public func rebaseContinue(worktreePath: String) async throws -> RebaseOutcome {
+        try requireManagedWorktree(worktreePath)
         let result = try await runner.run(executable: gitPath, arguments: ["-C", worktreePath, "-c", "core.editor=true", "rebase", "--continue"])
         if result.exitCode == 0 { return .clean }
         let conflicted = try await conflictedFiles(worktreePath)
@@ -284,6 +327,7 @@ public struct WorktreeManager: Sendable {
     }
 
     public func rebaseAbort(worktreePath: String) async throws {
+        try requireManagedWorktree(worktreePath)
         try await runGit(["-C", worktreePath, "rebase", "--abort"])
     }
 
@@ -293,6 +337,7 @@ public struct WorktreeManager: Sendable {
     }
 
     public func push(worktreePath: String, remoteName: String, branch: String, force: Bool) async throws {
+        try requireManagedWorktree(worktreePath)
         var args = ["-C", worktreePath, "push"]
         if force { args.append("--force-with-lease") }
         args += [remoteName, branch]
