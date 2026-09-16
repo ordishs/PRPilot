@@ -13,9 +13,11 @@ let package = Package(
         .library(name: "DiffKit", targets: ["DiffKit"]),
         .library(name: "AgentKit", targets: ["AgentKit"]),
         .library(name: "AppCore", targets: ["AppCore"]),
+        .library(name: "GatewayKit", targets: ["GatewayKit"]),
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.2.0"),
+        .package(url: "https://github.com/hummingbird-project/hummingbird", from: "2.0.0"),
     ],
     targets: [
         .target(name: "PRPilotModels"),
@@ -32,6 +34,13 @@ let package = Package(
             ]
         ),
         .target(
+            name: "GatewayKit",
+            dependencies: [
+                "PRPilotModels",
+                .product(name: "Hummingbird", package: "hummingbird"),
+            ]
+        ),
+        .target(
             name: "AppCore",
             dependencies: ["PRPilotModels", "ReviewStore", "GitHubKit", "CommandSupport", "WorktreeKit", "DiffKit", "AgentKit"]
         ),
@@ -43,5 +52,13 @@ let package = Package(
         .testTarget(name: "AppCoreTests", dependencies: ["AppCore", "PRPilotModels", "ReviewStore", "GitHubKit", "CommandSupport", "DiffKit", "AgentKit"]),
         .testTarget(name: "DiffKitTests", dependencies: ["DiffKit", "CommandSupport"]),
         .testTarget(name: "AgentKitTests", dependencies: ["AgentKit"]),
+        .testTarget(
+            name: "GatewayKitTests",
+            dependencies: [
+                "GatewayKit",
+                "PRPilotModels",
+                .product(name: "HummingbirdTesting", package: "hummingbird"),
+            ]
+        ),
     ]
 )
