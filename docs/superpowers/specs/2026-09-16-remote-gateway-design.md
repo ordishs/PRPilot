@@ -182,6 +182,25 @@ GatewayBadge
 an optional attention reason plus primary command. This is the rule the whole
 list layout depends on, so it is pure, total, and heavily tested.
 
+Its input is `GatewayItemFacts`, a flat value type of booleans and dates that
+`AppCore` builds:
+
+```
+GatewayItemFacts
+  isDisabled: Bool
+  limitMessage: String?        non-nil when the agent stopped on a limit
+  awaitsMyResponse: Bool       from WorkItem.awaitsMyResponse(myLogin:)
+  hasVerdict: Bool
+  hasUnseenAuthorUpdate: Bool
+  sessionIsLive: Bool
+  isQueued: Bool
+```
+
+`AgentStatus` lives in `AgentKit`, which links SwiftTerm. `GatewayKit` must not
+depend on `AgentKit`, or the gateway would drag a terminal emulator into a
+module that renders no terminal. `AppCore` flattens `AgentStatus` into these
+booleans at the boundary.
+
 Priority order, first match wins:
 
 | Condition | Group | Reason | Primary command |
@@ -265,22 +284,33 @@ Middleware guards every `/api/*` route:
    `tailscale serve` proxy can reach the listener.
 2. Require a tailnet identity, and check it against an allowlist in Settings.
 
-**Open item, both branches specified.** `tailscale serve --help` on version
-1.98.9 does not document the identity headers it injects. The header set must
-be confirmed against a live `tailscale serve` before step 2 is implemented.
+Step 2 is a protocol, not a fixed mechanism:
 
-- **If the proxy injects an identity header:** read it, and compare the login
-  against the Settings allowlist, which defaults to this node's own tailnet
-  login.
-- **If it does not:** fall back to a bearer token. The app generates it at
-  first launch, stores it in the Keychain, and shows it in Settings as a QR
-  code. The client stores it in `localStorage` after the first scan and sends
-  it as `Authorization: Bearer`.
+```swift
+public protocol IdentityVerifier: Sendable {
+    func verify(headers: [String: String]) -> GatewayIdentity?
+}
+```
 
-Either branch satisfies the same middleware interface, so the rest of the
-design is unaffected. The probe is: serve a local echo endpoint through
-`tailscale serve --bg`, request it over the `*.ts.net` URL from a second
-device, and record the received headers.
+Two implementations ship, both tested: `TailnetHeaderVerifier(headerName:allowlist:)`
+and `BearerTokenVerifier(token:)`. Settings picks which one is wired at
+startup. The gateway is therefore not blocked on the open item below, and the
+answer changes one line of wiring rather than the middleware.
+
+**Open item.** `tailscale serve --help` on version 1.98.9 does not document the
+identity headers it injects. Confirm the header set against a live
+`tailscale serve` to decide which verifier is the default.
+
+- **If the proxy injects an identity header:** `TailnetHeaderVerifier` is the
+  default. The allowlist defaults to this node's own tailnet login.
+- **If it does not:** `BearerTokenVerifier` is the default. The app generates
+  the token at first launch, stores it in the Keychain, and shows it in
+  Settings as a QR code. The client keeps it in `localStorage` after the first
+  scan and sends it as `Authorization: Bearer`.
+
+The probe is: serve a local echo endpoint through `tailscale serve --bg`,
+request it over the `*.ts.net` URL from a second device, and record the
+received headers.
 
 `tailscale funnel` must never be used. It exposes the listener to the public
 internet.
@@ -430,8 +460,8 @@ route. Nothing here blocks that.
 ## Open items
 
 1. The tailnet identity header set, as described under Authentication. Both
-   branches are fully specified, so implementation is not blocked on the
-   answer. Resolve it before writing the middleware.
+   verifiers ship regardless, so no task is blocked. The answer decides only
+   which verifier Settings selects by default.
 
 ## Future work, explicitly out of scope
 
