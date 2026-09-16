@@ -30,7 +30,8 @@ public enum GatewayRouter {
         backend: any GatewayBackend,
         verifier: any IdentityVerifier,
         ledger: CommandLedger,
-        appVersion: String
+        appVersion: String,
+        broadcaster: SnapshotBroadcaster? = nil
     ) -> Router<BasicRequestContext> {
         let router = Router()
         let encoder = GatewayCoding.encoder
@@ -53,6 +54,32 @@ public enum GatewayRouter {
             return json(try encoder.encode(snapshot))
         }
 
+        guarded.get("/events") { _, _ -> Response in
+            guard let broadcaster else { throw HTTPError(.serviceUnavailable) }
+            let stream = await broadcaster.subscribe()
+
+            let body = ResponseBody { writer in
+                for await snapshot in stream {
+                    var frame = ByteBuffer()
+                    frame.writeString("data: ")
+                    frame.writeBytes(try encoder.encode(snapshot))
+                    frame.writeString("\n\n")
+                    try await writer.write(frame)
+                }
+                try await writer.finish(nil)
+            }
+
+            return Response(
+                status: .ok,
+                headers: [
+                    .contentType: "text/event-stream",
+                    .cacheControl: "no-cache",
+                    .connection: "keep-alive",
+                ],
+                body: body
+            )
+        }
+
         guarded.post("/command") { request, _ -> Response in
             var request = request
             let body = try await request.collectBody(upTo: 64 * 1024)
@@ -70,6 +97,7 @@ public enum GatewayRouter {
 
             let result = await backend.perform(envelope.command)
             await ledger.record(result, for: envelope.commandID)
+            broadcaster?.poke()
             return json(try encoder.encode(result))
         }
 

@@ -1,19 +1,19 @@
 import Foundation
 
-public enum GatewayGroupKind: String, Codable, Sendable, Equatable, CaseIterable {
+public enum GatewayGroupKind: String, Codable, Sendable, Hashable, CaseIterable {
     case needsYou
     case running
     case queued
     case idle
 }
 
-public enum GatewayItemKind: String, Codable, Sendable, Equatable {
+public enum GatewayItemKind: String, Codable, Sendable, Hashable {
     case pr
     case issue
     case task
 }
 
-public enum GatewayBadgeTone: String, Codable, Sendable, Equatable {
+public enum GatewayBadgeTone: String, Codable, Sendable, Hashable {
     case green
     case orange
     case red
@@ -21,7 +21,7 @@ public enum GatewayBadgeTone: String, Codable, Sendable, Equatable {
     case grey
 }
 
-public struct GatewayBadge: Codable, Sendable, Equatable {
+public struct GatewayBadge: Codable, Sendable, Hashable {
     public var text: String
     public var tone: GatewayBadgeTone
     /// The same sentence the Mac badge shows on hover. A five-letter chip cannot say which
@@ -35,7 +35,7 @@ public struct GatewayBadge: Codable, Sendable, Equatable {
     }
 }
 
-public struct GatewayAgent: Codable, Sendable, Equatable {
+public struct GatewayAgent: Codable, Sendable, Hashable {
     public var kind: String
     public var status: String
     public var verdict: String?
@@ -57,7 +57,7 @@ public struct GatewayAgent: Codable, Sendable, Equatable {
     }
 }
 
-public struct GatewayItem: Codable, Sendable, Equatable, Identifiable {
+public struct GatewayItem: Codable, Sendable, Hashable, Identifiable {
     public var id: String
     public var kind: GatewayItemKind
     public var owner: String?

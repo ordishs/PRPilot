@@ -4,7 +4,7 @@ import Foundation
 ///
 /// There is deliberately no case for `push`, `rebase`, `continueRebase` or `abortRebase`.
 /// A request cannot reach a git action, because no case encodes one.
-public enum GatewayCommand: Codable, Sendable, Equatable {
+public enum GatewayCommand: Codable, Sendable, Hashable {
     case refreshAll
     case refreshItem(id: String)
     case markAuthorUpdateSeen(id: String)
