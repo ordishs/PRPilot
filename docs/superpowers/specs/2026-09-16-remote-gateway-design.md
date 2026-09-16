@@ -278,11 +278,23 @@ confirm before it sends the command at all.
 
 ### Authentication
 
-Middleware guards every `/api/*` route:
+The listener binds to `127.0.0.1`. The operating system therefore enforces that
+only a local process can connect, and `tailscale serve` is the only intended
+one. No middleware check can improve on that, so none is written.
 
-1. Reject any request whose peer address is not loopback. Only the
-   `tailscale serve` proxy can reach the listener.
-2. Require a tailnet identity, and check it against an allowlist in Settings.
+**A tailnet identity header alone is not sufficient.** Any local process can
+set an arbitrary request header. If the gateway trusted
+`Tailscale-User-Login` by itself, any program on the Mac could forge it and
+drive the queue. The proxy injecting the header does not stop a client that
+bypasses the proxy and talks to the loopback port directly.
+
+`BearerTokenVerifier` is therefore the default, whatever the probe finds. The
+token is a shared secret that a forged header cannot supply. A tailnet header,
+when present, is recorded for display and audit only. `TailnetHeaderVerifier`
+ships for the case where the listener is later moved behind a socket that only
+the proxy can reach, and it is never the default on a loopback port.
+
+Middleware guards every `/api/*` route with one check: verify the identity.
 
 Step 2 is a protocol, not a fixed mechanism:
 
@@ -301,12 +313,12 @@ answer changes one line of wiring rather than the middleware.
 identity headers it injects. Confirm the header set against a live
 `tailscale serve` to decide which verifier is the default.
 
-- **If the proxy injects an identity header:** `TailnetHeaderVerifier` is the
-  default. The allowlist defaults to this node's own tailnet login.
-- **If it does not:** `BearerTokenVerifier` is the default. The app generates
-  the token at first launch, stores it in the Keychain, and shows it in
-  Settings as a QR code. The client keeps it in `localStorage` after the first
-  scan and sends it as `Authorization: Bearer`.
+The app generates the bearer token at first launch, stores it in the Keychain,
+and shows it in Settings as a QR code. The client keeps it in `localStorage`
+after the first scan and sends it as `Authorization: Bearer`.
+
+The probe result decides only whether the snapshot can also report which
+tailnet user is connected. It does not change the authentication mechanism.
 
 The probe is: serve a local echo endpoint through `tailscale serve --bg`,
 request it over the `*.ts.net` URL from a second device, and record the
@@ -459,9 +471,9 @@ route. Nothing here blocks that.
 
 ## Open items
 
-1. The tailnet identity header set, as described under Authentication. Both
-   verifiers ship regardless, so no task is blocked. The answer decides only
-   which verifier Settings selects by default.
+1. The tailnet identity header set, as described under Authentication. This is
+   now cosmetic. Authentication uses the bearer token either way. The answer
+   decides only whether the snapshot can display the connected tailnet user.
 
 ## Future work, explicitly out of scope
 
