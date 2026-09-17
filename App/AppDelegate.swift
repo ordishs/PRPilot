@@ -22,12 +22,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// again whenever the user changes the toggle or the port.
     func reconcileGateway(model: AppModel) {
         let wanted = model.settings.gatewayEnabled
-        let portChanged = gateway?.port != model.settings.gatewayPort
+        let host = TailnetAddress.bindAddress(for: model.settings.gatewayBindScope)
+        let addressChanged = gateway?.port != model.settings.gatewayPort || gateway?.host != host
 
-        if wanted, gateway == nil || portChanged {
+        if wanted, gateway == nil || addressChanged {
             gateway?.stop()
             let service = GatewayService(
                 backend: model,
+                host: host,
                 port: model.settings.gatewayPort,
                 token: GatewayToken.loadOrCreate(),
                 appVersion: Self.shortVersion,
@@ -41,7 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    var gatewayTailscaleCommand: String? { gateway?.tailscaleCommand }
+    /// Where a reverse proxy should point, shown in Settings. Nil when the gateway is off.
+    var gatewayProxyTarget: String? { gateway?.proxyTarget }
 
     /// The bundled client, when it is present. A build without it still serves the API, so
     /// the gateway is useful from `curl` before the web client exists.

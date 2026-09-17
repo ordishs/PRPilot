@@ -5,6 +5,7 @@ import Hummingbird
 @MainActor
 public final class GatewayService {
     private let backend: any GatewayBackend
+    public let host: String
     public let port: Int
     private let token: String
     private let appVersion: String
@@ -15,12 +16,14 @@ public final class GatewayService {
 
     public init(
         backend: any GatewayBackend,
+        host: String = TailnetAddress.loopback,
         port: Int,
         token: String,
         appVersion: String,
         webRoot: URL? = nil
     ) {
         self.backend = backend
+        self.host = host
         self.port = port
         self.token = token
         self.appVersion = appVersion
@@ -34,6 +37,9 @@ public final class GatewayService {
     /// Settings rather than run for them, because it changes their tailnet configuration.
     public var tailscaleCommand: String { "tailscale serve --bg \(port)" }
 
+    /// Where a reverse proxy on another tailnet node should point.
+    public var proxyTarget: String { "http://\(host):\(port)" }
+
     public func start() {
         guard runTask == nil else { return }
 
@@ -46,11 +52,12 @@ public final class GatewayService {
             webRoot: webRoot
         )
 
-        // Loopback only. The operating system then guarantees that nothing off this machine
-        // can reach the listener, and `tailscale serve` is the only intended local client.
+        // The operating system enforces the boundary. Loopback means nothing off this
+        // machine can connect at all; a tailnet address means only tailnet peers can.
+        // Neither is ever a wildcard — see `TailnetAddress.bindAddress(for:)`.
         let app = Application(
             router: router,
-            configuration: .init(address: .hostname("127.0.0.1", port: port))
+            configuration: .init(address: .hostname(host, port: port))
         )
 
         runTask = Task {

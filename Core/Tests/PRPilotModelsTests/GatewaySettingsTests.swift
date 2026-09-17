@@ -32,3 +32,29 @@ import Foundation
     #expect(recovered.gatewayEnabled)
     #expect(recovered.gatewayPort == 9001)
 }
+
+@Test func theGatewayBindsLoopbackByDefault() {
+    #expect(Settings.default.gatewayBindScope == .loopback)
+}
+
+@Test func settingsStoredBeforeTheBindScopeExistedDefaultToLoopback() throws {
+    var object = try JSONSerialization.jsonObject(
+        with: JSONEncoder().encode(Settings.default)
+    ) as! [String: Any]
+    object.removeValue(forKey: "gatewayBindScope")
+
+    let stripped = try JSONSerialization.data(withJSONObject: object)
+    let recovered = try JSONDecoder().decode(Settings.self, from: stripped)
+
+    #expect(recovered.gatewayBindScope == .loopback)
+}
+
+@Test func theBindScopeSurvivesARoundTrip() throws {
+    var settings = Settings.default
+    settings.gatewayBindScope = .tailnet
+
+    let data = try JSONEncoder().encode(settings)
+    let recovered = try JSONDecoder().decode(Settings.self, from: data)
+
+    #expect(recovered.gatewayBindScope == .tailnet)
+}

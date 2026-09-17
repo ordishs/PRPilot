@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import CoreImage
 import AppCore
+import GatewayKit
 import PRPilotModels
 
 struct SettingsView: View {
@@ -569,9 +570,14 @@ private struct RemoteSettingsTab: View {
 
     @State private var enabled = false
     @State private var port = 8776
+    @State private var bindScope: GatewayBindScope = .loopback
     @State private var revealToken = false
     @State private var token = ""
     @State private var confirmingRegenerate = false
+
+    private var boundAddress: String { TailnetAddress.bindAddress(for: bindScope) }
+
+    private var proxyTarget: String { "http://\(boundAddress):\(port)" }
 
     private var serveCommand: String { "tailscale serve --bg \(port)" }
 
@@ -589,27 +595,47 @@ private struct RemoteSettingsTab: View {
                         .frame(width: 80)
                         .multilineTextAlignment(.trailing)
                 }
-            }
 
-            Section("Publish on your tailnet") {
-                LabeledContent("Command") {
-                    HStack(spacing: 6) {
-                        Text(serveCommand)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                        Button {
-                            copy(serveCommand)
-                        } label: {
-                            Image(systemName: "doc.on.doc")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Copy the command")
+                Picker("Listen on", selection: $bindScope) {
+                    ForEach(GatewayBindScope.allCases, id: \.self) { scope in
+                        Text(scope.displayName).tag(scope)
                     }
                 }
-                Text("Run it once in Terminal. Never use `tailscale funnel` — that publishes "
-                     + "the gateway to the whole internet.")
+                .pickerStyle(.segmented)
+
+                Text(bindScope == .loopback
+                     ? "Only this Mac can connect. Use `tailscale serve` to reach it from a phone."
+                     : "Any device on your tailnet can connect, so a reverse proxy on another "
+                       + "tailnet node can forward to it. Never reachable from the internet.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if bindScope == .tailnet && TailnetAddress.current() == nil {
+                    Label("Tailscale is not up, so the gateway is on loopback instead.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            Section(bindScope == .tailnet ? "Point your reverse proxy here" : "Publish on your tailnet") {
+                if bindScope == .tailnet {
+                    LabeledContent("Target") {
+                        copyableMonospaced(proxyTarget)
+                    }
+                    Text("On the proxy host, `proxy_pass` to that address. Turn buffering off "
+                         + "for `/api/events` or the live stream will appear to hang.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    LabeledContent("Command") {
+                        copyableMonospaced(serveCommand)
+                    }
+                    Text("Run it once in Terminal. Never use `tailscale funnel` — that publishes "
+                         + "the gateway to the whole internet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Pairing token") {
@@ -662,18 +688,37 @@ private struct RemoteSettingsTab: View {
         .onAppear {
             enabled = model.settings.gatewayEnabled
             port = model.settings.gatewayPort
+            bindScope = model.settings.gatewayBindScope
         }
         .onChange(of: enabled) { _, _ in commit() }
         .onChange(of: port) { _, _ in commit() }
+        .onChange(of: bindScope) { _, _ in commit() }
     }
 
     private func commit() {
         var updated = model.settings
         updated.gatewayEnabled = enabled
         updated.gatewayPort = max(1024, min(65535, port))
+        updated.gatewayBindScope = bindScope
         Task {
             await model.updateSettings(updated)
             (NSApp.delegate as? AppDelegate)?.reconcileGateway(model: model)
+        }
+    }
+
+    @ViewBuilder
+    private func copyableMonospaced(_ string: String) -> some View {
+        HStack(spacing: 6) {
+            Text(string)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+            Button {
+                copy(string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .help("Copy")
         }
     }
 

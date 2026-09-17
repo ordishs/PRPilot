@@ -80,8 +80,11 @@ public struct Settings: Codable, Sendable, Equatable {
     /// Whether the remote gateway listens. Off by default — a listener nobody asked for is
     /// a listener nobody is watching.
     public var gatewayEnabled: Bool
-    /// Loopback port the gateway binds. `tailscale serve` fronts it; nothing else should.
+    /// Port the gateway binds.
     public var gatewayPort: Int
+    /// Which interface the gateway listens on. Loopback unless a reverse proxy on another
+    /// tailnet node needs to reach it.
+    public var gatewayBindScope: GatewayBindScope
 
     private enum LegacyKeys: String, CodingKey {
         case discoveryQueries
@@ -137,6 +140,7 @@ public struct Settings: Codable, Sendable, Equatable {
         case hideParked
         case gatewayEnabled
         case gatewayPort
+        case gatewayBindScope
     }
 
     public init(
@@ -183,7 +187,8 @@ public struct Settings: Codable, Sendable, Equatable {
         idleSessionProtectionMinutes: Int = SessionDefaults.idleProtectionMinutes,
         hideParked: Bool = false,
         gatewayEnabled: Bool = false,
-        gatewayPort: Int = 8776
+        gatewayPort: Int = 8776,
+        gatewayBindScope: GatewayBindScope = .loopback
     ) {
         self.managedRoot = managedRoot
         self.reviewRequestQueries = reviewRequestQueries
@@ -229,6 +234,7 @@ public struct Settings: Codable, Sendable, Equatable {
         self.hideParked = hideParked
         self.gatewayEnabled = gatewayEnabled
         self.gatewayPort = gatewayPort
+        self.gatewayBindScope = gatewayBindScope
     }
 
     public init(from decoder: Decoder) throws {
@@ -298,6 +304,7 @@ public struct Settings: Codable, Sendable, Equatable {
         hideParked = try c.decodeIfPresent(Bool.self, forKey: .hideParked) ?? false
         gatewayEnabled = try c.decodeIfPresent(Bool.self, forKey: .gatewayEnabled) ?? false
         gatewayPort = try c.decodeIfPresent(Int.self, forKey: .gatewayPort) ?? 8776
+        gatewayBindScope = try c.decodeIfPresent(GatewayBindScope.self, forKey: .gatewayBindScope) ?? .loopback
 
         if let rrq = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .reviewRequestQueries) {
             reviewRequestQueries = rrq
