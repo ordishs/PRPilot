@@ -7,6 +7,9 @@
 - **Revised:** 2026-09-17 — decision 13, the bind scope. The original spec said
   the listener binds loopback only, which made a reverse proxy on another
   tailnet node impossible. See "Lifetime" and "Authentication".
+- **Revised:** 2026-09-17 — decision 14, tabs. The four groups became a
+  segmented control after use on a phone showed a scrolling list buries the
+  group that matters. See "List screen".
 
 ## Summary
 
@@ -49,6 +52,7 @@ The gateway is a projection over `AppModel`. It adds no domain logic.
 | 11 | Detail layout | Sticky primary action, secondary commands in a sheet | The one-tap fix must not require a scroll |
 | 12 | Client framework | Preact and `htm`, vendored, no build step | Keyed diffing keeps scroll, focus and sheet state alive across 1 Hz snapshot pushes |
 | 13 | Bind scope | Setting, loopback by default, tailnet optional | A reverse proxy on another tailnet node cannot reach a loopback listener. Safe by default, explicit to widen, never a wildcard. Added 2026-09-17 |
+| 14 | Group presentation | One tab per group, top segmented control, always opens on Needs you | A scrolling list put the group that matters below the fold on a real phone. Added 2026-09-17 |
 
 ## Architecture
 
@@ -396,8 +400,30 @@ diffing makes a snapshot push a no-op for untouched rows.
 
 ### List screen
 
-Rows are grouped under `Needs you`, `Running`, `Queued`, and `Idle`, in that
-order. A group header shows its count. An empty group is hidden.
+A segmented control under the header selects one group: `Needs you`, `Running`,
+`Queued`, `Idle`, always in that order, each showing its count. The list below
+shows that group alone.
+
+The tab bar replaces per-group headings rather than adding to them. The
+selected tab is the heading, so repeating it above the rows would be noise.
+
+**Why tabs rather than one grouped list.** The original design stacked all four
+groups with sticky headings. In use on a phone that buried the group that
+matters: with a realistic queue, `Needs you` could sit below the fold behind
+`Running` and `Queued`.
+
+Three rules follow from that, and the design depends on all three:
+
+- **The view always opens on `Needs you`**, never the last tab used. A stuck
+  agent must not sit unseen behind a tab the user happened to leave selected.
+- **The `Needs you` count renders as a filled badge when it is non-zero.** Three
+  groups are now one tap away, so that badge carries the "is anything stuck?"
+  signal the grouped list gave for free. At zero it is a plain number.
+- **Empty tabs stay selectable** and say what is absent — "No agent is running"
+  rather than a blank list. An empty group is information, not a dead end.
+
+The selected tab is tinted to its group, amber for `Needs you` and green for
+`Running`, preserving the colour coding the old headings carried.
 
 A row shows the title, the attention reason in words, and the repository,
 number and relative time. It carries no badges. A row with no attention reason
@@ -437,9 +463,22 @@ a full snapshot, so there is nothing to reconcile.
 
 ### Home screen install
 
-`manifest.json` with `display: standalone`, an `apple-touch-icon`, and the
-`apple-mobile-web-app-capable` meta tag. No service worker in v1. The client is
-pull-only, so there is no push to receive and no offline requirement.
+`manifest.json` with `display: standalone` and the `apple-mobile-web-app-capable`
+meta tag. No service worker in v1: the client is pull-only, so there is nothing
+to receive in the background and no offline requirement.
+
+Icons are generated from the Mac app's own `AppIcon` asset, so the phone, the
+browser tab and the Dock all show one mark:
+
+| File | Used for |
+|---|---|
+| `icon-32.png` | Browser tab favicon |
+| `icon-180.png` | `apple-touch-icon`, iOS home screen |
+| `icon-192.png` | Manifest icon, and a larger favicon |
+| `icon-512.png` | Manifest icon, declared `any` and `maskable` |
+
+`maskable` matters on Android, which crops a non-maskable icon into its own
+shape and can clip the artwork.
 
 ## Testing
 
@@ -453,6 +492,8 @@ pull-only, so there is no push to receive and no offline requirement.
   tailnet scope returns either a `100.64.0.0/10` address or loopback — never a
   LAN address and never `0.0.0.0`.
 - Auth middleware rejects a missing or non-allowlisted identity.
+- The client declares a tab, a label and an empty message for every
+  `GatewayGroupKind` the server can send, checked against the real `app.js`.
 - Every `GatewayCommand` case maps to the intended backend call.
 - A repeated `commandID` returns the cached result and does not call the
   backend a second time.

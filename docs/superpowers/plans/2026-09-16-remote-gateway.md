@@ -12,7 +12,8 @@
 
 **Status (2026-09-17):** Tasks 1 to 12 are implemented and committed. Task 13
 is outstanding, and needs a device plus either Serve enabled on the tailnet or
-the nginx route. Task 14 was added after the plan was written.
+the nginx route. Tasks 14 and 15 were added after the plan was written, from
+using the thing on a real phone.
 
 ## Global Constraints
 
@@ -3110,3 +3111,58 @@ tailnet 100.96.202.45   HTTP 200
 `/api/events`, or the SSE stream connects and then appears dead. For nginx:
 `proxy_buffering off; proxy_cache off; gzip off; proxy_read_timeout 3600s;`
 plus `proxy_http_version 1.1` and `proxy_set_header Connection "";`.
+
+
+---
+
+### Task 15: Tabs and app icons (added 2026-09-17)
+
+Added after the client was in daily use on an iPhone, reached through nginx on
+`jump.masa.gi`.
+
+**Status: DONE**, committed as `5f0d43d` and the icon work alongside it.
+
+**Files:**
+- Modified: `App/Resources/web/app.js`
+- Modified: `App/Resources/web/app.css`
+- Modified: `App/Resources/web/index.html`
+- Modified: `App/Resources/web/manifest.json`
+- Created: `App/Resources/web/icon-32.png`, `icon-192.png`, `icon-512.png`
+- Modified: `Core/Tests/GatewayKitTests/ClientCommandContractTests.swift`
+
+**Why.** The original list stacked all four groups with sticky headings. On a
+real phone with a real queue that buried the group that matters: `Needs you`
+could sit below the fold behind `Running` and `Queued`. The whole point of the
+client is answering "is anything stuck?" without work.
+
+**What changed:**
+
+- `TAB_ORDER`, `TAB_LABELS` and `EMPTY_MESSAGES` drive a segmented control under
+  the header. `countsByGroup` fills in zeros for the groups the server omits
+  when empty, so every tab always has a count.
+- `List` renders one group. The per-group headings are gone, because the
+  selected tab is now the heading.
+- The view always opens on `Needs you`. Deliberately not the last tab used: a
+  stuck agent must not sit behind a tab left selected yesterday.
+- The `Needs you` count becomes a filled amber badge when non-zero. With three
+  groups a tap away, that badge is what carries the signal the grouped list gave
+  for free.
+- Empty tabs stay selectable and name what is absent.
+- Icons are generated from the Mac app's `AppIcon` asset at 32, 180, 192 and
+  512 px, so the browser tab, the iOS home screen and the Dock share one mark.
+  The 512 is declared both `any` and `maskable`, because Android crops a
+  non-maskable icon into its own shape and can clip the artwork.
+
+**Tests added**, both reading the real `app.js`:
+
+- Every `GatewayGroupKind` the server can send has a tab, a label and an empty
+  message in the client.
+- `TAB_ORDER` lists every group kind.
+
+These join the existing contract tests, which already fail the build if a
+command name or badge tone drifts. Verified they can fail: renaming a command
+in the client produced `unknown command type handOverTo`.
+
+**Known gap, unchanged:** the client still has no automated rendering tests.
+These contract tests check that the client and server agree on names, not that
+the page looks right. That remains a deliberate choice, recorded in the spec.
