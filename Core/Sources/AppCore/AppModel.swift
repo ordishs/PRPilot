@@ -1696,7 +1696,7 @@ public final class AppModel {
 
     /// Counts the local changes in a review worktree, so the sidebar can flag one that cannot
     /// be fast-forwarded. Editable items are skipped: their worktree is the user's own branch.
-    func refreshWorktreeCleanliness(for id: String) async {
+    public func refreshWorktreeCleanliness(for id: String) async {
         guard let review = reviews.first(where: { $0.id == id }) else { return }
         guard review.category(myLogin: currentLogin) == .reviewRequest,
               let worktreePath = review.worktreePath,
@@ -1734,7 +1734,7 @@ public final class AppModel {
         await refreshWorktreeCleanliness(for: id)
     }
 
-    func refreshReviewState(for id: String, now: Date = Date()) async {
+    public func refreshReviewState(for id: String, now: Date = Date()) async {
         await refreshWorktreeCleanliness(for: id)
         guard let login = currentLogin,
               let review = reviews.first(where: { $0.id == id }),

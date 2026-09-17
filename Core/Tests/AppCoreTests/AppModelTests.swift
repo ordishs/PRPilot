@@ -8,6 +8,7 @@ import DiffKit
 import WorktreeKit
 @testable import AppCore
 import AgentKit
+import GatewayKit
 
 private actor StubRunner: CommandRunner {
     private var results: [CommandResult]
@@ -4980,4 +4981,124 @@ private func managedRootFixture() -> String {
     model.excludeManagedTreesFromBackups()
     let clones = try URL(fileURLWithPath: repos).resourceValues(forKeys: [.isExcludedFromBackupKey])
     #expect(clones.isExcludedFromBackup != true, "clones must not be excluded from backups")
+}
+
+// MARK: - Gateway backend conformance
+
+@MainActor
+private func gatewayModel(_ store: ReviewStore) -> AppModel {
+    AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+}
+
+@Test @MainActor func theGatewaySnapshotProjectsAStoredPullRequest() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = gatewayModel(store)
+    await model.load()
+
+    let snapshot = model.snapshot()
+    let projected = snapshot.groups.flatMap(\.items)
+
+    #expect(projected.count == 1)
+    #expect(projected.first?.number == 944)
+    #expect(projected.first?.kind == .pr)
+    #expect(projected.first?.author == "icellan")
+    #expect(projected.first?.baseBranch == "main")
+    #expect(snapshot.gatewayVersion == GatewayVersion.current)
+}
+
+@Test @MainActor func anEmptyQueueProjectsNoGroupsRatherThanEmptyOnes() throws {
+    let model = gatewayModel(try ReviewStore(fileURL: tempStoreURL()))
+
+    #expect(model.snapshot().groups.isEmpty)
+}
+
+@Test @MainActor func aQuietItemLandsInTheIdleGroup() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = gatewayModel(store)
+    await model.load()
+
+    #expect(model.snapshot().groups.map(\.kind) == [.idle])
+}
+
+@Test @MainActor func aDisabledItemStaysIdleAndSaysSoOnTheWire() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var seeded = sampleReview()
+    seeded.disabled = true
+    try await store.upsertItem(seeded)
+    let model = gatewayModel(store)
+    await model.load()
+
+    let projected = try #require(model.snapshot().groups.flatMap(\.items).first)
+
+    #expect(projected.isDisabled)
+    #expect(projected.attentionReason == nil)
+}
+
+@Test @MainActor func aLimitedItemReachesTheNeedsYouGroupWithItsPrimaryCommand() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var seeded = sampleReview()
+    seeded.agentLimitMessage = "5-hour limit reached"
+    try await store.upsertItem(seeded)
+    let model = gatewayModel(store)
+    await model.load()
+
+    let snapshot = model.snapshot()
+    let projected = try #require(snapshot.groups.flatMap(\.items).first)
+
+    #expect(snapshot.groups.map(\.kind) == [.needsYou])
+    #expect(projected.attentionReason == "Agent hit its usage limit")
+    #expect(projected.primaryCommand == .clearAgentLimit(id: sampleReviewID))
+    #expect(projected.badges.contains { $0.text == "Limit" && $0.tone == .red })
+}
+
+@Test @MainActor func aCommandForAnUnknownItemIsRejectedRatherThanIgnored() async throws {
+    let model = gatewayModel(try ReviewStore(fileURL: tempStoreURL()))
+
+    let result = await model.perform(.startSession(id: "nope#1", forceFresh: false))
+
+    #expect(result.status == .rejected)
+    #expect(result.message == "no such item")
+}
+
+@Test @MainActor func anUnknownPaneIsRejected() async throws {
+    let model = gatewayModel(try ReviewStore(fileURL: tempStoreURL()))
+
+    let result = await model.perform(.setPane(id: sampleReviewID, pane: "diff"))
+
+    #expect(result.status == .rejected)
+}
+
+@Test @MainActor func anUnknownIssueStatusIsRejected() async throws {
+    let model = gatewayModel(try ReviewStore(fileURL: tempStoreURL()))
+
+    let result = await model.perform(.setIssueStatus(id: sampleReviewID, status: "banana"))
+
+    #expect(result.status == .rejected)
+}
+
+@Test @MainActor func setLabelTravelsThroughTheGatewayOntoTheStoredItem() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = gatewayModel(store)
+    await model.load()
+
+    let result = await model.perform(.setLabel(id: sampleReviewID, label: "perf"))
+
+    #expect(result.status == .accepted)
+    #expect(model.reviews.first?.label == "perf")
+    #expect(result.snapshot.groups.flatMap(\.items).first?.label == "perf")
+}
+
+@Test @MainActor func setDisabledTravelsThroughTheGatewayOntoTheStoredItem() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = gatewayModel(store)
+    await model.load()
+
+    let result = await model.perform(.setDisabled(id: sampleReviewID, disabled: true))
+
+    #expect(result.status == .accepted)
+    #expect(model.reviews.first?.disabled == true)
 }

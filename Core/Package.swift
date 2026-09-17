@@ -42,14 +42,14 @@ let package = Package(
         ),
         .target(
             name: "AppCore",
-            dependencies: ["PRPilotModels", "ReviewStore", "GitHubKit", "CommandSupport", "WorktreeKit", "DiffKit", "AgentKit"]
+            dependencies: ["PRPilotModels", "ReviewStore", "GitHubKit", "CommandSupport", "WorktreeKit", "DiffKit", "AgentKit", "GatewayKit"]
         ),
         .testTarget(name: "PRPilotModelsTests", dependencies: ["PRPilotModels"]),
         .testTarget(name: "ReviewStoreTests", dependencies: ["ReviewStore", "PRPilotModels"]),
         .testTarget(name: "GitHubKitTests", dependencies: ["GitHubKit", "PRPilotModels", "CommandSupport"]),
         .testTarget(name: "CommandSupportTests", dependencies: ["CommandSupport"]),
         .testTarget(name: "WorktreeKitTests", dependencies: ["WorktreeKit", "CommandSupport"]),
-        .testTarget(name: "AppCoreTests", dependencies: ["AppCore", "PRPilotModels", "ReviewStore", "GitHubKit", "CommandSupport", "DiffKit", "AgentKit"]),
+        .testTarget(name: "AppCoreTests", dependencies: ["AppCore", "PRPilotModels", "ReviewStore", "GitHubKit", "CommandSupport", "DiffKit", "AgentKit", "GatewayKit"]),
         .testTarget(name: "DiffKitTests", dependencies: ["DiffKit", "CommandSupport"]),
         .testTarget(name: "AgentKitTests", dependencies: ["AgentKit"]),
         .testTarget(
