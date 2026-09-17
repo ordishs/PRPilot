@@ -4,6 +4,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useMemo,
 } from '/vendor/preact-htm.mjs'
 
 const TOKEN_KEY = 'prpilot.token'
@@ -73,6 +74,51 @@ function useSnapshot(token) {
   }, [token])
 
   return { snapshot, connected, rejected }
+}
+
+const PRIMARY_LABELS = {
+  clearAgentLimit: 'Clear limit and resume',
+  clearWaiting: 'Mark as answered',
+  markAuthorUpdateSeen: 'Mark update seen',
+}
+
+function newCommandID() {
+  if (crypto.randomUUID) return crypto.randomUUID()
+  return `c-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+/// Commands are never applied optimistically. `startSession` takes real time on the Mac,
+/// and a guess the stream later contradicts is worse than a spinner.
+async function sendCommand(token, command) {
+  const response = await fetch('/api/command', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ commandID: newCommandID(), command }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Command failed (${response.status})`)
+  }
+  return response.json()
+}
+
+function findItem(snapshot, id) {
+  for (const group of snapshot.groups) {
+    const found = group.items.find((item) => item.id === id)
+    if (found) return found
+  }
+  return null
+}
+
+function elapsed(seconds) {
+  if (seconds == null) return null
+  if (seconds < 90) return `${seconds}s`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 90) return `${minutes}m`
+  return `${Math.round(minutes / 60)}h`
 }
 
 function itemCount(snapshot) {
@@ -145,9 +191,161 @@ function TokenPrompt({ onToken, failed }) {
   `
 }
 
+function Detail({ item, token, onBack, onError }) {
+  const [busy, setBusy] = useState(null)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [confirmRemove, setConfirmRemove] = useState(false)
+
+  const run = async (command, key) => {
+    setBusy(key)
+    try {
+      const result = await sendCommand(token, command)
+      if (result.status === 'rejected') {
+        onError(result.message || 'The Mac refused that command.')
+      } else {
+        setMoreOpen(false)
+        setConfirmRemove(false)
+      }
+    } catch (error) {
+      onError(String(error.message || error))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const freshSession = { type: 'startSession', id: item.id, forceFresh: true }
+  const primaryCommand = item.primaryCommand || freshSession
+  const primaryLabel = item.primaryCommand
+    ? PRIMARY_LABELS[item.primaryCommand.type] || 'Run'
+    : 'Fresh session'
+
+  const stats = [elapsed(item.agent?.elapsedSeconds), item.agent?.usedPercent != null ? `${item.agent.usedPercent}%` : null]
+    .filter(Boolean)
+    .join(' · ')
+
+  return html`
+    <div class="detail">
+      <button class="back" onClick=${onBack}>‹ Back</button>
+
+      <h1 class="detail-title">${item.title}</h1>
+      <div class="detail-meta">
+        ${[item.repo ? `${item.repo} #${item.number}` : 'task', item.author, item.headBranch]
+          .filter(Boolean)
+          .join(' · ')}
+      </div>
+
+      ${item.attentionReason &&
+        html`<div class="banner">${item.attentionReason}</div>`}
+
+      ${item.agent &&
+        html`
+          <div class="card">
+            <div class="card-head">
+              <span class="agent-kind">${item.agent.kind} · ${item.agent.status}</span>
+              ${stats && html`<span class="agent-stat">${stats}</span>`}
+            </div>
+            ${item.agent.verdict && html`<p class="verdict">${item.agent.verdict}</p>`}
+          </div>
+        `}
+
+      ${item.badges.length > 0 &&
+        html`
+          <div class="label">State</div>
+          <div class="badges">
+            ${item.badges.map(
+              (badge) => html`
+                <span key=${badge.text} class=${`badge ${badge.tone}`}>${badge.text}</span>
+              `
+            )}
+          </div>
+          <div class="badge-help">
+            ${item.badges.map((badge) => html`<div key=${badge.text}>${badge.text} — ${badge.help}</div>`)}
+          </div>
+        `}
+
+      <div class="label">Branch</div>
+      <div class="facts">
+        base ${item.baseBranch} · ↑${item.ahead} ↓${item.behind}
+        ${item.localChanges > 0 ? ` · ${item.localChanges} local` : ''}
+        ${item.issueStatus ? ` · ${item.issueStatus}` : ''}
+      </div>
+
+      ${item.url &&
+        html`<a class="external" href=${item.url} target="_blank" rel="noreferrer">Open on GitHub ↗</a>`}
+
+      <div class="sheet-spacer"></div>
+
+      <div class="sheet">
+        <div class="grabber"></div>
+        <button
+          class="primary"
+          disabled=${busy !== null}
+          onClick=${() => run(primaryCommand, 'primary')}
+        >
+          ${busy === 'primary' ? 'Working…' : primaryLabel}
+        </button>
+
+        <div class="sheet-row">
+          <button disabled=${busy !== null} onClick=${() => run(freshSession, 'fresh')}>
+            ${busy === 'fresh' ? '…' : 'Fresh session'}
+          </button>
+          <button
+            disabled=${busy !== null}
+            onClick=${() => run({ type: 'handOver', id: item.id }, 'handover')}
+          >
+            ${busy === 'handover' ? '…' : 'Hand over'}
+          </button>
+          <button class="more" onClick=${() => setMoreOpen(!moreOpen)}>•••</button>
+        </div>
+
+        ${moreOpen &&
+          html`
+            <div class="more-menu">
+              <button
+                disabled=${busy !== null}
+                onClick=${() => run({ type: 'refreshItem', id: item.id }, 'refresh')}
+              >
+                ${busy === 'refresh' ? '…' : 'Refresh from GitHub'}
+              </button>
+              <button
+                disabled=${busy !== null}
+                onClick=${() => run({ type: 'clearSession', id: item.id }, 'clear')}
+              >
+                ${busy === 'clear' ? '…' : 'Clear session'}
+              </button>
+              <button
+                disabled=${busy !== null}
+                onClick=${() =>
+                  run({ type: 'setDisabled', id: item.id, disabled: !item.isDisabled }, 'disable')}
+              >
+                ${busy === 'disable' ? '…' : item.isDisabled ? 'Enable' : 'Disable'}
+              </button>
+              ${confirmRemove
+                ? html`
+                    <button
+                      class="danger"
+                      disabled=${busy !== null}
+                      onClick=${() => run({ type: 'removeItem', id: item.id }, 'remove')}
+                    >
+                      ${busy === 'remove' ? '…' : 'Really remove — deletes the worktree'}
+                    </button>
+                  `
+                : html`
+                    <button class="danger" onClick=${() => setConfirmRemove(true)}>
+                      Remove from list
+                    </button>
+                  `}
+            </div>
+          `}
+      </div>
+    </div>
+  `
+}
+
 function App() {
   const [token, setToken] = useState(loadToken)
   const [openID, setOpenID] = useState(null)
+  const [error, setError] = useState(null)
   const { snapshot, connected, rejected } = useSnapshot(token)
 
   const pair = useCallback((value) => {
@@ -155,14 +353,16 @@ function App() {
     setToken(value)
   }, [])
 
-  const forget = useCallback(() => {
-    try {
-      localStorage.removeItem(TOKEN_KEY)
-    } catch {
-      // Nothing to clear.
-    }
-    setToken(null)
-  }, [])
+  const open = useMemo(
+    () => (snapshot && openID ? findItem(snapshot, openID) : null),
+    [snapshot, openID]
+  )
+
+  // An item can vanish while its detail screen is open — removed here, or removed at the
+  // Mac. Fall back to the list rather than rendering nothing.
+  useEffect(() => {
+    if (openID && snapshot && !open) setOpenID(null)
+  }, [openID, snapshot, open])
 
   if (!token) {
     return html`<${TokenPrompt} onToken=${pair} failed=${false} />`
@@ -179,11 +379,23 @@ function App() {
   return html`
     <div class="app">
       ${!connected && html`<div class="offline">Reconnecting…</div>`}
-      <header class="bar">
-        <span class="brand">PR Pilot</span>
-        <span class="count">${itemCount(snapshot)} items</span>
-      </header>
-      <${List} snapshot=${snapshot} onOpen=${setOpenID} />
+      ${error && html`<div class="error" onClick=${() => setError(null)}>${error}</div>`}
+      ${open
+        ? html`
+            <${Detail}
+              item=${open}
+              token=${token}
+              onBack=${() => setOpenID(null)}
+              onError=${setError}
+            />
+          `
+        : html`
+            <header class="bar">
+              <span class="brand">PR Pilot</span>
+              <span class="count">${itemCount(snapshot)} items</span>
+            </header>
+            <${List} snapshot=${snapshot} onOpen=${setOpenID} />
+          `}
     </div>
   `
 }
