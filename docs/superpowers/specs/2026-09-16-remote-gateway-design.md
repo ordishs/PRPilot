@@ -1,8 +1,12 @@
 # Remote Gateway — Design Spec
 
 - **Date:** 2026-09-16
-- **Status:** Approved (brainstorm) — ready for implementation planning
+- **Status:** Implemented — Tasks 1 to 12 of the plan are merged; on-device
+  verification outstanding
 - **Scope:** Read and control PR Pilot from an iPhone or iPad over Tailscale
+- **Revised:** 2026-09-17 — decision 13, the bind scope. The original spec said
+  the listener binds loopback only, which made a reverse proxy on another
+  tailnet node impossible. See "Lifetime" and "Authentication".
 
 ## Summary
 
@@ -44,6 +48,7 @@ The gateway is a projection over `AppModel`. It adds no domain logic.
 | 10 | List layout | Grouped by attention reason, no badges in the list | The phone question is "is anything stuck?", not "reproduce my sidebar" |
 | 11 | Detail layout | Sticky primary action, secondary commands in a sheet | The one-tap fix must not require a scroll |
 | 12 | Client framework | Preact and `htm`, vendored, no build step | Keyed diffing keeps scroll, focus and sheet state alive across 1 Hz snapshot pushes |
+| 13 | Bind scope | Setting, loopback by default, tailnet optional | A reverse proxy on another tailnet node cannot reach a loopback listener. Safe by default, explicit to widen, never a wildcard. Added 2026-09-17 |
 
 ## Architecture
 
@@ -103,22 +108,51 @@ the stream cannot miss an update. The only edit the gateway makes inside
 ### Lifetime
 
 `GatewayService` is owned by `AppDelegate`. It starts with the app when
-Settings enables it. It binds to `127.0.0.1` on a configured port. Nothing
-listens on a routable interface.
+Settings enables it, on a configured port and one of two bind scopes.
 
-`tailscale serve` fronts the listener and terminates TLS. The verified local
-Tailscale version is 1.98.9. The expected command is:
+**Bind scope.** Loopback is the default: `127.0.0.1`, so nothing off the Mac
+can connect. The alternative is the Tailscale interface, for the case where a
+reverse proxy on another tailnet node must reach the gateway — a proxy cannot
+reach a loopback listener, so loopback makes that topology impossible.
 
-```
-tailscale serve --bg 8776
-```
+`TailnetAddress` finds the address by matching an up interface against
+`100.64.0.0/10`, the carrier-grade NAT range Tailscale assigns from. Matching
+the range rather than an interface name avoids depending on the `tailscale`
+binary being installed or on `PATH`.
 
-Settings gains three controls:
+The scope never widens beyond what the user asked:
+
+- A `.tailnet` scope with Tailscale down falls back to loopback. A gateway
+  nobody can reach is a nuisance; one that silently binds something wider
+  would be a defect.
+- Neither scope ever binds `0.0.0.0`. There is no code path that can.
+- A `.tailnet` scope binds that one address, so `127.0.0.1` stops answering.
+  This is a deliberate consequence of binding a specific interface.
+
+**Reaching it from a phone.** Two topologies are supported, and the bind scope
+picks between them:
+
+| Scope | Front end | Phone reaches |
+|---|---|---|
+| loopback | `tailscale serve --bg 8776` | `https://<node>.<tailnet>.ts.net` |
+| tailnet | nginx on another tailnet node | a hostname of your own, e.g. `https://prpilot.masa.gi` |
+
+The verified local Tailscale version is 1.98.9. `tailscale serve` requires
+Serve to be enabled for the tailnet in the admin console; it is not on by
+default and the CLI hangs without a clear message when it is off.
+
+A reverse proxy must disable response buffering on `/api/events`. nginx buffers
+proxied responses by default, which holds each snapshot until a buffer fills,
+so the stream connects and then appears dead.
+
+Settings gains four controls:
 
 - Gateway on or off.
 - Port (default 8776).
-- A read-only display of the `tailscale serve` command and the resulting
-  `*.ts.net` URL, with a copy button.
+- Bind scope: "This Mac only" or "Tailnet", with a warning when Tailscale is
+  down.
+- A read-only, copyable line: the `tailscale serve` command under loopback, or
+  the `http://<tailnet-ip>:<port>` proxy target under tailnet.
 
 ## API
 
@@ -278,21 +312,27 @@ confirm before it sends the command at all.
 
 ### Authentication
 
-The listener binds to `127.0.0.1`. The operating system therefore enforces that
-only a local process can connect, and `tailscale serve` is the only intended
-one. No middleware check can improve on that, so none is written.
+The operating system enforces the reachability boundary, because the listener
+binds one specific address. Under loopback only a local process can connect.
+Under the tailnet scope only tailnet peers can. Neither is a wildcard, so no
+middleware check can improve on it and none is written.
 
-**A tailnet identity header alone is not sufficient.** Any local process can
-set an arbitrary request header. If the gateway trusted
-`Tailscale-User-Login` by itself, any program on the Mac could forge it and
-drive the queue. The proxy injecting the header does not stop a client that
-bypasses the proxy and talks to the loopback port directly.
+**A tailnet identity header alone is not sufficient, under either scope.**
+Any process that can reach the listener can set an arbitrary request header.
+If the gateway trusted `Tailscale-User-Login` by itself, any program on the Mac
+— or, under the tailnet scope, any tailnet peer — could forge it and drive the
+queue. The proxy injecting the header does not stop a client that bypasses the
+proxy and talks to the port directly.
+
+The tailnet scope makes this stronger, not weaker, as a reason: it widens the
+set of hosts that can forge a header from "this Mac" to "every device on the
+tailnet".
 
 `BearerTokenVerifier` is therefore the default, whatever the probe finds. The
 token is a shared secret that a forged header cannot supply. A tailnet header,
 when present, is recorded for display and audit only. `TailnetHeaderVerifier`
 ships for the case where the listener is later moved behind a socket that only
-the proxy can reach, and it is never the default on a loopback port.
+the proxy can reach, and it is never the default on a network port.
 
 Middleware guards every `/api/*` route with one check: verify the identity.
 
@@ -406,7 +446,12 @@ pull-only, so there is no push to receive and no offline requirement.
 `GatewayKit` is tested against a fake `GatewayBackend`, with no `AppModel`, no
 `gh`, and no git:
 
-- Auth middleware rejects a non-loopback peer.
+- `TailnetAddress` accepts every address in `100.64.0.0/10` and rejects
+  addresses just outside it, ordinary private ranges, loopback, and malformed
+  input.
+- `bindAddress(for:)` returns loopback for the loopback scope, and for the
+  tailnet scope returns either a `100.64.0.0/10` address or loopback — never a
+  LAN address and never `0.0.0.0`.
 - Auth middleware rejects a missing or non-allowlisted identity.
 - Every `GatewayCommand` case maps to the intended backend call.
 - A repeated `commandID` returns the cached result and does not call the
@@ -474,11 +519,15 @@ route. Nothing here blocks that.
 1. The tailnet identity header set, as described under Authentication. This is
    now cosmetic. Authentication uses the bearer token either way. The answer
    decides only whether the snapshot can display the connected tailnet user.
+   Probing it needs `tailscale serve`, which needs Serve enabled for the
+   tailnet in the admin console — not the case at the time of writing.
 
 ## Future work, explicitly out of scope
 
 - Web Push when an agent stalls. Needs a service worker, a VAPID key pair, and
   subscription storage.
+- Binding loopback and the tailnet address at once. Today the tailnet scope
+  binds one address, so `127.0.0.1` stops answering while it is selected.
 - Git commands from the phone.
 - A mirrored terminal, and the PTY split it requires.
 - A native iOS client on the same API.

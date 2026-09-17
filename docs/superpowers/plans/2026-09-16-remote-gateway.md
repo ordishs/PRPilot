@@ -10,6 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-16-remote-gateway-design.md`
 
+**Status (2026-09-17):** Tasks 1 to 12 are implemented and committed. Task 13
+is outstanding, and needs a device plus either Serve enabled on the tailnet or
+the nginx route. Task 14 was added after the plan was written.
+
 ## Global Constraints
 
 - Target is macOS 14. `Core/Package.swift` declares `platforms: [.macOS(.v14)]`.
@@ -18,7 +22,9 @@
 - `GatewayKit` depends on `PRPilotModels` and Hummingbird only. It must never depend on `AppCore` or `AgentKit`. `AgentKit` links SwiftTerm, and the gateway renders no terminal.
 - Go style rules in `~/.claude/CLAUDE.md` do not apply. This is Swift.
 - No comments unless the code is genuinely non-obvious, matching the surrounding codebase, which comments the *why* and never the *what*.
-- The listener binds to `127.0.0.1` only. Never `0.0.0.0`. Never `tailscale funnel`.
+- The listener binds one specific address — `127.0.0.1` by default, or the
+  Tailscale address when the bind scope says so. Never `0.0.0.0`. Never
+  `tailscale funnel`.
 - Authentication is a bearer token. A tailnet identity header is never trusted on its own, because any local process can forge it.
 - There is no git command in the gateway. `GatewayCommand` has no case for `push`, `rebase`, `continueRebase`, or `abortRebase`.
 - The client fetches nothing from a CDN. Every dependency is vendored into the app bundle.
@@ -3053,3 +3059,54 @@ Write up the results with the literal commands and their output. Report any step
 **Type consistency.** `GatewayGroupKind` cases `needsYou`, `running`, `queued`, `idle` are used identically in Tasks 2, 3, 9 and 11. `GatewayItemFacts` field names match between Tasks 3 and 9. `GatewayCommand` case names match between Tasks 4, 9, 11 and 12, and the JavaScript `type` strings in Task 12 match the Swift decoder's `case` strings in Task 4. `sendCommand` is defined in Task 11 and consumed in Task 12. `SnapshotBroadcaster.poke()` is referenced in Task 7 and defined in Task 8, which Task 7 Step 4 states explicitly.
 
 **Deliberate gaps, restated.** The client has no automated tests. Tasks 11, 12 and 13 verify it by hand, and Task 13 requires reporting what actually happened rather than asserting success.
+
+
+---
+
+### Task 14: Tailnet bind scope (added 2026-09-17)
+
+Added after implementation, when the reverse-proxy topology came up. A proxy on
+another tailnet node cannot reach a loopback listener, so the gateway needed a
+way to bind the Tailscale interface instead.
+
+**Status: DONE**, committed as `362913c`.
+
+**Files:**
+- Created: `Core/Sources/PRPilotModels/GatewayBindScope.swift`
+- Created: `Core/Sources/GatewayKit/TailnetAddress.swift`
+- Created: `Core/Tests/GatewayKitTests/TailnetAddressTests.swift`
+- Modified: `Core/Sources/PRPilotModels/Settings.swift` (adds `gatewayBindScope`)
+- Modified: `Core/Sources/GatewayKit/GatewayService.swift` (adds `host`, `proxyTarget`)
+- Modified: `App/AppDelegate.swift`, `App/SettingsView.swift`
+- Modified: `Core/Tests/PRPilotModelsTests/GatewaySettingsTests.swift`
+
+**What it does:**
+
+- `GatewayBindScope` is `.loopback` (default) or `.tailnet`. It lives in
+  `PRPilotModels`, not `GatewayKit`, because `Settings` cannot import
+  `GatewayKit` without inverting the dependency.
+- `TailnetAddress.current()` walks `getifaddrs` for an up IPv4 interface inside
+  `100.64.0.0/10`. No dependency on the `tailscale` binary.
+- `TailnetAddress.bindAddress(for:)` returns loopback for `.loopback`, and for
+  `.tailnet` returns the Tailscale address or falls back to loopback. It can
+  never return `0.0.0.0`.
+- Settings gains a segmented picker, a Tailscale-is-down warning, and a
+  copyable proxy target.
+
+**Verified on the running app**, not only in tests:
+
+```
+listener:               PR Pilot  TCP 100.96.202.45:8776 (LISTEN)
+LAN 192.168.4.150:8776  HTTP 000   (refused)
+wildcard 0.0.0.0        HTTP 000   (refused)
+tailnet 100.96.202.45   HTTP 200
+/api/snapshot           HTTP 401   (token still required)
+```
+
+**Known consequence:** under `.tailnet` the gateway binds that one address, so
+`127.0.0.1:8776` stops answering. Recorded in the spec under "Future work".
+
+**Reverse proxy note for whoever sets this up:** disable response buffering on
+`/api/events`, or the SSE stream connects and then appears dead. For nginx:
+`proxy_buffering off; proxy_cache off; gzip off; proxy_read_timeout 3600s;`
+plus `proxy_http_version 1.1` and `proxy_set_header Connection "";`.
