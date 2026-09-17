@@ -31,7 +31,8 @@ public enum GatewayRouter {
         verifier: any IdentityVerifier,
         ledger: CommandLedger,
         appVersion: String,
-        broadcaster: SnapshotBroadcaster? = nil
+        broadcaster: SnapshotBroadcaster? = nil,
+        webRoot: URL? = nil
     ) -> Router<BasicRequestContext> {
         let router = Router()
         let encoder = GatewayCoding.encoder
@@ -99,6 +100,12 @@ public enum GatewayRouter {
             await ledger.record(result, for: envelope.commandID)
             broadcaster?.poke()
             return json(try encoder.encode(result))
+        }
+
+        // Static files carry no token, because they hold no data. Every byte of state comes
+        // from a guarded /api route.
+        if let webRoot {
+            router.add(middleware: FileMiddleware(webRoot.path, searchForIndexHtml: true))
         }
 
         return router

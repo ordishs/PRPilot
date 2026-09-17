@@ -77,6 +77,12 @@ public struct Settings: Codable, Sendable, Equatable {
     /// reviews run long tool calls; lower it to make the session cap bite sooner.
     public var idleSessionProtectionMinutes: Int
 
+    /// Whether the remote gateway listens. Off by default — a listener nobody asked for is
+    /// a listener nobody is watching.
+    public var gatewayEnabled: Bool
+    /// Loopback port the gateway binds. `tailscale serve` fronts it; nothing else should.
+    public var gatewayPort: Int
+
     private enum LegacyKeys: String, CodingKey {
         case discoveryQueries
         case sidebarGrouping
@@ -129,6 +135,8 @@ public struct Settings: Codable, Sendable, Equatable {
         case maxLiveWebViews
         case idleSessionProtectionMinutes
         case hideParked
+        case gatewayEnabled
+        case gatewayPort
     }
 
     public init(
@@ -173,7 +181,9 @@ public struct Settings: Codable, Sendable, Equatable {
         maxLiveAgentSessions: Int = 5,
         maxLiveWebViews: Int = 8,
         idleSessionProtectionMinutes: Int = SessionDefaults.idleProtectionMinutes,
-        hideParked: Bool = false
+        hideParked: Bool = false,
+        gatewayEnabled: Bool = false,
+        gatewayPort: Int = 8776
     ) {
         self.managedRoot = managedRoot
         self.reviewRequestQueries = reviewRequestQueries
@@ -217,6 +227,8 @@ public struct Settings: Codable, Sendable, Equatable {
         self.maxLiveWebViews = maxLiveWebViews
         self.idleSessionProtectionMinutes = idleSessionProtectionMinutes
         self.hideParked = hideParked
+        self.gatewayEnabled = gatewayEnabled
+        self.gatewayPort = gatewayPort
     }
 
     public init(from decoder: Decoder) throws {
@@ -284,6 +296,8 @@ public struct Settings: Codable, Sendable, Equatable {
         idleSessionProtectionMinutes = try c.decodeIfPresent(Int.self, forKey: .idleSessionProtectionMinutes)
             ?? SessionDefaults.idleProtectionMinutes
         hideParked = try c.decodeIfPresent(Bool.self, forKey: .hideParked) ?? false
+        gatewayEnabled = try c.decodeIfPresent(Bool.self, forKey: .gatewayEnabled) ?? false
+        gatewayPort = try c.decodeIfPresent(Int.self, forKey: .gatewayPort) ?? 8776
 
         if let rrq = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .reviewRequestQueries) {
             reviewRequestQueries = rrq

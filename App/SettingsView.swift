@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import CoreImage
 import AppCore
 import PRPilotModels
 
@@ -18,6 +20,9 @@ struct SettingsView: View {
 
             ClaudeSettingsTab(model: model)
                 .tabItem { Label("Claude", systemImage: "terminal") }
+
+            RemoteSettingsTab(model: model)
+                .tabItem { Label("Remote", systemImage: "iphone") }
         }
         .frame(width: 560, height: 520)
     }
@@ -550,5 +555,148 @@ private struct ClaudeSettingsTab: View {
         updated.failoverAgent = failoverAgent
         updated.usageWarningPercent = usageWarningPercent
         Task { await model.updateSettings(updated) }
+    }
+}
+
+
+/// Publishes the queue to an iPhone or iPad on the tailnet.
+///
+/// The listener binds to loopback, so `tailscale serve` is the only thing that can reach it
+/// from another device. The token is what authenticates — a proxy header cannot, because any
+/// local process can forge one.
+private struct RemoteSettingsTab: View {
+    let model: AppModel
+
+    @State private var enabled = false
+    @State private var port = 8776
+    @State private var revealToken = false
+    @State private var token = ""
+    @State private var confirmingRegenerate = false
+
+    private var serveCommand: String { "tailscale serve --bg \(port)" }
+
+    var body: some View {
+        Form {
+            Section("Remote access") {
+                Toggle("Run the gateway", isOn: $enabled)
+                Text("Lets an iPhone or iPad on your tailnet watch the queue and clear "
+                     + "blockers. It never listens outside this machine.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                LabeledContent("Port") {
+                    TextField("", value: $port, format: .number.grouping(.never))
+                        .frame(width: 80)
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+
+            Section("Publish on your tailnet") {
+                LabeledContent("Command") {
+                    HStack(spacing: 6) {
+                        Text(serveCommand)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                        Button {
+                            copy(serveCommand)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Copy the command")
+                    }
+                }
+                Text("Run it once in Terminal. Never use `tailscale funnel` — that publishes "
+                     + "the gateway to the whole internet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Pairing token") {
+                if revealToken {
+                    if let image = qrCode(for: token) {
+                        HStack {
+                            Spacer()
+                            Image(nsImage: image)
+                                .interpolation(.none)
+                                .resizable()
+                                .frame(width: 160, height: 160)
+                            Spacer()
+                        }
+                    }
+                    Text(token)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                }
+
+                HStack {
+                    Button(revealToken ? "Hide" : "Show token") {
+                        if !revealToken { token = GatewayToken.loadOrCreate() }
+                        revealToken.toggle()
+                    }
+                    Button("Copy") { copy(GatewayToken.loadOrCreate()) }
+                    Spacer()
+                    Button("Regenerate…", role: .destructive) { confirmingRegenerate = true }
+                }
+
+                Text("Scan the code on the phone, or paste the token once. Anyone holding it "
+                     + "can drive your queue.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .confirmationDialog(
+                "Regenerate the pairing token?",
+                isPresented: $confirmingRegenerate
+            ) {
+                Button("Regenerate", role: .destructive) {
+                    token = GatewayToken.regenerate()
+                    revealToken = true
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Every device you have already paired stops working until you pair it again.")
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear {
+            enabled = model.settings.gatewayEnabled
+            port = model.settings.gatewayPort
+        }
+        .onChange(of: enabled) { _, _ in commit() }
+        .onChange(of: port) { _, _ in commit() }
+    }
+
+    private func commit() {
+        var updated = model.settings
+        updated.gatewayEnabled = enabled
+        updated.gatewayPort = max(1024, min(65535, port))
+        Task {
+            await model.updateSettings(updated)
+            (NSApp.delegate as? AppDelegate)?.reconcileGateway(model: model)
+        }
+    }
+
+    private func copy(_ string: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(string, forType: .string)
+    }
+
+    private func qrCode(for token: String) -> NSImage? {
+        guard !token.isEmpty,
+              let filter = CIFilter(name: "CIQRCodeGenerator")
+        else {
+            return nil
+        }
+
+        filter.setValue(Data(token.utf8), forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage else { return nil }
+
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
+
+        return NSImage(cgImage: cgImage, size: NSSize(width: scaled.extent.width, height: scaled.extent.height))
     }
 }

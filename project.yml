@@ -24,6 +24,8 @@ targets:
         product: AgentKit
       - package: PRPilotCore
         product: CommandSupport
+      - package: PRPilotCore
+        product: GatewayKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ordishs.PRPilot

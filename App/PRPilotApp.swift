@@ -60,6 +60,7 @@ struct PRPilotApp: App {
                     webViewCache.cap = created.settings.maxLiveWebViews
                     model = created
                     appDelegate.model = created
+                    appDelegate.reconcileGateway(model: created)
                 } catch {
                     startupError = "Failed to start: \(error)"
                 }
