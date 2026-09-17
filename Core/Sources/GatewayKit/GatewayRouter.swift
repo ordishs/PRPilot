@@ -131,7 +131,22 @@ public enum GatewayRouter {
         // Static files carry no token, because they hold no data. Every byte of state comes
         // from a guarded /api route.
         if let webRoot {
-            router.add(middleware: FileMiddleware(webRoot.path, searchForIndexHtml: true))
+            // `no-cache` means revalidate, not "never store". Without it Safari applies
+            // heuristic caching and can serve a stale client for hours — and an installed
+            // home-screen app has no reload button to force the issue.
+            let revalidate = CacheControl([
+                (.textHtml, [.noCache]),
+                (.textJavascript, [.noCache]),
+                (.textCss, [.noCache]),
+                (.applicationJson, [.noCache]),
+            ])
+            router.add(
+                middleware: FileMiddleware(
+                    webRoot.path,
+                    cacheControl: revalidate,
+                    searchForIndexHtml: true
+                )
+            )
         }
 
         return router

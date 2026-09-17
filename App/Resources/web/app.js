@@ -462,7 +462,7 @@ function TokenPrompt({ onToken, failed }) {
   `
 }
 
-function Detail({ item, token, onBack, onError, onNotice }) {
+function Detail({ item, token, onError, onNotice }) {
   const [busy, setBusy] = useState(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState(false)
@@ -500,8 +500,6 @@ function Detail({ item, token, onBack, onError, onNotice }) {
 
   return html`
     <div class="detail">
-      <button class="back" onClick=${onBack}>‹ Back</button>
-
       <h1 class="detail-title">${item.title}</h1>
       <div class="detail-meta">
         ${[item.repo ? `${item.repo} #${item.number}` : 'task', item.author, item.headBranch]
@@ -662,27 +660,46 @@ function App() {
 
   return html`
     <div class="app">
-      ${!connected && html`<div class="offline">Reconnecting…</div>`}
-      ${error && html`<div class="error" onClick=${() => setError(null)}>${error}</div>`}
-      ${notice && html`<div class="notice" onClick=${() => setNotice(null)}>${notice}</div>`}
+      <!-- Everything pinned lives here. One sticky container clears the status bar
+           once, and the back button can never scroll out of reach. -->
+      <div class="chrome">
+        ${!connected && html`<div class="offline">Reconnecting…</div>`}
+        ${error && html`<div class="error" onClick=${() => setError(null)}>${error}</div>`}
+        ${notice && html`<div class="notice" onClick=${() => setNotice(null)}>${notice}</div>`}
+        ${open
+          ? html`
+              <div class="detail-bar">
+                <button class="back" onClick=${() => setOpenID(null)}>‹ Back</button>
+                <span class="detail-bar-title">${open.repo ? `${open.repo} #${open.number}` : 'task'}</span>
+              </div>
+            `
+          : html`
+              <header class="bar">
+                <span class="brand">PR Pilot</span>
+                <span class="count">${itemCount(snapshot)} items</span>
+                <!-- Installed to the home screen there is no browser chrome, so no way to
+                     reload and pick up a new client. This is it. -->
+                <button
+                  class="reload"
+                  aria-label="Reload the app"
+                  onClick=${() => location.reload()}
+                >⟳</button>
+              </header>
+              <${FilterBar} query=${query} onQuery=${setQuery} sort=${sort} onSort=${setSort} />
+              ${query.trim() === '' &&
+                html`<${Tabs} counts=${countsByGroup(snapshot)} tab=${tab} onSelect=${setTab} />`}
+            `}
+      </div>
       ${open
         ? html`
             <${Detail}
               item=${open}
               token=${token}
-              onBack=${() => setOpenID(null)}
               onError=${setError}
               onNotice=${setNotice}
             />
           `
         : html`
-            <header class="bar">
-              <span class="brand">PR Pilot</span>
-              <span class="count">${itemCount(snapshot)} items</span>
-            </header>
-            <${FilterBar} query=${query} onQuery=${setQuery} sort=${sort} onSort=${setSort} />
-            ${query.trim() === '' &&
-              html`<${Tabs} counts=${countsByGroup(snapshot)} tab=${tab} onSelect=${setTab} />`}
             <${List}
               snapshot=${snapshot}
               tab=${tab}
