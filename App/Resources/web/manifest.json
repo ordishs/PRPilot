@@ -1,0 +1,12 @@
+{
+  "name": "PR Pilot",
+  "short_name": "PR Pilot",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "background_color": "#0e0e12",
+  "theme_color": "#0e0e12",
+  "icons": [
+    { "src": "/icon-180.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ]
+}

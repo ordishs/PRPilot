@@ -12,7 +12,14 @@ targets:
     type: application
     platform: macOS
     sources:
-      - App
+      - path: App
+        excludes:
+          - "Resources/web/**"
+      # A folder reference, so the client's directory tree is copied into the bundle
+      # verbatim. The page asks for /vendor/preact-htm.mjs by that exact path.
+      - path: App/Resources/web
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: PRPilotCore
         product: PRPilotModels

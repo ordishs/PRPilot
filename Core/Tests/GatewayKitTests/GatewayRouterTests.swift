@@ -178,3 +178,66 @@ private let authHeaders: HTTPFields = [.authorization: "Bearer \(testToken)"]
         }
     }
 }
+
+@Test func theStreamRouteAcceptsATokenInTheQueryStringBecauseEventSourceCannotSetHeaders() async throws {
+    let backend = await FakeGatewayBackend()
+    let broadcaster = SnapshotBroadcaster(backend: backend, interval: .seconds(3600))
+    let app = await MainActor.run {
+        Application(
+            router: GatewayRouter.make(
+                backend: backend,
+                verifier: BearerTokenVerifier(token: testToken),
+                ledger: CommandLedger(capacity: 8),
+                appVersion: "test",
+                broadcaster: broadcaster
+            )
+        )
+    }
+
+    // An SSE body never ends on its own, and the test client collects the whole body.
+    // Shutting the broadcaster down finishes the stream so the response can complete.
+    let closer = Task {
+        try? await Task.sleep(for: .milliseconds(150))
+        await broadcaster.shutdown()
+    }
+
+    try await app.test(.router) { client in
+        try await client.execute(uri: "/api/events?token=\(testToken)", method: .get) { response in
+            #expect(response.status == .ok)
+            #expect(String(buffer: response.body).hasPrefix("data: "))
+        }
+    }
+
+    await closer.value
+}
+
+@Test func theStreamRouteStillRejectsAWrongTokenInTheQueryString() async throws {
+    let backend = await FakeGatewayBackend()
+    let app = await makeApp(backend)
+
+    try await app.test(.router) { client in
+        try await client.execute(uri: "/api/events?token=wrong", method: .get) { response in
+            #expect(response.status == .unauthorized)
+        }
+    }
+}
+
+@Test func noOtherRouteAcceptsATokenInTheQueryString() async throws {
+    let backend = await FakeGatewayBackend()
+    let app = await makeApp(backend)
+
+    try await app.test(.router) { client in
+        try await client.execute(uri: "/api/snapshot?token=\(testToken)", method: .get) { response in
+            #expect(response.status == .unauthorized)
+        }
+        try await client.execute(
+            uri: "/api/command?token=\(testToken)",
+            method: .post,
+            body: ByteBuffer(string: #"{"commandID":"q-1","command":{"type":"refreshAll"}}"#)
+        ) { response in
+            #expect(response.status == .unauthorized)
+        }
+    }
+
+    #expect(await backend.received.isEmpty)
+}

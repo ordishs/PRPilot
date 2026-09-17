@@ -6,6 +6,8 @@ import NIOCore
 struct GatewayAuthMiddleware: RouterMiddleware {
     typealias Context = BasicRequestContext
 
+    static let streamPath = "/api/events"
+
     let verifier: any IdentityVerifier
 
     func handle(
@@ -16,6 +18,16 @@ struct GatewayAuthMiddleware: RouterMiddleware {
         var lowered: [String: String] = [:]
         for field in request.headers {
             lowered[field.name.canonicalName.lowercased()] = field.value
+        }
+
+        // `EventSource` cannot set a request header, so the stream route — and only the
+        // stream route — accepts the token as a query parameter. A token in a query string
+        // lands in logs and history, so it is tolerated where it cannot be avoided and
+        // nowhere else.
+        if lowered["authorization"] == nil,
+           request.uri.path == Self.streamPath,
+           let token = request.uri.queryParameters["token"] {
+            lowered["authorization"] = "Bearer \(token)"
         }
 
         guard verifier.verify(headers: lowered) != nil else {

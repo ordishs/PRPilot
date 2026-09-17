@@ -76,3 +76,64 @@ private func get(_ urlString: String, token: String?) async throws -> (status: I
     let (data, response) = try await URLSession.shared.data(for: request)
     return ((response as! HTTPURLResponse).statusCode, data)
 }
+
+/// The repository's real web client, located from this file so the test does not depend on
+/// the working directory.
+private var webClientRoot: URL {
+    URL(fileURLWithPath: #filePath)          // .../Core/Tests/GatewayKitTests/GatewayServiceTests.swift
+        .deletingLastPathComponent()          // GatewayKitTests
+        .deletingLastPathComponent()          // Tests
+        .deletingLastPathComponent()          // Core
+        .deletingLastPathComponent()          // repo root
+        .appendingPathComponent("App/Resources/web", isDirectory: true)
+}
+
+@Test @MainActor func theServiceServesTheWebClientWithoutATokenBecauseItHoldsNoState() async throws {
+    let port = 18_777
+    let backend = FakeGatewayBackend()
+    let service = GatewayService(
+        backend: backend,
+        port: port,
+        token: "live-token",
+        appVersion: "live",
+        webRoot: webClientRoot
+    )
+    service.start()
+    defer { service.stop() }
+
+    try await Task.sleep(for: .milliseconds(400))
+
+    let page = try await get("http://127.0.0.1:\(port)/", token: nil)
+    #expect(page.status == 200)
+    let markup = String(decoding: page.body, as: UTF8.self)
+    #expect(markup.contains("<title>PR Pilot</title>"))
+    #expect(markup.contains("/app.js"))
+
+    // The page asks for this exact path, so a flattened copy into the bundle would 404 here.
+    let vendored = try await get("http://127.0.0.1:\(port)/vendor/preact-htm.mjs", token: nil)
+    #expect(vendored.status == 200)
+    #expect(String(decoding: vendored.body, as: UTF8.self).contains("export{"))
+
+    let manifest = try await get("http://127.0.0.1:\(port)/manifest.json", token: nil)
+    #expect(manifest.status == 200)
+    #expect(String(decoding: manifest.body, as: UTF8.self).contains("\"display\": \"standalone\""))
+}
+
+@Test @MainActor func servingTheClientDoesNotOpenTheApiToUnauthenticatedCallers() async throws {
+    let port = 18_778
+    let backend = FakeGatewayBackend()
+    let service = GatewayService(
+        backend: backend,
+        port: port,
+        token: "live-token",
+        appVersion: "live",
+        webRoot: webClientRoot
+    )
+    service.start()
+    defer { service.stop() }
+
+    try await Task.sleep(for: .milliseconds(400))
+
+    let snapshot = try await get("http://127.0.0.1:\(port)/api/snapshot", token: nil)
+    #expect(snapshot.status == 401)
+}
