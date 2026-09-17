@@ -5102,3 +5102,69 @@ private func gatewayModel(_ store: ReviewStore) -> AppModel {
     #expect(result.status == .accepted)
     #expect(model.reviews.first?.disabled == true)
 }
+
+// MARK: - Transcript and prompt sending
+
+@Test @MainActor func promptingIsRefusedUnlessTheUserTurnedItOn() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = gatewayModel(store)
+    await model.load()
+
+    let result = await model.perform(.sendPrompt(id: sampleReviewID, text: "carry on"))
+
+    #expect(result.status == .rejected)
+    #expect(result.message?.contains("off") == true)
+}
+
+@Test @MainActor func promptingWithNoLiveSessionIsRefusedEvenWhenAllowed() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = gatewayModel(store)
+    await model.load()
+    var settings = model.settings
+    settings.gatewayAllowPrompts = true
+    await model.updateSettings(settings)
+
+    let result = await model.perform(.sendPrompt(id: sampleReviewID, text: "carry on"))
+
+    #expect(result.status == .rejected)
+    #expect(result.message?.contains("no live session") == true)
+}
+
+@Test @MainActor func anEmptyPromptIsRefusedRatherThanSubmittingABareReturn() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = gatewayModel(store)
+    await model.load()
+    var settings = model.settings
+    settings.gatewayAllowPrompts = true
+    await model.updateSettings(settings)
+
+    let result = await model.perform(.sendPrompt(id: sampleReviewID, text: "   \n  "))
+
+    #expect(result.status == .rejected)
+    #expect(result.message == "nothing to send")
+}
+
+@Test @MainActor func aTranscriptForAnUnknownItemIsUnavailableRatherThanEmpty() async throws {
+    let model = gatewayModel(try ReviewStore(fileURL: tempStoreURL()))
+
+    let transcript = model.transcript(for: "nope#1", limit: 50)
+
+    #expect(transcript.available == false)
+    #expect(transcript.note == "no such item")
+    #expect(transcript.turns.isEmpty)
+}
+
+@Test @MainActor func anItemWithNoWorktreeSaysSoRatherThanShowingNothing() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = gatewayModel(store)
+    await model.load()
+
+    let transcript = model.transcript(for: sampleReviewID, limit: 50)
+
+    #expect(transcript.available == false)
+    #expect(transcript.note?.contains("no worktree") == true)
+}

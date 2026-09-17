@@ -381,3 +381,93 @@ button {
 .more-menu button { width: 100%; }
 
 .more-menu .danger { color: var(--red); border-color: var(--red); }
+
+/* ---------- conversation ---------- */
+
+.conv-open {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.conv { margin-top: 7px; }
+
+.conv-note {
+  margin: 7px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.turn {
+  margin-top: 9px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+/* The user's own turns sit apart from the agent's, so a long exchange stays readable
+   without avatars or heavy chrome. */
+.turn.user {
+  background: var(--blue-bg);
+  border-color: transparent;
+  margin-left: 24px;
+}
+
+.turn-head {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+/* Agents emit indented code and diffs, so whitespace has to survive, but a long line
+   must wrap rather than force the page sideways. */
+.turn-text {
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.reply {
+  display: flex;
+  gap: 7px;
+  align-items: flex-end;
+  margin-top: 12px;
+}
+
+.reply textarea {
+  flex: 1;
+  min-height: 44px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  /* 16px stops iOS zooming the page when the field takes focus. */
+  font: 400 16px/1.4 -apple-system, system-ui, sans-serif;
+  resize: vertical;
+}
+
+.reply button {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.reply button:disabled { opacity: 0.45; }

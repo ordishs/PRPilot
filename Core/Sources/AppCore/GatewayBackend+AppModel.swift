@@ -103,6 +103,22 @@ extension AppModel: GatewayBackend {
                 return rejection(refusal)
             }
             await removeReview(id: id)
+
+        case .sendPrompt(let id, let text):
+            // Off unless the user turned it on. Reading the queue and driving an agent that
+            // runs with permissions skipped are different risks, so they are different
+            // switches.
+            guard settings.gatewayAllowPrompts else {
+                return rejection("Prompting from the phone is off. Turn it on in Settings, Remote.")
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                return rejection("nothing to send")
+            }
+            guard let session = claudeSessions[id] else {
+                return rejection("no live session for this item — start one first")
+            }
+            session.send(prompt: trimmed)
         }
 
         // `AppModel` reports failure by setting `errorMessage` rather than throwing, so the
@@ -111,6 +127,47 @@ extension AppModel: GatewayBackend {
             return rejection(error)
         }
         return GatewayCommandResult(status: .accepted, snapshot: snapshot())
+    }
+
+    public func transcript(for id: String, limit: Int) -> GatewayTranscript {
+        guard let work = reviews.first(where: { $0.id == id }) else {
+            return .unavailable(itemID: id, note: "no such item")
+        }
+
+        let kind = work.effectiveAgent(default: settings.defaultAgent)
+
+        guard let worktreePath = work.worktreePath else {
+            return .unavailable(itemID: id, note: "no worktree yet — start a session first")
+        }
+        guard let url = HandoverNote.transcriptURL(
+            for: kind,
+            worktreePath: worktreePath,
+            sessionID: work.sessionID(for: kind)
+        ) else {
+            return .unavailable(itemID: id, note: "\(kind.displayName) has written no transcript for this item yet")
+        }
+
+        let entries = HandoverNote.entries(inTranscriptAt: url, kind: kind)
+        guard !entries.isEmpty else {
+            return .unavailable(itemID: id, note: "the transcript is there but holds no conversation yet")
+        }
+
+        // The tail is what matters on a phone. Older turns are still on disk and on the Mac.
+        let kept = entries.suffix(limit)
+
+        return GatewayTranscript(
+            itemID: id,
+            agent: kind.displayName,
+            turns: kept.map {
+                GatewayTurn(
+                    role: $0.role == .user ? .user : .assistant,
+                    at: $0.date,
+                    text: $0.text
+                )
+            },
+            truncated: kept.count < entries.count,
+            available: true
+        )
     }
 
     private func rejection(_ message: String) -> GatewayCommandResult {

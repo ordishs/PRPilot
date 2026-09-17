@@ -571,6 +571,7 @@ private struct RemoteSettingsTab: View {
     @State private var enabled = false
     @State private var port = 8776
     @State private var bindScope: GatewayBindScope = .loopback
+    @State private var allowPrompts = false
     @State private var revealToken = false
     @State private var token = ""
     @State private var confirmingRegenerate = false
@@ -616,6 +617,18 @@ private struct RemoteSettingsTab: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
+            }
+
+            Section("Driving the agent") {
+                Toggle("Allow prompts from the phone", isOn: $allowPrompts)
+                Text(allowPrompts
+                     ? "Whoever holds the pairing token can type into a running agent. Your "
+                       + "agents launch with permissions skipped, so that means anything in "
+                       + "your worktrees."
+                     : "The phone can read the conversation but not reply. Turn this on to "
+                       + "answer an agent that is waiting for you.")
+                    .font(.caption)
+                    .foregroundStyle(allowPrompts ? .orange : .secondary)
             }
 
             Section(bindScope == .tailnet ? "Point your reverse proxy here" : "Publish on your tailnet") {
@@ -689,10 +702,12 @@ private struct RemoteSettingsTab: View {
             enabled = model.settings.gatewayEnabled
             port = model.settings.gatewayPort
             bindScope = model.settings.gatewayBindScope
+            allowPrompts = model.settings.gatewayAllowPrompts
         }
         .onChange(of: enabled) { _, _ in commit() }
         .onChange(of: port) { _, _ in commit() }
         .onChange(of: bindScope) { _, _ in commit() }
+        .onChange(of: allowPrompts) { _, _ in commit() }
     }
 
     private func commit() {
@@ -700,6 +715,7 @@ private struct RemoteSettingsTab: View {
         updated.gatewayEnabled = enabled
         updated.gatewayPort = max(1024, min(65535, port))
         updated.gatewayBindScope = bindScope
+        updated.gatewayAllowPrompts = allowPrompts
         Task {
             await model.updateSettings(updated)
             (NSApp.delegate as? AppDelegate)?.reconcileGateway(model: model)

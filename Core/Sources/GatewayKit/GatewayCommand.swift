@@ -20,9 +20,11 @@ public enum GatewayCommand: Codable, Sendable, Hashable {
     case setLabel(id: String, label: String?)
     case setDisabled(id: String, disabled: Bool)
     case removeItem(id: String)
+    /// Type a line into the running agent, as if at the keyboard.
+    case sendPrompt(id: String, text: String)
 
     private enum CodingKeys: String, CodingKey {
-        case type, id, url, pane, status, label, disabled, forceFresh
+        case type, id, url, pane, status, label, disabled, forceFresh, text
     }
 
     public init(from decoder: Decoder) throws {
@@ -74,6 +76,8 @@ public enum GatewayCommand: Codable, Sendable, Hashable {
             )
         case "removeItem":
             self = .removeItem(id: try id())
+        case "sendPrompt":
+            self = .sendPrompt(id: try id(), text: try c.decode(String.self, forKey: .text))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type,
@@ -135,6 +139,10 @@ public enum GatewayCommand: Codable, Sendable, Hashable {
         case .removeItem(let id):
             try c.encode("removeItem", forKey: .type)
             try c.encode(id, forKey: .id)
+        case .sendPrompt(let id, let text):
+            try c.encode("sendPrompt", forKey: .type)
+            try c.encode(id, forKey: .id)
+            try c.encode(text, forKey: .text)
         }
     }
 }

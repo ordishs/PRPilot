@@ -123,6 +123,103 @@ async function sendCommand(token, command) {
   return response.json()
 }
 
+async function fetchTranscript(token, id, limit = 80) {
+  const response = await fetch(
+    `/api/transcript?id=${encodeURIComponent(id)}&limit=${limit}`,
+    { headers: { authorization: `Bearer ${token}` } }
+  )
+  if (!response.ok) throw new Error(`Transcript failed (${response.status})`)
+  return response.json()
+}
+
+function clockTime(iso) {
+  if (!iso) return ''
+  const at = new Date(iso)
+  return Number.isNaN(at.getTime())
+    ? ''
+    : at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+/// The conversation for one item, read from the agent's transcript on disk.
+///
+/// Polls rather than streaming: the snapshot stream carries the queue, and a transcript is
+/// far larger and only wanted while one item is open.
+function Conversation({ item, token, onError }) {
+  const [transcript, setTranscript] = useState(null)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      setTranscript(await fetchTranscript(token, item.id))
+    } catch (error) {
+      onError(String(error.message || error))
+    }
+  }, [token, item.id, onError])
+
+  useEffect(() => {
+    load()
+    const timer = setInterval(load, 4000)
+    return () => clearInterval(timer)
+  }, [load])
+
+  const send = async () => {
+    const text = draft.trim()
+    if (!text) return
+    setSending(true)
+    try {
+      const result = await sendCommand(token, { type: 'sendPrompt', id: item.id, text })
+      if (result.status === 'rejected') {
+        onError(result.message || 'The Mac refused that.')
+      } else {
+        setDraft('')
+        // The agent needs a moment to write its turn before it appears.
+        setTimeout(load, 1200)
+      }
+    } catch (error) {
+      onError(String(error.message || error))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  if (!transcript) {
+    return html`<p class="conv-note">Loading the conversation…</p>`
+  }
+
+  if (!transcript.available) {
+    return html`<p class="conv-note">${transcript.note || 'No conversation yet.'}</p>`
+  }
+
+  return html`
+    <div class="conv">
+      ${transcript.truncated &&
+        html`<p class="conv-note">Showing the most recent turns. The rest is on the Mac.</p>`}
+      ${transcript.turns.map(
+        (turn, index) => html`
+          <div key=${`${turn.at}-${index}`} class=${`turn ${turn.role}`}>
+            <div class="turn-head">
+              ${turn.role === 'user' ? 'You' : transcript.agent} · ${clockTime(turn.at)}
+            </div>
+            <div class="turn-text">${turn.text}</div>
+          </div>
+        `
+      )}
+      <div class="reply">
+        <textarea
+          rows="2"
+          value=${draft}
+          placeholder="Reply to ${transcript.agent}…"
+          onInput=${(event) => setDraft(event.target.value)}
+        ></textarea>
+        <button disabled=${sending || draft.trim() === ''} onClick=${send}>
+          ${sending ? '…' : 'Send'}
+        </button>
+      </div>
+    </div>
+  `
+}
+
 function findItem(snapshot, id) {
   for (const group of snapshot.groups) {
     const found = group.items.find((item) => item.id === id)
@@ -240,6 +337,7 @@ function Detail({ item, token, onBack, onError }) {
   const [busy, setBusy] = useState(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState(false)
+  const [showConversation, setShowConversation] = useState(false)
 
   const run = async (command, key) => {
     setBusy(key)
@@ -307,6 +405,15 @@ function Detail({ item, token, onBack, onError }) {
             ${item.badges.map((badge) => html`<div key=${badge.text}>${badge.text} — ${badge.help}</div>`)}
           </div>
         `}
+
+      <div class="label">Conversation</div>
+      ${showConversation
+        ? html`<${Conversation} item=${item} token=${token} onError=${onError} />`
+        : html`
+            <button class="conv-open" onClick=${() => setShowConversation(true)}>
+              Show the ${item.agent ? item.agent.kind : 'agent'} conversation
+            </button>
+          `}
 
       <div class="label">Branch</div>
       <div class="facts">

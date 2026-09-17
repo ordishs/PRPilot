@@ -78,6 +78,17 @@ public final class AgentSession {
     /// Applies the light or dark terminal theme to this session's terminal view. Updates
     /// a running terminal's chrome immediately; call before `start()` so Claude detects
     /// the background on launch.
+    /// Types a line into the running agent, as if at the keyboard.
+    ///
+    /// The terminal view owns the pty, and `send` writes to the child's stdin, so nothing
+    /// has to be split out to do this. The trailing carriage return is what submits: the
+    /// agents read a line at a time.
+    public func send(prompt: String) {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        terminalView.send(txt: trimmed + "\r")
+    }
+
     public func applyAppearance(isDark: Bool) {
         AgentTerminalTheme.apply(isDark: isDark, to: terminalView)
     }

@@ -58,3 +58,19 @@ import Foundation
 
     #expect(recovered.gatewayBindScope == .tailnet)
 }
+
+@Test func promptingFromThePhoneIsOffByDefault() {
+    #expect(Settings.default.gatewayAllowPrompts == false)
+}
+
+@Test func settingsStoredBeforePromptingExistedDefaultToOff() throws {
+    var object = try JSONSerialization.jsonObject(
+        with: JSONEncoder().encode(Settings.default)
+    ) as! [String: Any]
+    object.removeValue(forKey: "gatewayAllowPrompts")
+
+    let stripped = try JSONSerialization.data(withJSONObject: object)
+    let recovered = try JSONDecoder().decode(Settings.self, from: stripped)
+
+    #expect(recovered.gatewayAllowPrompts == false)
+}

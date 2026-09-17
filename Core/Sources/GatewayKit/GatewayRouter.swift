@@ -93,6 +93,20 @@ public enum GatewayRouter {
             )
         }
 
+        // The item id contains "/" and "#", so it travels as a query parameter rather
+        // than a path component.
+        guarded.get("/transcript") { request, _ -> Response in
+            guard let id = request.uri.queryParameters["id"].map(String.init), !id.isEmpty else {
+                throw HTTPError(.badRequest, message: "missing id")
+            }
+            let limit = request.uri.queryParameters["limit"]
+                .flatMap { Int($0) }
+                .map { max(1, min(500, $0)) } ?? 80
+
+            let transcript = await MainActor.run { backend.transcript(for: id, limit: limit) }
+            return json(try encoder.encode(transcript))
+        }
+
         guarded.post("/command") { request, _ -> Response in
             var request = request
             let body = try await request.collectBody(upTo: 64 * 1024)

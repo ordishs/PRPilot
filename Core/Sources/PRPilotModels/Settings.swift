@@ -85,6 +85,12 @@ public struct Settings: Codable, Sendable, Equatable {
     /// Which interface the gateway listens on. Loopback unless a reverse proxy on another
     /// tailnet node needs to reach it.
     public var gatewayBindScope: GatewayBindScope
+    /// Whether the remote client may type into a running agent.
+    ///
+    /// Off by default, and deliberately separate from the gateway toggle. Reading the queue
+    /// is a different risk from driving an agent that runs with permissions skipped: with
+    /// this on, whoever holds the token can tell Claude to do anything in your worktrees.
+    public var gatewayAllowPrompts: Bool
 
     private enum LegacyKeys: String, CodingKey {
         case discoveryQueries
@@ -141,6 +147,7 @@ public struct Settings: Codable, Sendable, Equatable {
         case gatewayEnabled
         case gatewayPort
         case gatewayBindScope
+        case gatewayAllowPrompts
     }
 
     public init(
@@ -188,7 +195,8 @@ public struct Settings: Codable, Sendable, Equatable {
         hideParked: Bool = false,
         gatewayEnabled: Bool = false,
         gatewayPort: Int = 8776,
-        gatewayBindScope: GatewayBindScope = .loopback
+        gatewayBindScope: GatewayBindScope = .loopback,
+        gatewayAllowPrompts: Bool = false
     ) {
         self.managedRoot = managedRoot
         self.reviewRequestQueries = reviewRequestQueries
@@ -235,6 +243,7 @@ public struct Settings: Codable, Sendable, Equatable {
         self.gatewayEnabled = gatewayEnabled
         self.gatewayPort = gatewayPort
         self.gatewayBindScope = gatewayBindScope
+        self.gatewayAllowPrompts = gatewayAllowPrompts
     }
 
     public init(from decoder: Decoder) throws {
@@ -305,6 +314,7 @@ public struct Settings: Codable, Sendable, Equatable {
         gatewayEnabled = try c.decodeIfPresent(Bool.self, forKey: .gatewayEnabled) ?? false
         gatewayPort = try c.decodeIfPresent(Int.self, forKey: .gatewayPort) ?? 8776
         gatewayBindScope = try c.decodeIfPresent(GatewayBindScope.self, forKey: .gatewayBindScope) ?? .loopback
+        gatewayAllowPrompts = try c.decodeIfPresent(Bool.self, forKey: .gatewayAllowPrompts) ?? false
 
         if let rrq = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .reviewRequestQueries) {
             reviewRequestQueries = rrq

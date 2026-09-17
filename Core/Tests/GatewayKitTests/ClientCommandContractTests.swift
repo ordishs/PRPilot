@@ -37,7 +37,7 @@ private func commandTypes(in source: String) -> [String] {
     for type in types {
         // Every command the client builds carries an id except refreshAll, and the extra
         // keys are ignored by the decoder, so one shape covers them all.
-        let json = #"{"type":"\#(type)","id":"a#1","disabled":true,"forceFresh":true,"pane":"github","label":"x","status":"done","url":"https://example.com"}"#
+        let json = #"{"type":"\#(type)","id":"a#1","disabled":true,"forceFresh":true,"pane":"github","label":"x","status":"done","text":"x","url":"https://example.com"}"#
         #expect(
             throws: Never.self,
             "client sends '\(type)', which the server cannot decode"
@@ -109,4 +109,11 @@ private func commandTypes(in source: String) -> [String] {
     for kind in GatewayGroupKind.allCases {
         #expect(declared.contains(kind.rawValue), "TAB_ORDER is missing '\(kind.rawValue)'")
     }
+}
+
+@Test func theClientCanReachTheTranscriptRouteAndSendPrompts() throws {
+    let source = try clientSource
+
+    #expect(source.contains("/api/transcript?id="), "client never calls the transcript route")
+    #expect(source.contains("'sendPrompt'"), "client cannot reply to an agent")
 }

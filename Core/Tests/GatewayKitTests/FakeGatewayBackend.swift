@@ -8,6 +8,8 @@ final class FakeGatewayBackend: GatewayBackend {
     var nextMessage: String?
     var login: String? = "ordishs"
     var groups: [GatewayGroup] = []
+    var cannedTranscript: GatewayTranscript?
+    private(set) var transcriptRequests: [(id: String, limit: Int)] = []
 
     func snapshot() -> GatewaySnapshot {
         GatewaySnapshot(
@@ -22,5 +24,13 @@ final class FakeGatewayBackend: GatewayBackend {
     func perform(_ command: GatewayCommand) async -> GatewayCommandResult {
         received.append(command)
         return GatewayCommandResult(status: nextStatus, message: nextMessage, snapshot: snapshot())
+    }
+
+    func transcript(for id: String, limit: Int) -> GatewayTranscript {
+        transcriptRequests.append((id: id, limit: limit))
+        guard let canned = cannedTranscript else {
+            return .unavailable(itemID: id, note: "no session has run for this item yet")
+        }
+        return canned
     }
 }
