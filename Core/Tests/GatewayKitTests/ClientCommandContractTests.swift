@@ -80,3 +80,33 @@ private func commandTypes(in source: String) -> [String] {
         #expect(css.contains(".badge.\(tone)"), "no style for badge tone '\(tone)'")
     }
 }
+
+@Test func theClientHasATabAndAnEmptyMessageForEveryGroupTheServerSends() throws {
+    let source = try clientSource
+
+    for kind in GatewayGroupKind.allCases {
+        #expect(
+            source.contains("'\(kind.rawValue)'"),
+            "TAB_ORDER has no entry for the '\(kind.rawValue)' group"
+        )
+        #expect(
+            source.contains("\(kind.rawValue):"),
+            "no tab label or empty message keyed on '\(kind.rawValue)'"
+        )
+    }
+}
+
+@Test func theTabBarListsEveryGroupInAFixedOrder() throws {
+    let source = try clientSource
+    guard let start = source.range(of: "const TAB_ORDER = ["),
+          let end = source.range(of: "]", range: start.upperBound..<source.endIndex)
+    else {
+        Issue.record("TAB_ORDER not found in the client")
+        return
+    }
+
+    let declared = source[start.upperBound..<end.lowerBound]
+    for kind in GatewayGroupKind.allCases {
+        #expect(declared.contains(kind.rawValue), "TAB_ORDER is missing '\(kind.rawValue)'")
+    }
+}

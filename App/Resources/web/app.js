@@ -16,6 +16,24 @@ const GROUP_TITLES = {
   idle: 'Idle',
 }
 
+// Fixed order, so the bar does not reshuffle as counts change.
+const TAB_ORDER = ['needsYou', 'running', 'queued', 'idle']
+
+// Shorter labels for the bar itself — four full titles do not fit a phone.
+const TAB_LABELS = {
+  needsYou: 'Needs you',
+  running: 'Running',
+  queued: 'Queued',
+  idle: 'Idle',
+}
+
+const EMPTY_MESSAGES = {
+  needsYou: 'Nothing needs you.',
+  running: 'No agent is running.',
+  queued: 'Nothing is queued.',
+  idle: 'Nothing idle.',
+}
+
 function loadToken() {
   try {
     const fromUrl = new URLSearchParams(location.search).get('token')
@@ -125,6 +143,21 @@ function itemCount(snapshot) {
   return snapshot.groups.reduce((total, group) => total + group.items.length, 0)
 }
 
+/// The server drops empty groups, so a tab with no items has no entry at all.
+/// Every tab still needs a count, hence the zero default.
+function countsByGroup(snapshot) {
+  const counts = { needsYou: 0, running: 0, queued: 0, idle: 0 }
+  for (const group of snapshot.groups) {
+    counts[group.kind] = group.items.length
+  }
+  return counts
+}
+
+function itemsForTab(snapshot, tab) {
+  const group = snapshot.groups.find((candidate) => candidate.kind === tab)
+  return group ? group.items : []
+}
+
 function subtitle(item) {
   const where = item.repo ? `${item.repo} #${item.number}` : 'task'
   return item.label ? `${where} · ${item.label}` : where
@@ -143,27 +176,39 @@ function Row({ item, onOpen }) {
   `
 }
 
-function List({ snapshot, onOpen }) {
-  if (snapshot.groups.length === 0) {
-    return html`<p class="empty">Nothing in the queue.</p>`
-  }
+function Tabs({ counts, tab, onSelect }) {
+  return html`
+    <nav class="tabs" role="tablist">
+      ${TAB_ORDER.map(
+        (kind) => html`
+          <button
+            key=${kind}
+            role="tab"
+            aria-selected=${tab === kind}
+            class=${`tab ${kind}${tab === kind ? ' active' : ''}`}
+            onClick=${() => onSelect(kind)}
+          >
+            <span class="tab-label">${TAB_LABELS[kind]}</span>
+            <span class=${`tab-count${kind === 'needsYou' && counts[kind] > 0 ? ' urgent' : ''}`}>
+              ${counts[kind]}
+            </span>
+          </button>
+        `
+      )}
+    </nav>
+  `
+}
+
+function List({ snapshot, tab, onOpen }) {
+  const items = itemsForTab(snapshot, tab)
 
   return html`
     <div class="list">
       ${snapshot.warnings.length > 0 &&
         html`<div class="warnings">${snapshot.warnings.join(' · ')}</div>`}
-      ${snapshot.groups.map(
-        (group) => html`
-          <section key=${group.kind}>
-            <h2 class=${`group ${group.kind}`}>
-              ${GROUP_TITLES[group.kind]} · ${group.items.length}
-            </h2>
-            ${group.items.map(
-              (item) => html`<${Row} key=${item.id} item=${item} onOpen=${onOpen} />`
-            )}
-          </section>
-        `
-      )}
+      ${items.length === 0
+        ? html`<p class="empty">${EMPTY_MESSAGES[tab]}</p>`
+        : items.map((item) => html`<${Row} key=${item.id} item=${item} onOpen=${onOpen} />`)}
     </div>
   `
 }
@@ -346,6 +391,9 @@ function App() {
   const [token, setToken] = useState(loadToken)
   const [openID, setOpenID] = useState(null)
   const [error, setError] = useState(null)
+  // Always opens on Needs you. The one question worth answering on picking the
+  // phone up is "is anything stuck?", so it is never hidden behind a stale tab.
+  const [tab, setTab] = useState('needsYou')
   const { snapshot, connected, rejected } = useSnapshot(token)
 
   const pair = useCallback((value) => {
@@ -394,7 +442,8 @@ function App() {
               <span class="brand">PR Pilot</span>
               <span class="count">${itemCount(snapshot)} items</span>
             </header>
-            <${List} snapshot=${snapshot} onOpen=${setOpenID} />
+            <${Tabs} counts=${countsByGroup(snapshot)} tab=${tab} onSelect=${setTab} />
+            <${List} snapshot=${snapshot} tab=${tab} onOpen=${setOpenID} />
           `}
     </div>
   `
