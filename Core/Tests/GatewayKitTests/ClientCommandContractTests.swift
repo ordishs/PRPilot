@@ -117,3 +117,23 @@ private func commandTypes(in source: String) -> [String] {
     #expect(source.contains("/api/transcript?id="), "client never calls the transcript route")
     #expect(source.contains("'sendPrompt'"), "client cannot reply to an agent")
 }
+
+@Test func theClientCanSearchSortAndShowEveryBadge() throws {
+    let source = try clientSource
+
+    #expect(source.contains("function matches("), "no search predicate in the client")
+    #expect(source.contains("function sortItems("), "no sort in the client")
+    #expect(source.contains("row-badges"), "rows do not render the badge set")
+
+    // Search must look across groups, not just the open tab.
+    #expect(source.contains("function flatten("), "search cannot reach items outside the open tab")
+}
+
+@Test func everySortOrderTheClientOffersIsBackedByAFieldTheServerSends() throws {
+    let source = try clientSource
+
+    // The sort keys the client exposes, and the GatewayItem fields they read.
+    for field in ["lastActivityAt", "author", "number"] {
+        #expect(source.contains(field), "sort reads '\(field)', which the client never references")
+    }
+}

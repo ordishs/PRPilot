@@ -3166,3 +3166,70 @@ in the client produced `unknown command type handOverTo`.
 **Known gap, unchanged:** the client still has no automated rendering tests.
 These contract tests check that the client and server agree on names, not that
 the page looks right. That remains a deliberate choice, recorded in the spec.
+
+---
+
+### Task 16: Agent conversation and replying (added 2026-09-17)
+
+**Status: DONE**, committed as `8b339b6`.
+
+**Files:**
+- Created: `Core/Sources/GatewayKit/GatewayTranscript.swift`
+- Created: `Core/Tests/GatewayKitTests/TranscriptRouteTests.swift`
+- Modified: `Core/Sources/GatewayKit/GatewayCommand.swift` (adds `sendPrompt`)
+- Modified: `Core/Sources/GatewayKit/GatewayBackend.swift`, `GatewayRouter.swift`
+- Modified: `Core/Sources/AgentKit/AgentSession.swift` (adds `send(prompt:)`)
+- Modified: `Core/Sources/AppCore/GatewayBackend+AppModel.swift`
+- Modified: `Core/Sources/PRPilotModels/Settings.swift` (`gatewayAllowPrompts`)
+- Modified: `App/SettingsView.swift`, `App/Resources/web/app.js`, `app.css`
+
+**The estimate that was wrong.** The original spec called terminal mirroring the
+most expensive item in the design, because the pty is fused to an AppKit view.
+Checking the SwiftTerm API rather than trusting that showed two public calls
+that make it cheap:
+
+```
+AppleTerminalView.swift:1975  public func send (txt: String)
+Terminal.swift:5869           public func getText (start: Position, end: Position) -> String
+```
+
+Sending needs no split — `send(txt:)` writes to the child's stdin. Reading the
+screen needs no split either. The transcript is still the better source, because
+`getText` returns only the visible rows.
+
+**What it does:** `GET /api/transcript?id=&limit=` returns turns oldest first,
+via `HandoverNote`, which already found and parsed these files. `sendPrompt`
+types a line into the live session. The client shows the conversation behind a
+tap and polls it every four seconds.
+
+**Safety:** prompting is off by default with its own Settings switch, because
+agents run with `--dangerously-skip-permissions`. Refused when off, when no
+session is live, and on empty input — one test each.
+
+---
+
+### Task 17: Search, sort and full badges (added 2026-09-17)
+
+**Status: DONE.**
+
+**Files:** `App/Resources/web/app.js`, `app.css`,
+`Core/Tests/GatewayKitTests/ClientCommandContractTests.swift`.
+
+Entirely client-side. The snapshot already carried every field needed — badges,
+author, `lastActivityAt`, number — so none of this added a request or a server
+change.
+
+- **Search ignores the tabs** and returns a flat, group-tagged list. Matches
+  title, author, repo, owner, label, issue status and number, with or without
+  a leading `#`.
+- **Sort** by recent activity (default), author or number, applied to whatever
+  is on screen. Items with no timestamp sort last.
+- **Every badge on every row, wrapping.** This reverses decision 10 knowingly;
+  see spec decision 16.
+
+**Tests added:** the client has a search predicate, a sort and a flatten;
+rows render the badge set; every field the sorts read is one the server sends.
+
+**Still no automated rendering tests for the client.** These check that client
+and server agree on names and fields, not that the page looks right. Unchanged
+deliberate gap.

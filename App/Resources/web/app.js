@@ -236,6 +236,70 @@ function elapsed(seconds) {
   return `${Math.round(minutes / 60)}h`
 }
 
+const SORTS = [
+  { key: 'recent', label: 'Recent activity' },
+  { key: 'author', label: 'Author' },
+  { key: 'number', label: 'Number' },
+]
+
+/// Short relative age. A phone row has no space for a date, and "14m" answers the
+/// question a timestamp would.
+function ago(iso) {
+  if (!iso) return ''
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return ''
+  const seconds = Math.max(0, (Date.now() - then) / 1000)
+  if (seconds < 90) return `${Math.round(seconds)}s`
+  const minutes = seconds / 60
+  if (minutes < 90) return `${Math.round(minutes)}m`
+  const hours = minutes / 60
+  if (hours < 36) return `${Math.round(hours)}h`
+  return `${Math.round(hours / 24)}d`
+}
+
+/// Matches the fields you would actually search by: number, title, author, repo and
+/// label. Case-insensitive, and a bare number matches the PR number.
+function matches(item, query) {
+  if (!query) return true
+  const needle = query.toLowerCase()
+  return [
+    item.title,
+    item.author,
+    item.repo,
+    item.owner,
+    item.label,
+    item.issueStatus,
+    item.number != null ? String(item.number) : '',
+    item.number != null ? `#${item.number}` : '',
+  ].some((field) => field && String(field).toLowerCase().includes(needle))
+}
+
+function sortItems(items, sort) {
+  const copy = items.slice()
+  if (sort === 'author') {
+    return copy.sort((a, b) =>
+      (a.author || '~').localeCompare(b.author || '~') ||
+      (b.number || 0) - (a.number || 0)
+    )
+  }
+  if (sort === 'number') {
+    return copy.sort((a, b) => (b.number || 0) - (a.number || 0))
+  }
+  // Recent activity. Items with no timestamp sort last rather than to the top.
+  return copy.sort(
+    (a, b) =>
+      new Date(b.lastActivityAt || 0).getTime() - new Date(a.lastActivityAt || 0).getTime()
+  )
+}
+
+/// Every item, with the group it came from attached, so a search result can say where
+/// it lives without the caller re-scanning the snapshot.
+function flatten(snapshot) {
+  return snapshot.groups.flatMap((group) =>
+    group.items.map((item) => ({ ...item, group: group.kind }))
+  )
+}
+
 function itemCount(snapshot) {
   return snapshot.groups.reduce((total, group) => total + group.items.length, 0)
 }
@@ -260,16 +324,65 @@ function subtitle(item) {
   return item.label ? `${where} · ${item.label}` : where
 }
 
-function Row({ item, onOpen }) {
+function Row({ item, onOpen, showGroup }) {
   const dim = item.isDisabled || !item.attentionReason
+  const meta = [
+    item.repo ? `${item.repo} #${item.number}` : 'task',
+    item.author,
+    ago(item.lastActivityAt),
+    item.label,
+  ]
+    .filter(Boolean)
+    .join(' · ')
 
   return html`
     <button class=${dim ? 'row dim' : 'row'} onClick=${() => onOpen(item.id)}>
       <div class="row-title">${item.title}</div>
       ${item.attentionReason &&
         html`<div class="row-reason">${item.attentionReason}</div>`}
-      <div class="row-meta">${subtitle(item)}</div>
+      <div class="row-meta">
+        ${showGroup &&
+          html`<span class=${`row-group ${item.group}`}>${GROUP_TITLES[item.group]}</span>`}
+        ${meta}
+      </div>
+      ${item.badges.length > 0 &&
+        html`
+          <div class="row-badges">
+            ${item.badges.map(
+              (badge) => html`
+                <span key=${badge.text} class=${`badge ${badge.tone}`} title=${badge.help}>
+                  ${badge.text}
+                </span>
+              `
+            )}
+          </div>
+        `}
     </button>
+  `
+}
+
+function FilterBar({ query, onQuery, sort, onSort }) {
+  return html`
+    <div class="filterbar">
+      <div class="search">
+        <input
+          type="search"
+          value=${query}
+          placeholder="Search number, title, author, repo"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          onInput=${(event) => onQuery(event.target.value)}
+        />
+        ${query &&
+          html`<button class="clear" onClick=${() => onQuery('')} aria-label="Clear search">✕</button>`}
+      </div>
+      <select class="sort" value=${sort} onChange=${(event) => onSort(event.target.value)}>
+        ${SORTS.map(
+          (option) => html`<option key=${option.key} value=${option.key}>${option.label}</option>`
+        )}
+      </select>
+    </div>
   `
 }
 
@@ -296,16 +409,32 @@ function Tabs({ counts, tab, onSelect }) {
   `
 }
 
-function List({ snapshot, tab, onOpen }) {
-  const items = itemsForTab(snapshot, tab)
+/// Searching deliberately ignores the tabs. You rarely know which group the item you are
+/// hunting for landed in, so a search that only looked in the current tab would usually
+/// find nothing.
+function List({ snapshot, tab, query, sort, onOpen }) {
+  const searching = query.trim() !== ''
+  const items = searching
+    ? sortItems(flatten(snapshot).filter((item) => matches(item, query.trim())), sort)
+    : sortItems(itemsForTab(snapshot, tab), sort)
 
   return html`
     <div class="list">
       ${snapshot.warnings.length > 0 &&
         html`<div class="warnings">${snapshot.warnings.join(' · ')}</div>`}
+      ${searching &&
+        html`<p class="result-count">
+          ${items.length} ${items.length === 1 ? 'match' : 'matches'} across all groups
+        </p>`}
       ${items.length === 0
-        ? html`<p class="empty">${EMPTY_MESSAGES[tab]}</p>`
-        : items.map((item) => html`<${Row} key=${item.id} item=${item} onOpen=${onOpen} />`)}
+        ? html`<p class="empty">
+            ${searching ? `Nothing matches "${query.trim()}".` : EMPTY_MESSAGES[tab]}
+          </p>`
+        : items.map(
+            (item) => html`
+              <${Row} key=${item.id} item=${item} onOpen=${onOpen} showGroup=${searching} />
+            `
+          )}
     </div>
   `
 }
@@ -501,6 +630,8 @@ function App() {
   // Always opens on Needs you. The one question worth answering on picking the
   // phone up is "is anything stuck?", so it is never hidden behind a stale tab.
   const [tab, setTab] = useState('needsYou')
+  const [query, setQuery] = useState('')
+  const [sort, setSort] = useState('recent')
   const { snapshot, connected, rejected } = useSnapshot(token)
 
   const pair = useCallback((value) => {
@@ -549,8 +680,16 @@ function App() {
               <span class="brand">PR Pilot</span>
               <span class="count">${itemCount(snapshot)} items</span>
             </header>
-            <${Tabs} counts=${countsByGroup(snapshot)} tab=${tab} onSelect=${setTab} />
-            <${List} snapshot=${snapshot} tab=${tab} onOpen=${setOpenID} />
+            <${FilterBar} query=${query} onQuery=${setQuery} sort=${sort} onSort=${setSort} />
+            ${query.trim() === '' &&
+              html`<${Tabs} counts=${countsByGroup(snapshot)} tab=${tab} onSelect=${setTab} />`}
+            <${List}
+              snapshot=${snapshot}
+              tab=${tab}
+              query=${query}
+              sort=${sort}
+              onOpen=${setOpenID}
+            />
           `}
     </div>
   `

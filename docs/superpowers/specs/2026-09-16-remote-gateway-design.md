@@ -7,6 +7,9 @@
 - **Revised:** 2026-09-17 — decision 13, the bind scope. The original spec said
   the listener binds loopback only, which made a reverse proxy on another
   tailnet node impossible. See "Lifetime" and "Authentication".
+- **Revised:** 2026-09-17 — decisions 15 to 17: the agent conversation, replying
+  from the phone, and search, sort and full badges in the list. Decision 16
+  reverses decision 10. See "Conversation" and "List screen".
 - **Revised:** 2026-09-17 — decision 14, tabs. The four groups became a
   segmented control after use on a phone showed a scrolling list buries the
   group that matters. See "List screen".
@@ -53,6 +56,9 @@ The gateway is a projection over `AppModel`. It adds no domain logic.
 | 12 | Client framework | Preact and `htm`, vendored, no build step | Keyed diffing keeps scroll, focus and sheet state alive across 1 Hz snapshot pushes |
 | 13 | Bind scope | Setting, loopback by default, tailnet optional | A reverse proxy on another tailnet node cannot reach a loopback listener. Safe by default, explicit to widen, never a wildcard. Added 2026-09-17 |
 | 14 | Group presentation | One tab per group, top segmented control, always opens on Needs you | A scrolling list put the group that matters below the fold on a real phone. Added 2026-09-17 |
+| 15 | Agent conversation | Read the transcript on disk, not the terminal screen | The terminal holds only the visible rows, so anything scrolled past is lost. `HandoverNote` already parsed these files. Added 2026-09-17 |
+| 16 | Row density | Full badge set on every row, wrapping | **Reverses decision 10.** Chosen knowingly after use: seeing every state without opening an item beat fixed-height rows. Added 2026-09-17 |
+| 17 | Search scope | Searching ignores the tabs and returns a flat, group-tagged list | You rarely know which group the item you are hunting for landed in. Added 2026-09-17 |
 
 ## Architecture
 
@@ -425,9 +431,67 @@ Three rules follow from that, and the design depends on all three:
 The selected tab is tinted to its group, amber for `Needs you` and green for
 `Running`, preserving the colour coding the old headings carried.
 
-A row shows the title, the attention reason in words, and the repository,
-number and relative time. It carries no badges. A row with no attention reason
-shows the repository line only.
+A row shows the title, the attention reason in words, then the repository,
+number, author, relative age and label, then **the full badge set, wrapping**.
+
+Carrying every badge reverses decision 10, which kept badges out of the list to
+hold rows to a fixed height. That was the right call before the client was in
+use; after it, seeing CI, approvals and limits without opening an item mattered
+more than uniform row height. Rows now vary in height, and that is the accepted
+cost.
+
+**Search ignores the tabs.** A non-empty query hides the tab bar and returns one
+flat list across all four groups, each row tagged with the group it came from,
+and a count above. Searching is how a known item is found, and the group it
+landed in is rarely known. Clearing the box restores the tab that was open.
+
+Search matches title, author, repository, owner, label, issue status and
+number, case-insensitively, with or without a leading `#`.
+
+**Sorting** applies to whatever is on screen, tab or search results: recent
+activity (default), author, or number. Items with no timestamp sort last rather
+than to the top.
+
+Search, sort and badges are all computed on the client. The snapshot already
+carries every field they need, so none of this costs a request.
+
+### Conversation
+
+The detail screen can show the agent's conversation, read from its transcript
+and refreshed every four seconds while open. It is behind a tap, not loaded
+with the item: a transcript dwarfs the queue and is only wanted for the item
+being read.
+
+**Why the transcript and not the terminal.** Mirroring the terminal was
+originally called the most expensive part of this design, on the grounds that
+the pty is fused to an AppKit view. That was wrong in two ways:
+
+- `AppleTerminalView.send(txt:)` writes to the child's stdin, so typing into a
+  running agent needs no pty split at all — it is one call.
+- `Terminal.getText(start:end:)` would return the rendered screen, so even a
+  mirror would not need the byte stream.
+
+The transcript is still the better source: `getText` returns only the visible
+rows, so anything the agent wrote before the last scroll is gone, and it dies
+with the session. The transcript holds the whole conversation and survives a
+restart. `HandoverNote.transcriptURL(for:worktreePath:sessionID:)` and
+`HandoverNote.entries(inTranscriptAt:kind:)` already existed for the handover
+feature, and already strip tool results and system reminders.
+
+`GET /api/transcript?id=<id>&limit=<n>` returns `GatewayTranscript`. The id
+travels as a query parameter because real ids contain `/` and `#`, which break
+a path component. `limit` is clamped to 1...500 and defaults to 80.
+
+An item with no transcript returns `available: false` and a `note` saying why —
+no worktree, no session yet, or nothing conversational recorded. An empty
+conversation and an absent one are different states and read differently.
+
+**Replying is off by default**, behind `Settings.gatewayAllowPrompts`, separate
+from the gateway toggle. Reading the queue and driving an agent are different
+risks: the agents launch with `--dangerously-skip-permissions`, so whoever
+holds the token can otherwise do anything in the user's worktrees. The command
+is refused when the setting is off, when no session is live, and when the text
+is empty.
 
 ### Detail screen
 
