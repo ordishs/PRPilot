@@ -66,7 +66,16 @@ extension AppModel: GatewayBackend {
             guard let work = reviews.first(where: { $0.id == id }) else {
                 return rejection("no such item")
             }
-            await ensureAgentSession(for: work, forceFresh: forceFresh)
+            if forceFresh {
+                // `ensureAgentSession` returns early when a session is already live, so
+                // asking it for a fresh one on a running item did nothing at all. Going
+                // through `clearAgentSession` restarts properly: it terminates the process,
+                // archives the transcripts so the old conversation cannot be resumed, and
+                // starts a new session itself.
+                await clearAgentSession(for: id)
+            } else {
+                await ensureAgentSession(for: work, forceFresh: false)
+            }
 
         case .clearSession(let id):
             await clearAgentSession(for: id)
@@ -75,9 +84,29 @@ extension AppModel: GatewayBackend {
             await clearAgentLimit(for: id)
 
         case .handOver(let id):
+            // Read the pair before the switch, so the result can say what happened. After
+            // it, the item already reports the new agent.
+            let movingFrom = reviews.first(where: { $0.id == id })?
+                .effectiveAgent(default: settings.defaultAgent)
+            let movingTo = settings.failoverAgent
+
             guard await handOverToFailoverAgent(for: id) else {
-                return rejection("no failover agent is available for this item")
+                guard let movingFrom else { return rejection("no such item") }
+                if movingFrom == movingTo {
+                    return rejection(
+                        "This item already runs on \(movingTo.displayName). "
+                            + "Pick a different failover agent in Settings."
+                    )
+                }
+                return rejection("This item has no worktree yet, so there is nothing to hand over.")
             }
+
+            // A silent success left you guessing which agent picked the work up.
+            return accepted(
+                "Moved from \(movingFrom?.displayName ?? "the previous agent") to "
+                    + "\(movingTo.displayName). A handover note was written, and a fresh "
+                    + "session has started."
+            )
 
         case .addPR(let url):
             await addPR(urlString: url)
@@ -172,6 +201,12 @@ extension AppModel: GatewayBackend {
 
     private func rejection(_ message: String) -> GatewayCommandResult {
         GatewayCommandResult(status: .rejected, message: message, snapshot: snapshot())
+    }
+
+    /// An accepted result that still has something to say. The client shows it as a notice
+    /// rather than an error.
+    private func accepted(_ message: String) -> GatewayCommandResult {
+        GatewayCommandResult(status: .accepted, message: message, snapshot: snapshot())
     }
 }
 

@@ -274,6 +274,21 @@ case, not a new route.
 Git actions are absent by construction. There is no enum case for `push`,
 `rebase`, `continueRebase`, or `abortRebase`, so no request can reach them.
 
+**`startSession` with `forceFresh` restarts a live session.** `ensureAgentSession`
+returns early when a session is already running, so asking it for a fresh one on
+a running item did nothing — the one case a user would reach for it. The gateway
+routes `forceFresh` through `clearAgentSession` instead, which terminates the
+process, archives the transcripts so the old conversation cannot be resumed, and
+starts a new session itself. That made a separate `clearSession` button
+redundant under a misleading name, so the client no longer offers one.
+
+**`handOver` reports what it did.** A silent success left the user guessing which
+agent picked the work up. It now returns an *accepted* result carrying the agent
+pair and the fact that a note was written, and the client renders accepted
+messages as a notice rather than an error. Its two failure modes are named
+separately rather than collapsed: the item already runs on the failover agent —
+an account cannot rescue itself — or it has no worktree yet.
+
 A command response is `GatewayCommandResult`: an accepted or rejected status, a
 message, and the snapshot taken after the command completed.
 

@@ -462,7 +462,7 @@ function TokenPrompt({ onToken, failed }) {
   `
 }
 
-function Detail({ item, token, onBack, onError }) {
+function Detail({ item, token, onBack, onError, onNotice }) {
   const [busy, setBusy] = useState(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState(false)
@@ -475,6 +475,9 @@ function Detail({ item, token, onBack, onError }) {
       if (result.status === 'rejected') {
         onError(result.message || 'The Mac refused that command.')
       } else {
+        // Some commands succeed and still have something to say — a handover names
+        // the agent that picked the work up.
+        if (result.message) onNotice(result.message)
         setMoreOpen(false)
         setConfirmRemove(false)
       }
@@ -568,7 +571,7 @@ function Detail({ item, token, onBack, onError }) {
 
         <div class="sheet-row">
           <button disabled=${busy !== null} onClick=${() => run(freshSession, 'fresh')}>
-            ${busy === 'fresh' ? '…' : 'Fresh session'}
+            ${busy === 'fresh' ? '…' : item.agent ? 'Restart fresh' : 'Fresh session'}
           </button>
           <button
             disabled=${busy !== null}
@@ -587,12 +590,6 @@ function Detail({ item, token, onBack, onError }) {
                 onClick=${() => run({ type: 'refreshItem', id: item.id }, 'refresh')}
               >
                 ${busy === 'refresh' ? '…' : 'Refresh from GitHub'}
-              </button>
-              <button
-                disabled=${busy !== null}
-                onClick=${() => run({ type: 'clearSession', id: item.id }, 'clear')}
-              >
-                ${busy === 'clear' ? '…' : 'Clear session'}
               </button>
               <button
                 disabled=${busy !== null}
@@ -627,6 +624,7 @@ function App() {
   const [token, setToken] = useState(loadToken)
   const [openID, setOpenID] = useState(null)
   const [error, setError] = useState(null)
+  const [notice, setNotice] = useState(null)
   // Always opens on Needs you. The one question worth answering on picking the
   // phone up is "is anything stuck?", so it is never hidden behind a stale tab.
   const [tab, setTab] = useState('needsYou')
@@ -666,6 +664,7 @@ function App() {
     <div class="app">
       ${!connected && html`<div class="offline">Reconnecting…</div>`}
       ${error && html`<div class="error" onClick=${() => setError(null)}>${error}</div>`}
+      ${notice && html`<div class="notice" onClick=${() => setNotice(null)}>${notice}</div>`}
       ${open
         ? html`
             <${Detail}
@@ -673,6 +672,7 @@ function App() {
               token=${token}
               onBack=${() => setOpenID(null)}
               onError=${setError}
+              onNotice=${setNotice}
             />
           `
         : html`

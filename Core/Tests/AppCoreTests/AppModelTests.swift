@@ -5168,3 +5168,45 @@ private func gatewayModel(_ store: ReviewStore) -> AppModel {
     #expect(transcript.available == false)
     #expect(transcript.note?.contains("no worktree") == true)
 }
+
+@Test @MainActor func handingOverToTheSameAgentExplainsWhyItCannot() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = gatewayModel(store)
+    await model.load()
+    var settings = model.settings
+    // Default agent and failover agent the same: an account cannot rescue itself.
+    settings.failoverAgent = settings.defaultAgent
+    await model.updateSettings(settings)
+
+    let result = await model.perform(.handOver(id: sampleReviewID))
+
+    #expect(result.status == .rejected)
+    #expect(result.message?.contains("already runs on") == true)
+    #expect(result.message?.contains("Settings") == true)
+}
+
+@Test @MainActor func handingOverAnItemWithNoWorktreeSaysSo() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = gatewayModel(store)
+    await model.load()
+    var settings = model.settings
+    settings.defaultAgent = .claudeCode
+    settings.failoverAgent = .codex
+    await model.updateSettings(settings)
+
+    let result = await model.perform(.handOver(id: sampleReviewID))
+
+    #expect(result.status == .rejected)
+    #expect(result.message?.contains("no worktree") == true)
+}
+
+@Test @MainActor func handingOverAnUnknownItemIsRejected() async throws {
+    let model = gatewayModel(try ReviewStore(fileURL: tempStoreURL()))
+
+    let result = await model.perform(.handOver(id: "nope#1"))
+
+    #expect(result.status == .rejected)
+    #expect(result.message == "no such item")
+}

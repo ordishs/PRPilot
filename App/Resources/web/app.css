@@ -120,7 +120,7 @@ button {
 
 .count { color: var(--muted); font-size: 13px; }
 
-.offline, .error {
+.offline, .error, .notice {
   position: sticky;
   top: 0;
   z-index: 10;
@@ -133,6 +133,9 @@ button {
 .offline { background: var(--orange-bg); color: var(--orange); }
 
 .error { background: var(--red-bg); color: var(--red); }
+
+/* A command that succeeded and still has something worth saying. */
+.notice { background: var(--blue-bg); color: var(--blue); }
 
 .warnings {
   margin: 10px 16px 0;
