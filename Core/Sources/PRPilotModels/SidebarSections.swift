@@ -55,7 +55,7 @@ func sortWorkItems(_ items: [WorkItem], by sort: SidebarSort) -> [WorkItem] {
     }
 }
 
-func statusRank(_ state: PRState?) -> Int {
+public func statusRank(_ state: PRState?) -> Int {
     switch state {
     case .open, .none: return 0
     case .draft: return 1

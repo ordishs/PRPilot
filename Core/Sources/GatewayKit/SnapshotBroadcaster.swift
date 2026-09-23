@@ -95,10 +95,15 @@ public actor SnapshotBroadcaster {
         hasher.combine(snapshot.login)
         hasher.combine(snapshot.appVersion)
         hasher.combine(snapshot.warnings)
+        hasher.combine(snapshot.listing.sort)
+        hasher.combine(snapshot.listing.hideParked)
+        hasher.combine(snapshot.listing.signalFilters)
+        hasher.combine(snapshot.listing.resourceFilters)
+        hasher.combine(snapshot.listing.sorts)
 
-        for group in snapshot.groups {
-            hasher.combine(group.kind)
-            for item in group.items {
+        for section in snapshot.sections {
+            hasher.combine(section.kind)
+            for item in section.items {
                 hasher.combine(item)
             }
         }

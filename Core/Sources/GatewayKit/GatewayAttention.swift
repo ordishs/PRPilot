@@ -8,79 +8,57 @@ public struct GatewayItemFacts: Sendable, Equatable {
     public var isDisabled: Bool
     public var limitMessage: String?
     public var awaitsMyResponse: Bool
-    public var hasVerdict: Bool
     public var hasUnseenAuthorUpdate: Bool
-    public var sessionIsLive: Bool
-    public var isQueued: Bool
 
     public init(
         id: String,
         isDisabled: Bool,
         limitMessage: String?,
         awaitsMyResponse: Bool,
-        hasVerdict: Bool,
-        hasUnseenAuthorUpdate: Bool,
-        sessionIsLive: Bool,
-        isQueued: Bool
+        hasUnseenAuthorUpdate: Bool
     ) {
         self.id = id
         self.isDisabled = isDisabled
         self.limitMessage = limitMessage
         self.awaitsMyResponse = awaitsMyResponse
-        self.hasVerdict = hasVerdict
         self.hasUnseenAuthorUpdate = hasUnseenAuthorUpdate
-        self.sessionIsLive = sessionIsLive
-        self.isQueued = isQueued
     }
 }
 
-public struct GatewayClassification: Sendable, Equatable {
-    public var group: GatewayGroupKind
+public struct GatewayAttention: Sendable, Equatable {
     public var reason: String?
     public var primaryCommand: GatewayCommand?
 }
 
-public enum GatewayGrouping {
+public enum GatewayAttentionRule {
     /// Total, pure, first match wins. A disabled item has no session to nudge and no review
     /// to read, so it never reaches the attention branches.
-    public static func classify(_ facts: GatewayItemFacts) -> GatewayClassification {
+    ///
+    /// Every reason here clears once you act on it. A finished review used to count too,
+    /// but `claudeReviewedAt` never clears, so every reviewed item asked for you forever.
+    /// The unanswered turn is already the `awaitsMyResponse` branch.
+    public static func evaluate(_ facts: GatewayItemFacts) -> GatewayAttention {
         if facts.isDisabled {
-            return GatewayClassification(group: .idle, reason: nil, primaryCommand: nil)
+            return GatewayAttention(reason: nil, primaryCommand: nil)
         }
         if facts.limitMessage != nil {
-            return GatewayClassification(
-                group: .needsYou,
+            return GatewayAttention(
                 reason: "Agent hit its usage limit",
                 primaryCommand: .clearAgentLimit(id: facts.id)
             )
         }
         if facts.awaitsMyResponse {
-            return GatewayClassification(
-                group: .needsYou,
+            return GatewayAttention(
                 reason: "Agent is waiting for you",
                 primaryCommand: .clearWaiting(id: facts.id)
             )
         }
-        if facts.hasVerdict {
-            return GatewayClassification(
-                group: .needsYou,
-                reason: "Agent finished its review",
-                primaryCommand: nil
-            )
-        }
         if facts.hasUnseenAuthorUpdate {
-            return GatewayClassification(
-                group: .needsYou,
+            return GatewayAttention(
                 reason: "Author pushed new commits",
                 primaryCommand: .markAuthorUpdateSeen(id: facts.id)
             )
         }
-        if facts.sessionIsLive {
-            return GatewayClassification(group: .running, reason: nil, primaryCommand: nil)
-        }
-        if facts.isQueued {
-            return GatewayClassification(group: .queued, reason: nil, primaryCommand: nil)
-        }
-        return GatewayClassification(group: .idle, reason: nil, primaryCommand: nil)
+        return GatewayAttention(reason: nil, primaryCommand: nil)
     }
 }

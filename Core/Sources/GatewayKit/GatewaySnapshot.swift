@@ -1,10 +1,10 @@
 import Foundation
 
-public enum GatewayGroupKind: String, Codable, Sendable, Hashable, CaseIterable {
-    case needsYou
-    case running
-    case queued
-    case idle
+/// The three sidebar sections of the Mac, in the order it draws them.
+public enum GatewaySectionKind: String, Codable, Sendable, Hashable, CaseIterable {
+    case myWork
+    case reviewRequests
+    case issues
 }
 
 public enum GatewayItemKind: String, Codable, Sendable, Hashable {
@@ -79,6 +79,16 @@ public struct GatewayItem: Codable, Sendable, Hashable, Identifiable {
     public var localChanges: Int
     public var lastActivityAt: Date?
     public var primaryCommand: GatewayCommand?
+    /// The `SignalFilter` keys this item carries. The client filters and counts on these,
+    /// so a pill on the phone matches the same pill on the Mac.
+    public var signals: [String]
+    /// The `ResourceFilter` keys this item holds.
+    public var resources: [String]
+    /// You approved it and nothing has happened since — the Mac's "Hide parked" test.
+    public var isParked: Bool
+    /// Sort keys for the Mac's orders: Recent reads `addedAt`, By status reads `statusRank`.
+    public var addedAt: Date
+    public var statusRank: Int
 
     public init(
         id: String,
@@ -101,7 +111,12 @@ public struct GatewayItem: Codable, Sendable, Hashable, Identifiable {
         behind: Int,
         localChanges: Int,
         lastActivityAt: Date?,
-        primaryCommand: GatewayCommand?
+        primaryCommand: GatewayCommand?,
+        signals: [String] = [],
+        resources: [String] = [],
+        isParked: Bool = false,
+        addedAt: Date,
+        statusRank: Int = 0
     ) {
         self.id = id
         self.kind = kind
@@ -124,17 +139,64 @@ public struct GatewayItem: Codable, Sendable, Hashable, Identifiable {
         self.localChanges = localChanges
         self.lastActivityAt = lastActivityAt
         self.primaryCommand = primaryCommand
+        self.signals = signals
+        self.resources = resources
+        self.isParked = isParked
+        self.addedAt = addedAt
+        self.statusRank = statusRank
     }
 }
 
-public struct GatewayGroup: Codable, Sendable, Equatable {
-    public var kind: GatewayGroupKind
+public struct GatewaySection: Codable, Sendable, Equatable {
+    public var kind: GatewaySectionKind
     public var items: [GatewayItem]
 
-    public init(kind: GatewayGroupKind, items: [GatewayItem]) {
+    public init(kind: GatewaySectionKind, items: [GatewayItem]) {
         self.kind = kind
         self.items = items
     }
+}
+
+/// One choice the client offers: a filter pill or a sort order. The label and help come
+/// from the same source the Mac draws, so the two never word a choice differently.
+public struct GatewayOption: Codable, Sendable, Hashable {
+    public var key: String
+    public var label: String
+    public var help: String
+
+    public init(key: String, label: String, help: String) {
+        self.key = key
+        self.label = label
+        self.help = help
+    }
+}
+
+/// What the Mac sidebar shows by default. The phone starts from it and keeps its own
+/// changes, so a tap on the phone never rearranges the Mac.
+public struct GatewayListing: Codable, Sendable, Equatable {
+    public var signalFilters: [GatewayOption]
+    public var resourceFilters: [GatewayOption]
+    public var sorts: [GatewayOption]
+    public var sort: String
+    public var hideParked: Bool
+
+    public init(
+        signalFilters: [GatewayOption],
+        resourceFilters: [GatewayOption],
+        sorts: [GatewayOption],
+        sort: String,
+        hideParked: Bool
+    ) {
+        self.signalFilters = signalFilters
+        self.resourceFilters = resourceFilters
+        self.sorts = sorts
+        self.sort = sort
+        self.hideParked = hideParked
+    }
+
+    public static let empty = GatewayListing(
+        signalFilters: [], resourceFilters: [], sorts: [], sort: "recent", hideParked: false
+    )
 }
 
 public struct GatewaySnapshot: Codable, Sendable, Equatable {
@@ -142,7 +204,8 @@ public struct GatewaySnapshot: Codable, Sendable, Equatable {
     public var gatewayVersion: Int
     public var appVersion: String
     public var login: String?
-    public var groups: [GatewayGroup]
+    public var sections: [GatewaySection]
+    public var listing: GatewayListing
     public var warnings: [String]
 
     public init(
@@ -150,14 +213,16 @@ public struct GatewaySnapshot: Codable, Sendable, Equatable {
         gatewayVersion: Int = GatewayVersion.current,
         appVersion: String,
         login: String?,
-        groups: [GatewayGroup],
+        sections: [GatewaySection],
+        listing: GatewayListing = .empty,
         warnings: [String]
     ) {
         self.generatedAt = generatedAt
         self.gatewayVersion = gatewayVersion
         self.appVersion = appVersion
         self.login = login
-        self.groups = groups
+        self.sections = sections
+        self.listing = listing
         self.warnings = warnings
     }
 }

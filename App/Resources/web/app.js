@@ -6,33 +6,20 @@ import {
   useCallback,
   useMemo,
 } from '/vendor/preact-htm.mjs'
+import {
+  SECTION_ORDER,
+  SECTION_TITLES,
+  flatten,
+  findItem,
+  visibleItems,
+  sectionCounts,
+  pillCounts,
+  emptySelection,
+  toggled,
+  selectionIsEmpty,
+} from '/listing.mjs'
 
 const TOKEN_KEY = 'prpilot.token'
-
-const GROUP_TITLES = {
-  needsYou: 'Needs you',
-  running: 'Running',
-  queued: 'Queued',
-  idle: 'Idle',
-}
-
-// Fixed order, so the bar does not reshuffle as counts change.
-const TAB_ORDER = ['needsYou', 'running', 'queued', 'idle']
-
-// Shorter labels for the bar itself — four full titles do not fit a phone.
-const TAB_LABELS = {
-  needsYou: 'Needs you',
-  running: 'Running',
-  queued: 'Queued',
-  idle: 'Idle',
-}
-
-const EMPTY_MESSAGES = {
-  needsYou: 'Nothing needs you.',
-  running: 'No agent is running.',
-  queued: 'Nothing is queued.',
-  idle: 'Nothing idle.',
-}
 
 function loadToken() {
   try {
@@ -220,14 +207,6 @@ function Conversation({ item, token, onError }) {
   `
 }
 
-function findItem(snapshot, id) {
-  for (const group of snapshot.groups) {
-    const found = group.items.find((item) => item.id === id)
-    if (found) return found
-  }
-  return null
-}
-
 function elapsed(seconds) {
   if (seconds == null) return null
   if (seconds < 90) return `${seconds}s`
@@ -235,12 +214,6 @@ function elapsed(seconds) {
   if (minutes < 90) return `${minutes}m`
   return `${Math.round(minutes / 60)}h`
 }
-
-const SORTS = [
-  { key: 'recent', label: 'Recent activity' },
-  { key: 'author', label: 'Author' },
-  { key: 'number', label: 'Number' },
-]
 
 /// Short relative age. A phone row has no space for a date, and "14m" answers the
 /// question a timestamp would.
@@ -257,75 +230,8 @@ function ago(iso) {
   return `${Math.round(hours / 24)}d`
 }
 
-/// Matches the fields you would actually search by: number, title, author, repo and
-/// label. Case-insensitive, and a bare number matches the PR number.
-function matches(item, query) {
-  if (!query) return true
-  const needle = query.toLowerCase()
-  return [
-    item.title,
-    item.author,
-    item.repo,
-    item.owner,
-    item.label,
-    item.issueStatus,
-    item.number != null ? String(item.number) : '',
-    item.number != null ? `#${item.number}` : '',
-  ].some((field) => field && String(field).toLowerCase().includes(needle))
-}
-
-function sortItems(items, sort) {
-  const copy = items.slice()
-  if (sort === 'author') {
-    return copy.sort((a, b) =>
-      (a.author || '~').localeCompare(b.author || '~') ||
-      (b.number || 0) - (a.number || 0)
-    )
-  }
-  if (sort === 'number') {
-    return copy.sort((a, b) => (b.number || 0) - (a.number || 0))
-  }
-  // Recent activity. Items with no timestamp sort last rather than to the top.
-  return copy.sort(
-    (a, b) =>
-      new Date(b.lastActivityAt || 0).getTime() - new Date(a.lastActivityAt || 0).getTime()
-  )
-}
-
-/// Every item, with the group it came from attached, so a search result can say where
-/// it lives without the caller re-scanning the snapshot.
-function flatten(snapshot) {
-  return snapshot.groups.flatMap((group) =>
-    group.items.map((item) => ({ ...item, group: group.kind }))
-  )
-}
-
-function itemCount(snapshot) {
-  return snapshot.groups.reduce((total, group) => total + group.items.length, 0)
-}
-
-/// The server drops empty groups, so a tab with no items has no entry at all.
-/// Every tab still needs a count, hence the zero default.
-function countsByGroup(snapshot) {
-  const counts = { needsYou: 0, running: 0, queued: 0, idle: 0 }
-  for (const group of snapshot.groups) {
-    counts[group.kind] = group.items.length
-  }
-  return counts
-}
-
-function itemsForTab(snapshot, tab) {
-  const group = snapshot.groups.find((candidate) => candidate.kind === tab)
-  return group ? group.items : []
-}
-
-function subtitle(item) {
-  const where = item.repo ? `${item.repo} #${item.number}` : 'task'
-  return item.label ? `${where} · ${item.label}` : where
-}
-
-function Row({ item, onOpen, showGroup }) {
-  const dim = item.isDisabled || !item.attentionReason
+function Row({ item, onOpen }) {
+  const dim = item.isDisabled
   const meta = [
     item.repo ? `${item.repo} #${item.number}` : 'task',
     item.author,
@@ -340,11 +246,7 @@ function Row({ item, onOpen, showGroup }) {
       <div class="row-title">${item.title}</div>
       ${item.attentionReason &&
         html`<div class="row-reason">${item.attentionReason}</div>`}
-      <div class="row-meta">
-        ${showGroup &&
-          html`<span class=${`row-group ${item.group}`}>${GROUP_TITLES[item.group]}</span>`}
-        ${meta}
-      </div>
+      <div class="row-meta">${meta}</div>
       ${item.badges.length > 0 &&
         html`
           <div class="row-badges">
@@ -361,14 +263,14 @@ function Row({ item, onOpen, showGroup }) {
   `
 }
 
-function FilterBar({ query, onQuery, sort, onSort }) {
+function FilterBar({ query, onQuery, sort, sorts, onSort }) {
   return html`
     <div class="filterbar">
       <div class="search">
         <input
           type="search"
           value=${query}
-          placeholder="Search number, title, author, repo"
+          placeholder="Search"
           autocapitalize="off"
           autocorrect="off"
           spellcheck="false"
@@ -378,7 +280,7 @@ function FilterBar({ query, onQuery, sort, onSort }) {
           html`<button class="clear" onClick=${() => onQuery('')} aria-label="Clear search">✕</button>`}
       </div>
       <select class="sort" value=${sort} onChange=${(event) => onSort(event.target.value)}>
-        ${SORTS.map(
+        ${sorts.map(
           (option) => html`<option key=${option.key} value=${option.key}>${option.label}</option>`
         )}
       </select>
@@ -386,22 +288,74 @@ function FilterBar({ query, onQuery, sort, onSort }) {
   `
 }
 
+function Pill({ label, count, on, help, onToggle }) {
+  return html`
+    <button class=${on ? 'pill on' : 'pill'} title=${help} aria-pressed=${on} onClick=${onToggle}>
+      ${label} <span class="pill-count">${count}</span>
+    </button>
+  `
+}
+
+/// The Mac's filter bar: signal pills, resource pills and Hide parked. One scrolling
+/// strip, because thirteen pills do not fit a phone width.
+function Pills({ listing, counts, selection, onSelection }) {
+  return html`
+    <div class="pills">
+      ${listing.signalFilters.map(
+        (option) => html`
+          <${Pill}
+            key=${option.key}
+            label=${option.label}
+            help=${option.help}
+            count=${counts.signals[option.key] ?? 0}
+            on=${selection.signals.has(option.key)}
+            onToggle=${() =>
+              onSelection({ ...selection, signals: toggled(selection.signals, option.key) })}
+          />
+        `
+      )}
+      ${listing.resourceFilters.map(
+        (option) => html`
+          <${Pill}
+            key=${option.key}
+            label=${option.label}
+            help=${option.help}
+            count=${counts.resources[option.key] ?? 0}
+            on=${selection.resources.has(option.key)}
+            onToggle=${() =>
+              onSelection({ ...selection, resources: toggled(selection.resources, option.key) })}
+          />
+        `
+      )}
+      <${Pill}
+        label="Hide parked"
+        help="Hide PRs you approved that are now waiting on somebody else. One comes back as soon as the author pushes, replies, or asks you for another review."
+        count=${counts.parked}
+        on=${selection.hideParked}
+        onToggle=${() => onSelection({ ...selection, hideParked: !selection.hideParked })}
+      />
+      ${!selectionIsEmpty(selection) &&
+        html`<button class="pill clear-pills" onClick=${() => onSelection(emptySelection())}>
+          Clear
+        </button>`}
+    </div>
+  `
+}
+
 function Tabs({ counts, tab, onSelect }) {
   return html`
     <nav class="tabs" role="tablist">
-      ${TAB_ORDER.map(
+      ${SECTION_ORDER.map(
         (kind) => html`
           <button
             key=${kind}
             role="tab"
             aria-selected=${tab === kind}
-            class=${`tab ${kind}${tab === kind ? ' active' : ''}`}
+            class=${`tab${tab === kind ? ' active' : ''}`}
             onClick=${() => onSelect(kind)}
           >
-            <span class="tab-label">${TAB_LABELS[kind]}</span>
-            <span class=${`tab-count${kind === 'needsYou' && counts[kind] > 0 ? ' urgent' : ''}`}>
-              ${counts[kind]}
-            </span>
+            <span class="tab-label">${SECTION_TITLES[kind]}</span>
+            <span class="tab-count">${counts[kind]}</span>
           </button>
         `
       )}
@@ -409,32 +363,26 @@ function Tabs({ counts, tab, onSelect }) {
   `
 }
 
-/// Searching deliberately ignores the tabs. You rarely know which group the item you are
-/// hunting for landed in, so a search that only looked in the current tab would usually
-/// find nothing.
-function List({ snapshot, tab, query, sort, onOpen }) {
-  const searching = query.trim() !== ''
-  const items = searching
-    ? sortItems(flatten(snapshot).filter((item) => matches(item, query.trim())), sort)
-    : sortItems(itemsForTab(snapshot, tab), sort)
+/// One section at a time. Search and pills narrow every section, as on the Mac, so when
+/// the open tab comes up empty the note says where the matches went.
+function List({ snapshot, tab, query, selection, sort, counts, onOpen }) {
+  const items = visibleItems(snapshot, tab, query, selection, sort)
+  const elsewhere = SECTION_ORDER.filter((kind) => kind !== tab && counts[kind] > 0)
+  const narrowed = query.trim() !== '' || !selectionIsEmpty(selection)
 
   return html`
     <div class="list">
       ${snapshot.warnings.length > 0 &&
         html`<div class="warnings">${snapshot.warnings.join(' · ')}</div>`}
-      ${searching &&
-        html`<p class="result-count">
-          ${items.length} ${items.length === 1 ? 'match' : 'matches'} across all groups
-        </p>`}
       ${items.length === 0
         ? html`<p class="empty">
-            ${searching ? `Nothing matches "${query.trim()}".` : EMPTY_MESSAGES[tab]}
+            ${narrowed ? 'Nothing here matches.' : `No items in ${SECTION_TITLES[tab]}.`}
+            ${narrowed && elsewhere.length > 0 &&
+              html`<br />${elsewhere
+                .map((kind) => `${SECTION_TITLES[kind]}: ${counts[kind]}`)
+                .join(' · ')}`}
           </p>`
-        : items.map(
-            (item) => html`
-              <${Row} key=${item.id} item=${item} onOpen=${onOpen} showGroup=${searching} />
-            `
-          )}
+        : items.map((item) => html`<${Row} key=${item.id} item=${item} onOpen=${onOpen} />`)}
     </div>
   `
 }
@@ -623,12 +571,19 @@ function App() {
   const [openID, setOpenID] = useState(null)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
-  // Always opens on Needs you. The one question worth answering on picking the
-  // phone up is "is anything stuck?", so it is never hidden behind a stale tab.
-  const [tab, setTab] = useState('needsYou')
+  const [tab, setTab] = useState('reviewRequests')
   const [query, setQuery] = useState('')
-  const [sort, setSort] = useState('recent')
+  // Sort and Hide parked start from the Mac's settings, then belong to the phone. A tap
+  // here never rearranges the Mac sidebar.
+  const [sort, setSort] = useState(null)
+  const [selection, setSelection] = useState(null)
   const { snapshot, connected, rejected } = useSnapshot(token)
+
+  useEffect(() => {
+    if (!snapshot) return
+    if (sort === null) setSort(snapshot.listing.sort)
+    if (selection === null) setSelection(emptySelection(snapshot.listing.hideParked))
+  }, [snapshot, sort, selection])
 
   const pair = useCallback((value) => {
     saveToken(value)
@@ -654,9 +609,11 @@ function App() {
     return html`<${TokenPrompt} onToken=${pair} failed=${true} />`
   }
 
-  if (!snapshot) {
+  if (!snapshot || sort === null || selection === null) {
     return html`<div class="prompt"><p>Connecting…</p></div>`
   }
+
+  const counts = sectionCounts(snapshot, query, selection)
 
   return html`
     <div class="app">
@@ -676,7 +633,7 @@ function App() {
           : html`
               <header class="bar">
                 <span class="brand">PR Pilot</span>
-                <span class="count">${itemCount(snapshot)} items</span>
+                <span class="count">${flatten(snapshot).length} items</span>
                 <!-- Installed to the home screen there is no browser chrome, so no way to
                      reload and pick up a new client. This is it. -->
                 <button
@@ -685,9 +642,20 @@ function App() {
                   onClick=${() => location.reload()}
                 >⟳</button>
               </header>
-              <${FilterBar} query=${query} onQuery=${setQuery} sort=${sort} onSort=${setSort} />
-              ${query.trim() === '' &&
-                html`<${Tabs} counts=${countsByGroup(snapshot)} tab=${tab} onSelect=${setTab} />`}
+              <${FilterBar}
+                query=${query}
+                onQuery=${setQuery}
+                sort=${sort}
+                sorts=${snapshot.listing.sorts}
+                onSort=${setSort}
+              />
+              <${Pills}
+                listing=${snapshot.listing}
+                counts=${pillCounts(snapshot)}
+                selection=${selection}
+                onSelection=${setSelection}
+              />
+              <${Tabs} counts=${counts} tab=${tab} onSelect=${setTab} />
             `}
       </div>
       ${open
@@ -704,7 +672,9 @@ function App() {
               snapshot=${snapshot}
               tab=${tab}
               query=${query}
+              selection=${selection}
               sort=${sort}
+              counts=${counts}
               onOpen=${setOpenID}
             />
           `}

@@ -7,7 +7,7 @@ final class FakeGatewayBackend: GatewayBackend {
     var nextStatus: GatewayCommandResult.Status = .accepted
     var nextMessage: String?
     var login: String? = "ordishs"
-    var groups: [GatewayGroup] = []
+    var sections: [GatewaySection] = []
     var cannedTranscript: GatewayTranscript?
     private(set) var transcriptRequests: [(id: String, limit: Int)] = []
 
@@ -16,7 +16,7 @@ final class FakeGatewayBackend: GatewayBackend {
             generatedAt: Date(timeIntervalSince1970: 1_789_000_000),
             appVersion: "test",
             login: login,
-            groups: groups,
+            sections: sections,
             warnings: []
         )
     }

@@ -10,7 +10,7 @@ private func result(_ message: String) -> GatewayCommandResult {
             generatedAt: Date(timeIntervalSince1970: 0),
             appVersion: "test",
             login: nil,
-            groups: [],
+            sections: [],
             warnings: []
         )
     )

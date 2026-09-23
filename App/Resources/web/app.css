@@ -223,6 +223,43 @@ button {
   color: var(--muted);
 }
 
+/* The Mac filter bar as one sideways-scrolling strip. Thirteen pills cannot wrap on a
+   phone without pushing the list off the first screen. */
+.pills {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding: 0 max(12px, env(safe-area-inset-left)) 2px;
+}
+
+.pills::-webkit-scrollbar { display: none; }
+
+.pill {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  font: 500 13px/1 -apple-system, system-ui, sans-serif;
+  white-space: nowrap;
+}
+
+.pill-count { color: var(--muted); font-weight: 600; margin-left: 3px; }
+
+.pill.on {
+  background: var(--blue-bg);
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.pill.on .pill-count { color: var(--blue); }
+
+.pill.clear-pills { color: var(--muted); }
+
 /* Full badge set on each row, wrapping. Rows vary in height as a result, which is the
    deliberate trade for seeing every state without opening an item. */
 .row-badges {
@@ -234,25 +271,8 @@ button {
 
 .row-badges .badge { font-size: 11px; padding: 2px 6px; }
 
-/* Which group a search result came from, since searching ignores the tabs. */
-.row-group {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  vertical-align: 1px;
-}
-
-.row-group.needsYou { background: var(--orange-bg); color: var(--orange); }
-.row-group.running { background: var(--green-bg); color: var(--green); }
-.row-group.queued, .row-group.idle { background: var(--grey-bg); color: var(--grey); }
-
-/* Tab bar. Replaces the old per-group headings: the selected tab is the
-   heading. Sticks under the app bar so it survives a long scroll. */
+/* Tab bar: one tab per Mac sidebar section. The selected tab is the heading, and
+   the counts follow the search and the pills. */
 .tabs {
   display: flex;
   gap: 4px;
@@ -292,24 +312,6 @@ button {
   border-color: var(--line);
   color: var(--text);
 }
-
-/* Colour follows the group, so the selected tab reads the same way the old
-   headings did. */
-.tab.needsYou.active { color: var(--orange); border-color: var(--orange); }
-.tab.running.active  { color: var(--green);  border-color: var(--green); }
-
-/* Outstanding work is the one thing that must be visible without tapping,
-   because three of the four groups are now hidden behind a tap. */
-.tab-count.urgent {
-  color: #fff;
-  background: var(--orange);
-  border-radius: 9px;
-  min-width: 20px;
-  padding: 0 6px;
-  line-height: 18px;
-}
-
-.tab.needsYou.active .tab-count.urgent { color: #fff; }
 
 .row {
   display: block;

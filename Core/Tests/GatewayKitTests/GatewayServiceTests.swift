@@ -114,6 +114,16 @@ private var webClientRoot: URL {
     #expect(vendored.status == 200)
     #expect(String(decoding: vendored.body, as: UTF8.self).contains("export{"))
 
+    // A module script served under any other type is refused by the browser, and the list
+    // then never renders.
+    var listingRequest = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/listing.mjs")!)
+    listingRequest.httpMethod = "GET"
+    let (listingBody, listingResponse) = try await URLSession.shared.data(for: listingRequest)
+    let listingHTTP = try #require(listingResponse as? HTTPURLResponse)
+    #expect(listingHTTP.statusCode == 200)
+    #expect(listingHTTP.value(forHTTPHeaderField: "Content-Type")?.contains("javascript") == true)
+    #expect(String(decoding: listingBody, as: UTF8.self).contains("export function matchesFilters("))
+
     let manifest = try await get("http://127.0.0.1:\(port)/manifest.json", token: nil)
     #expect(manifest.status == 200)
     #expect(String(decoding: manifest.body, as: UTF8.self).contains("\"display\": \"standalone\""))

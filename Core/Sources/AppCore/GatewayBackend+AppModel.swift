@@ -14,29 +14,34 @@ extension AppModel: GatewayBackend {
                 isDisabled: work.disabled,
                 limitMessage: work.agentLimitMessage,
                 awaitsMyResponse: work.awaitsMyResponse(myLogin: currentLogin),
-                hasVerdict: work.claudeReviewedAt != nil,
-                hasUnseenAuthorUpdate: hasUnseenAuthorUpdate(work),
-                sessionIsLive: claudeSessions[work.id] != nil,
-                isQueued: queuedReviewIDs.contains(work.id)
+                hasUnseenAuthorUpdate: hasUnseenAuthorUpdate(work)
             )
         }
 
-        let groups = GatewayProjection.groups(items: items, facts: facts) { work in
-            GatewayProjection.Decoration(
-                agent: gatewayAgent(for: work),
-                badges: gatewayBadges(for: work),
-                issueStatus: gatewayIssueStatus(for: work),
-                ahead: pushability[work.id]?.ahead ?? 0,
-                behind: pushability[work.id]?.behind ?? 0,
-                localChanges: worktreeLocalChanges[work.id] ?? 0
-            )
-        }
+        let sections = GatewayProjection.sections(
+            items: items,
+            myLogin: currentLogin,
+            sort: settings.sidebarSort,
+            facts: facts,
+            sidebarFacts: { sidebarFacts(for: $0) },
+            decorate: { work in
+                GatewayProjection.Decoration(
+                    agent: gatewayAgent(for: work),
+                    badges: gatewayBadges(for: work),
+                    issueStatus: gatewayIssueStatus(for: work),
+                    ahead: pushability[work.id]?.ahead ?? 0,
+                    behind: pushability[work.id]?.behind ?? 0,
+                    localChanges: worktreeLocalChanges[work.id] ?? 0
+                )
+            }
+        )
 
         return GatewaySnapshot(
             generatedAt: Date(),
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
             login: currentLogin,
-            groups: groups,
+            sections: sections,
+            listing: GatewayProjection.listing(sort: settings.sidebarSort, hideParked: settings.hideParked),
             warnings: discoveryWarnings
         )
     }

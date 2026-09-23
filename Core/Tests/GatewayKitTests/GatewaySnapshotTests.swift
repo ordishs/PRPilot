@@ -30,7 +30,12 @@ private func sampleItem() -> GatewayItem {
         behind: 12,
         localChanges: 2,
         lastActivityAt: Date(timeIntervalSince1970: 1_789_000_000),
-        primaryCommand: nil
+        primaryCommand: nil,
+        signals: ["ciFailing", "dirty"],
+        resources: ["worktree", "session"],
+        isParked: true,
+        addedAt: Date(timeIntervalSince1970: 1_788_000_000),
+        statusRank: 1
     )
 }
 
@@ -40,7 +45,18 @@ private func sampleItem() -> GatewayItem {
         gatewayVersion: GatewayVersion.current,
         appVersion: "0.9.1",
         login: "ordishs",
-        groups: [GatewayGroup(kind: .needsYou, items: [sampleItem()])],
+        sections: [
+            GatewaySection(kind: .myWork, items: []),
+            GatewaySection(kind: .reviewRequests, items: [sampleItem()]),
+            GatewaySection(kind: .issues, items: []),
+        ],
+        listing: GatewayListing(
+            signalFilters: [GatewayOption(key: "agent", label: "Agent", help: "unanswered turn")],
+            resourceFilters: [GatewayOption(key: "worktree", label: "Worktree", help: "on disk")],
+            sorts: [GatewayOption(key: "byStatus", label: "By status", help: "")],
+            sort: "byStatus",
+            hideParked: true
+        ),
         warnings: ["discovery query failed"]
     )
 
@@ -50,11 +66,19 @@ private func sampleItem() -> GatewayItem {
     #expect(decoded == snapshot)
 }
 
-@Test func groupKindsEncodeAsTheNamesTheClientReads() throws {
-    let encoded = try JSONEncoder().encode(
-        [GatewayGroupKind.needsYou, .running, .queued, .idle]
-    )
-    #expect(String(decoding: encoded, as: UTF8.self) == #"["needsYou","running","queued","idle"]"#)
+@Test func sectionKindsEncodeAsTheNamesTheClientReads() throws {
+    let encoded = try JSONEncoder().encode(GatewaySectionKind.allCases)
+    #expect(String(decoding: encoded, as: UTF8.self) == #"["myWork","reviewRequests","issues"]"#)
+}
+
+@Test func theSortKeyTravelsAsAnISO8601StringTheBrowserCanParse() throws {
+    let data = try GatewayCoding.encoder.encode(sampleItem())
+    let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+    #expect(json["addedAt"] as? String == "2026-08-29T10:40:00Z")
+    #expect(json["statusRank"] as? Int == 1)
+    #expect(json["signals"] as? [String] == ["ciFailing", "dirty"])
+    #expect(json["isParked"] as? Bool == true)
 }
 
 @Test func badgeTonesEncodeAsTheNamesTheClientReads() throws {

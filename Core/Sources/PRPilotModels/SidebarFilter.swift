@@ -47,6 +47,23 @@ public struct SignalFilter: OptionSet, Sendable, Hashable {
         }
     }
 
+    /// Stable name for the wire. The raw value is a bit position and the display name is
+    /// copy, so neither is safe for the phone client to key on.
+    public var key: String {
+        switch self {
+        case .agent: return "agent"
+        case .needsInput: return "needsInput"
+        case .working: return "working"
+        case .author: return "author"
+        case .ciFailing: return "ciFailing"
+        case .behind: return "behind"
+        case .dirty: return "dirty"
+        case .conflict: return "conflict"
+        case .ready: return "ready"
+        default: return ""
+        }
+    }
+
     public var help: String {
         switch self {
         case .agent: return "The agent finished a turn that you have not answered"
@@ -81,6 +98,16 @@ public struct ResourceFilter: OptionSet, Sendable, Hashable {
         case .worktree: return "Worktree"
         case .session: return "Session"
         case .web: return "Web"
+        default: return ""
+        }
+    }
+
+    /// Stable name for the wire, for the same reason as `SignalFilter.key`.
+    public var key: String {
+        switch self {
+        case .worktree: return "worktree"
+        case .session: return "session"
+        case .web: return "web"
         default: return ""
         }
     }

@@ -16,6 +16,7 @@ import HummingbirdTesting
     }
 }
 
-@Test func gatewayVersionIsOne() {
-    #expect(GatewayVersion.current == 1)
+// Version 2 replaced the attention groups with the Mac's sidebar sections.
+@Test func gatewayVersionIsTwo() {
+    #expect(GatewayVersion.current == 2)
 }

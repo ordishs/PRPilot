@@ -10,10 +10,7 @@ private func noFacts(_ id: String) -> GatewayItemFacts {
         isDisabled: false,
         limitMessage: nil,
         awaitsMyResponse: false,
-        hasVerdict: false,
-        hasUnseenAuthorUpdate: false,
-        sessionIsLive: false,
-        isQueued: false
+        hasUnseenAuthorUpdate: false
     )
 }
 
@@ -23,10 +20,7 @@ private func limitedFacts(_ id: String) -> GatewayItemFacts {
         isDisabled: false,
         limitMessage: "5-hour limit reached",
         awaitsMyResponse: false,
-        hasVerdict: false,
-        hasUnseenAuthorUpdate: false,
-        sessionIsLive: false,
-        isQueued: false
+        hasUnseenAuthorUpdate: false
     )
 }
 
@@ -34,7 +28,10 @@ private func prItem(
     id: String = "bsv-blockchain/teranode#4788",
     title: String = "UTXO store: drop the legacy index path",
     disabled: Bool = false,
-    label: String? = nil
+    label: String? = nil,
+    author: String = "bob",
+    prState: PRState = .open,
+    addedAt: Date = Date(timeIntervalSince1970: 1_789_000_000)
 ) -> WorkItem {
     WorkItem(
         id: id,
@@ -47,11 +44,11 @@ private func prItem(
             repo: "teranode",
             number: 4788,
             url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/4788")!,
-            authorLogin: "bob"
+            authorLogin: author
         ),
-        prState: .open,
+        prState: prState,
         origin: .added,
-        addedAt: Date(timeIntervalSince1970: 1_789_000_000),
+        addedAt: addedAt,
         disabled: disabled,
         label: label
     )
@@ -70,6 +67,7 @@ private let plainDecoration = GatewayProjection.Decoration(
     let projected = GatewayProjection.item(
         from: prItem(),
         facts: noFacts("bsv-blockchain/teranode#4788"),
+        sidebar: SidebarItemFacts(),
         decoration: GatewayProjection.Decoration(
             agent: nil,
             badges: [],
@@ -92,10 +90,11 @@ private let plainDecoration = GatewayProjection.Decoration(
     #expect(projected.localChanges == 2)
 }
 
-@Test func aLimitedItemCarriesItsReasonAndPrimaryCommandFromTheGroupingRule() {
+@Test func aLimitedItemCarriesItsReasonAndPrimaryCommandFromTheAttentionRule() {
     let projected = GatewayProjection.item(
         from: prItem(),
         facts: limitedFacts("bsv-blockchain/teranode#4788"),
+        sidebar: SidebarItemFacts(),
         decoration: plainDecoration
     )
 
@@ -107,6 +106,7 @@ private let plainDecoration = GatewayProjection.Decoration(
     let projected = GatewayProjection.item(
         from: prItem(),
         facts: noFacts("bsv-blockchain/teranode#4788"),
+        sidebar: SidebarItemFacts(),
         decoration: plainDecoration
     )
 
@@ -134,6 +134,7 @@ private let plainDecoration = GatewayProjection.Decoration(
     let projected = GatewayProjection.item(
         from: issue,
         facts: noFacts(issue.id),
+        sidebar: SidebarItemFacts(),
         decoration: plainDecoration
     )
 
@@ -155,6 +156,7 @@ private let plainDecoration = GatewayProjection.Decoration(
     let projected = GatewayProjection.item(
         from: task,
         facts: noFacts("local/scratch"),
+        sidebar: SidebarItemFacts(),
         decoration: plainDecoration
     )
 
@@ -168,35 +170,94 @@ private let plainDecoration = GatewayProjection.Decoration(
     let projected = GatewayProjection.item(
         from: prItem(label: "perf"),
         facts: noFacts("bsv-blockchain/teranode#4788"),
+        sidebar: SidebarItemFacts(),
         decoration: plainDecoration
     )
 
     #expect(projected.label == "perf")
 }
 
-@Test func groupsAreOrderedNeedsYouRunningQueuedIdleAndEmptyOnesAreDropped() {
-    let needy = prItem(id: "a#1", title: "needy")
-    let plain = prItem(id: "a#2", title: "plain")
+@Test func signalsResourcesAndParkedTravelInTheMacPillOrder() {
+    let projected = GatewayProjection.item(
+        from: prItem(prState: .draft),
+        facts: noFacts("bsv-blockchain/teranode#4788"),
+        sidebar: SidebarItemFacts(
+            awaitsMyResponse: true,
+            ciFailing: true,
+            hasConflict: true,
+            hasWorktree: true,
+            hasWebView: true,
+            isParked: true
+        ),
+        decoration: plainDecoration
+    )
 
-    let groups = GatewayProjection.groups(
-        items: [plain, needy],
-        facts: ["a#1": limitedFacts("a#1"), "a#2": noFacts("a#2")],
+    #expect(projected.signals == ["agent", "ciFailing", "conflict"])
+    #expect(projected.resources == ["worktree", "web"])
+    #expect(projected.isParked)
+    #expect(projected.statusRank == statusRank(.draft))
+    #expect(projected.addedAt == Date(timeIntervalSince1970: 1_789_000_000))
+}
+
+@Test func sectionsFollowTheMacSplitAndAreAlwaysAllThree() {
+    let mine = prItem(id: "a#1", title: "mine", author: "ordishs")
+    let theirs = prItem(id: "a#2", title: "theirs", author: "bob")
+
+    let sections = GatewayProjection.sections(
+        items: [theirs, mine],
+        myLogin: "ordishs",
+        sort: .recent,
+        facts: ["a#1": noFacts("a#1"), "a#2": noFacts("a#2")],
+        sidebarFacts: { _ in SidebarItemFacts() },
         decorate: { _ in plainDecoration }
     )
 
-    #expect(groups.map(\.kind) == [.needsYou, .idle])
-    #expect(groups[0].items.map(\.title) == ["needy"])
-    #expect(groups[1].items.map(\.title) == ["plain"])
+    #expect(sections.map(\.kind) == [.myWork, .reviewRequests, .issues])
+    #expect(sections[0].items.map(\.title) == ["mine"])
+    #expect(sections[1].items.map(\.title) == ["theirs"])
+    #expect(sections[2].items.isEmpty)
+}
+
+@Test func sectionsAreSortedTheWayTheMacSortsThem() {
+    let older = prItem(id: "a#1", title: "older", author: "amy", addedAt: Date(timeIntervalSince1970: 100))
+    let newer = prItem(id: "a#2", title: "newer", author: "zed", addedAt: Date(timeIntervalSince1970: 200))
+    let facts = ["a#1": noFacts("a#1"), "a#2": noFacts("a#2")]
+
+    let recent = GatewayProjection.sections(
+        items: [older, newer], myLogin: nil, sort: .recent, facts: facts,
+        sidebarFacts: { _ in SidebarItemFacts() }, decorate: { _ in plainDecoration }
+    )
+    let byAuthor = GatewayProjection.sections(
+        items: [newer, older], myLogin: nil, sort: .byAuthor, facts: facts,
+        sidebarFacts: { _ in SidebarItemFacts() }, decorate: { _ in plainDecoration }
+    )
+
+    #expect(recent[1].items.map(\.title) == ["newer", "older"])
+    #expect(byAuthor[1].items.map(\.title) == ["older", "newer"])
 }
 
 @Test func anItemWithNoFactsIsLeftOutRatherThanGuessedAt() {
-    let groups = GatewayProjection.groups(
+    let sections = GatewayProjection.sections(
         items: [prItem(id: "a#1")],
+        myLogin: nil,
+        sort: .recent,
         facts: [:],
+        sidebarFacts: { _ in SidebarItemFacts() },
         decorate: { _ in plainDecoration }
     )
 
-    #expect(groups.isEmpty)
+    #expect(sections.allSatisfy { $0.items.isEmpty })
+}
+
+@Test func theListingWordsEveryPillAndSortTheWayTheMacDoes() {
+    let listing = GatewayProjection.listing(sort: .byStatus, hideParked: true)
+
+    #expect(listing.signalFilters.map(\.label) == SignalFilter.ordered.map(\.displayName))
+    #expect(listing.signalFilters.map(\.help) == SignalFilter.ordered.map(\.help))
+    #expect(listing.resourceFilters.map(\.label) == ResourceFilter.ordered.map(\.displayName))
+    #expect(listing.sorts.map(\.label) == SidebarSort.allCases.map(\.displayName))
+    #expect(listing.sort == "byStatus")
+    #expect(listing.hideParked)
 }
 
 @Test func removeIsRefusedWhileTheWorktreeHasLocalChanges() {

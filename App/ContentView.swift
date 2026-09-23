@@ -17,28 +17,8 @@ struct ContentView: View {
     @State private var filterSelection = SidebarFilterSelection()
     @Environment(\.colorScheme) private var colorScheme
 
-    /// Everything the filter and the row indicators need that is not on the item itself.
-    /// Built here because only the view layer can see the live agent sessions and web views.
     private func facts(for review: WorkItem) -> SidebarItemFacts {
-        let status = model.claudeStatuses[review.id]
-        var needsInput = false
-        if case .awaitingInput = status { needsInput = true }
-        let prStatus = model.prStatuses[review.id]
-        return SidebarItemFacts(
-            awaitsMyResponse: review.awaitsMyResponse(myLogin: model.currentLogin),
-            needsInput: needsInput,
-            isWorking: status == .working,
-            hasAuthorUpdate: model.hasUnseenAuthorUpdate(review),
-            ciFailing: prStatus?.ci == .failing,
-            isBehind: prStatus?.isBehind ?? false,
-            hasConflict: prStatus?.mergeState == .conflict,
-            isReady: prStatus?.isReadyToMerge(prState: review.prState) ?? false,
-            hasLocalChanges: (model.worktreeLocalChanges[review.id] ?? 0) > 0,
-            hasWorktree: review.worktreePath != nil,
-            hasSession: model.claudeSessions[review.id] != nil,
-            hasWebView: webViewCache.isLive(review.id),
-            isParked: isParkedReview(review, hasUnseenAuthorUpdate: model.hasUnseenAuthorUpdate(review))
-        )
+        model.sidebarFacts(for: review)
     }
 
     /// The pills the user pressed this launch, plus the one filter that is a stored

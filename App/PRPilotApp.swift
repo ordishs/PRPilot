@@ -50,6 +50,9 @@ struct PRPilotApp: App {
                     created.webPreloadHandler = { review in
                         _ = webViewCache.ensure(for: review)
                     }
+                    created.webViewIsLive = { id in
+                        webViewCache.isLive(id)
+                    }
                     await created.load()
                     // Before anything opens a worktree. Deliberately not inside load(),
                     // which must not touch the filesystem outside the store.

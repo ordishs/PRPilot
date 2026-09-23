@@ -13,6 +13,11 @@
 - **Revised:** 2026-09-17 — decision 14, tabs. The four groups became a
   segmented control after use on a phone showed a scrolling list buries the
   group that matters. See "List screen".
+- **Revised:** 2026-09-23 — decision 18, the Mac layout. The four attention
+  groups became the Mac sidebar sections, pills, search and sorts. "Agent
+  finished its review" is no longer a reason: `claudeReviewedAt` never clears,
+  so nearly every item sat under `Needs you`. Decision 18 supersedes decisions
+  14 and 17. Wire version 2. See "List screen" and "Attention reason".
 
 ## Summary
 
@@ -58,7 +63,8 @@ The gateway is a projection over `AppModel`. It adds no domain logic.
 | 14 | Group presentation | One tab per group, top segmented control, always opens on Needs you | A scrolling list put the group that matters below the fold on a real phone. Added 2026-09-17 |
 | 15 | Agent conversation | Read the transcript on disk, not the terminal screen | The terminal holds only the visible rows, so anything scrolled past is lost. `HandoverNote` already parsed these files. Added 2026-09-17 |
 | 16 | Row density | Full badge set on every row, wrapping | **Reverses decision 10.** Chosen knowingly after use: seeing every state without opening an item beat fixed-height rows. Added 2026-09-17 |
-| 17 | Search scope | Searching ignores the tabs and returns a flat, group-tagged list | You rarely know which group the item you are hunting for landed in. Added 2026-09-17 |
+| 17 | Search scope | Searching ignores the tabs and returns a flat, group-tagged list | You rarely know which group the item you are hunting for landed in. Added 2026-09-17. Superseded by 18 |
+| 18 | List layout | The Mac sidebar: one tab per section, the same pills, search and sorts | The attention groups disagreed with the Mac, and a sticky reason put nearly everything under `Needs you`. One set of rules on both screens. **Supersedes decisions 14 and 17.** Added 2026-09-23 |
 
 ## Architecture
 
@@ -187,12 +193,20 @@ GatewaySnapshot
   generatedAt: Date
   appVersion: String
   login: String?                 the gh login the Mac is using
-  groups: [GatewayGroup]         ordered: needsYou, running, queued, idle
+  sections: [GatewaySection]     always all three: myWork, reviewRequests, issues
+  listing: GatewayListing        the Mac's pills, sorts and defaults
   warnings: [String]             discovery warnings
 
-GatewayGroup
-  kind: needsYou | running | queued | idle
-  items: [GatewayItem]
+GatewaySection
+  kind: myWork | reviewRequests | issues
+  items: [GatewayItem]           split and sorted by sidebarSections, as on the Mac
+
+GatewayListing
+  signalFilters: [GatewayOption]   key, label, help from SignalFilter
+  resourceFilters: [GatewayOption] key, label, help from ResourceFilter
+  sorts: [GatewayOption]           from SidebarSort
+  sort: String                     the Mac's sort, the phone's starting point
+  hideParked: Bool                 the Mac's Hide parked, the phone's starting point
 
 GatewayItem
   id, kind (pr | issue), owner, repo, number, url
@@ -206,6 +220,10 @@ GatewayItem
   ahead: Int, behind: Int, localChanges: Int
   lastActivityAt: Date?
   primaryCommand: GatewayCommand?             drives the sticky button
+  signals: [String]              SignalFilter keys, from AppModel.sidebarFacts
+  resources: [String]            ResourceFilter keys, from AppModel.sidebarFacts
+  isParked: Bool                 isParkedReview, the Hide parked test
+  addedAt: Date, statusRank: Int sort keys for Recent and By status
 
 GatewayAgent
   kind: String                   claude | codex | pi
@@ -220,11 +238,12 @@ GatewayBadge
   help: String                   the same help text the Mac badge carries
 ```
 
-### Attention reason and grouping
+### Attention reason
 
-`GatewayKit` owns one pure function. It maps a work item's state to a group and
-an optional attention reason plus primary command. This is the rule the whole
-list layout depends on, so it is pure, total, and heavily tested.
+`GatewayKit` owns one pure function, `GatewayAttentionRule.evaluate`. It maps a
+work item's state to an optional attention reason plus primary command. The row
+and the detail banner show the reason; the sticky button runs the command. It
+no longer decides where an item is listed — the Mac sections do that.
 
 Its input is `GatewayItemFacts`, a flat value type of booleans and dates that
 `AppCore` builds:
@@ -234,10 +253,7 @@ GatewayItemFacts
   isDisabled: Bool
   limitMessage: String?        non-nil when the agent stopped on a limit
   awaitsMyResponse: Bool       from WorkItem.awaitsMyResponse(myLogin:)
-  hasVerdict: Bool
   hasUnseenAuthorUpdate: Bool
-  sessionIsLive: Bool
-  isQueued: Bool
 ```
 
 `AgentStatus` lives in `AgentKit`, which links SwiftTerm. `GatewayKit` must not
@@ -247,17 +263,20 @@ booleans at the boundary.
 
 Priority order, first match wins:
 
-| Condition | Group | Reason | Primary command |
-|---|---|---|---|
-| Agent hit a usage limit | needsYou | "Agent hit its usage limit" | `clearAgentLimit` |
-| Agent is waiting for input | needsYou | "Agent is waiting for you" | `clearWaiting` |
-| Agent finished with a verdict | needsYou | "Agent finished its review" | none — the verdict is the payload, and you read it on the detail screen |
-| Author pushed unseen commits | needsYou | "Author pushed new commits" | `markAuthorUpdateSeen` |
-| Agent session is live | running | none | none |
-| Item is in the session queue | queued | none | none |
-| Otherwise | idle | none | none |
+| Condition | Reason | Primary command |
+|---|---|---|
+| Agent hit a usage limit | "Agent hit its usage limit" | `clearAgentLimit` |
+| Agent finished a turn you have not answered | "Agent is waiting for you" | `clearWaiting` |
+| Author pushed unseen commits | "Author pushed new commits" | `markAuthorUpdateSeen` |
+| Otherwise | none | none |
 
-A disabled item is always `idle`, whatever else is true.
+A disabled item has no reason, whatever else is true.
+
+Every reason clears when you act on it. The first design also listed "Agent
+finished its review", keyed on `claudeReviewedAt`. Nothing clears that field,
+so an item the agent reviewed once asked for you forever, and in use nearly
+the whole queue sat under `Needs you`. The unanswered turn is already the
+`awaitsMyResponse` row, and it clears when you post a review.
 
 ### Commands
 
@@ -421,54 +440,42 @@ diffing makes a snapshot push a no-op for untouched rows.
 
 ### List screen
 
-A segmented control under the header selects one group: `Needs you`, `Running`,
-`Queued`, `Idle`, always in that order, each showing its count. The list below
-shows that group alone.
+The list mirrors the Mac sidebar (decision 18). A segmented control under the
+header selects one section: `My Work`, `Review Requests`, `Issues`, in the Mac
+order. The server splits and sorts the items with the same `sidebarSections`
+call the sidebar makes, so an item sits in the same section on both screens.
+The view opens on `Review Requests`.
 
-The tab bar replaces per-group headings rather than adding to them. The
-selected tab is the heading, so repeating it above the rows would be noise.
+Under the search box sits the Mac filter bar as one sideways-scrolling strip:
+the nine signal pills, the three resource pills and `Hide parked`, with the
+Mac's labels and help text from `GatewayListing`. The match rule is the Mac's
+`sidebarItemMatches`:
 
-**Why tabs rather than one grouped list.** The original design stacked all four
-groups with sticky headings. In use on a phone that buried the group that
-matters: with a realistic queue, `Needs you` could sit below the fold behind
-`Running` and `Queued`.
+- Pills inside one group widen the result; the two groups narrow each other.
+- `Hide parked` is an exclusion. It runs first and it wins.
+- Pill counts cover every item, whatever is selected, as on the Mac.
 
-Three rules follow from that, and the design depends on all three:
+Each item carries its signal and resource keys, built by
+`AppModel.sidebarFacts(for:)`. The Mac sidebar calls the same function, so a
+pill count on the phone always matches the Mac. The `Web` resource asks the
+Mac's web view cache through `AppModel.webViewIsLive`.
 
-- **The view always opens on `Needs you`**, never the last tab used. A stuck
-  agent must not sit unseen behind a tab the user happened to leave selected.
-- **The `Needs you` count renders as a filled badge when it is non-zero.** Three
-  groups are now one tap away, so that badge carries the "is anything stuck?"
-  signal the grouped list gave for free. At zero it is a plain number.
-- **Empty tabs stay selectable** and say what is absent — "No agent is running"
-  rather than a blank list. An empty group is information, not a dead end.
+Search matches the Mac's fields: title, owner/repo, author, head branch, label
+and `#number`, case-insensitively. Search and pills narrow every section, and
+the tab counts follow them, as the Mac section headers do. When the open tab
+comes up empty, the note gives the counts in the other sections.
 
-The selected tab is tinted to its group, amber for `Needs you` and green for
-`Running`, preserving the colour coding the old headings carried.
+**Sorting** offers the Mac orders: Recent, By status and By author, each
+falling back to newest first. The phone starts from the Mac's sort and Hide
+parked, then keeps its own changes: a tap on the phone never rearranges the
+Mac sidebar.
 
 A row shows the title, the attention reason in words, then the repository,
-number, author, relative age and label, then **the full badge set, wrapping**.
+number, author, relative age and label, then **the full badge set, wrapping**
+(decision 16). Only a disabled row is dimmed.
 
-Carrying every badge reverses decision 10, which kept badges out of the list to
-hold rows to a fixed height. That was the right call before the client was in
-use; after it, seeing CI, approvals and limits without opening an item mattered
-more than uniform row height. Rows now vary in height, and that is the accepted
-cost.
-
-**Search ignores the tabs.** A non-empty query hides the tab bar and returns one
-flat list across all four groups, each row tagged with the group it came from,
-and a count above. Searching is how a known item is found, and the group it
-landed in is rarely known. Clearing the box restores the tab that was open.
-
-Search matches title, author, repository, owner, label, issue status and
-number, case-insensitively, with or without a leading `#`.
-
-**Sorting** applies to whatever is on screen, tab or search results: recent
-activity (default), author, or number. Items with no timestamp sort last rather
-than to the top.
-
-Search, sort and badges are all computed on the client. The snapshot already
-carries every field they need, so none of this costs a request.
+The list logic lives in `listing.mjs`, a module with no DOM and no imports, so
+node can test it. `app.js` renders.
 
 ### Conversation
 
@@ -510,7 +517,7 @@ is empty.
 
 ### Detail screen
 
-The header carries a back link to the group. Below it:
+The header carries a back link to the list. Below it:
 
 1. Title, repository, number, author, head branch.
 2. The attention banner, toned to the reason.
@@ -571,16 +578,17 @@ shape and can clip the artwork.
   tailnet scope returns either a `100.64.0.0/10` address or loopback — never a
   LAN address and never `0.0.0.0`.
 - Auth middleware rejects a missing or non-allowlisted identity.
-- The client declares a tab, a label and an empty message for every
-  `GatewayGroupKind` the server can send, checked against the real `app.js`.
+- The client declares a title for every `GatewaySectionKind`, in the Mac
+  order, and reads only item fields the server sends, checked against the real
+  `listing.mjs`.
 - Every `GatewayCommand` case maps to the intended backend call.
 - A repeated `commandID` returns the cached result and does not call the
   backend a second time.
 - `removeItem` is refused when `localChanges` is greater than zero, and
   accepted when it is zero.
-- The grouping rule assigns the right group, reason, and primary command for
-  each state combination in the priority table, including the disabled
-  override.
+- The attention rule assigns the right reason and primary command for each
+  state combination in the priority table, including the disabled override,
+  and gives no reason to an item with nothing outstanding.
 - Snapshot projection is stable: a known `WorkItem` maps to the expected
   `GatewayItem`.
 - The SSE stream emits on a snapshot change and stays silent when the hash is
@@ -590,10 +598,10 @@ shape and can clip the artwork.
 `AppCore` gets one test that `AppModel` satisfies `GatewayBackend` end to end
 against a real `ReviewStore`.
 
-**Stated gap:** the client gets no automated tests. It is a render function
-over a snapshot. Test infrastructure would cost more than the bugs it would
-catch at this size. This is a deliberate choice, recorded so it is not mistaken
-for an oversight.
+The client list logic has node tests in `scripts/web-client.test.mjs`, run with
+`node --test scripts/web-client.test.mjs`. They cover the pill rule, search,
+the three sorts, and the tab and pill counts. The render code in `app.js` has
+no automated tests.
 
 ## Rejected alternatives
 

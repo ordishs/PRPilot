@@ -16,6 +16,19 @@ private var clientSource: String {
     }
 }
 
+/// The list logic lives in its own module so node can test it without a browser.
+private var listingSource: String {
+    get throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("App/Resources/web/listing.mjs")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+}
+
 private func commandTypes(in source: String) -> [String] {
     let pattern = #"type:\s*'([A-Za-z]+)'"#
     let regex = try! NSRegularExpression(pattern: pattern)
@@ -56,13 +69,13 @@ private func commandTypes(in source: String) -> [String] {
     }
 }
 
-@Test func theClientReadsGroupNamesTheServerActuallySends() throws {
-    let source = try clientSource
+@Test func theClientHasATitleForEverySectionTheServerSends() throws {
+    let source = try listingSource
 
-    for kind in GatewayGroupKind.allCases {
+    for kind in GatewaySectionKind.allCases {
         #expect(
-            source.contains(kind.rawValue),
-            "the client has no label for the '\(kind.rawValue)' group"
+            source.contains("\(kind.rawValue): '"),
+            "SECTION_TITLES has no title for the '\(kind.rawValue)' section"
         )
     }
 }
@@ -81,34 +94,18 @@ private func commandTypes(in source: String) -> [String] {
     }
 }
 
-@Test func theClientHasATabAndAnEmptyMessageForEveryGroupTheServerSends() throws {
-    let source = try clientSource
-
-    for kind in GatewayGroupKind.allCases {
-        #expect(
-            source.contains("'\(kind.rawValue)'"),
-            "TAB_ORDER has no entry for the '\(kind.rawValue)' group"
-        )
-        #expect(
-            source.contains("\(kind.rawValue):"),
-            "no tab label or empty message keyed on '\(kind.rawValue)'"
-        )
-    }
-}
-
-@Test func theTabBarListsEveryGroupInAFixedOrder() throws {
-    let source = try clientSource
-    guard let start = source.range(of: "const TAB_ORDER = ["),
+@Test func theTabBarListsEverySectionInTheMacOrder() throws {
+    let source = try listingSource
+    guard let start = source.range(of: "export const SECTION_ORDER = ["),
           let end = source.range(of: "]", range: start.upperBound..<source.endIndex)
     else {
-        Issue.record("TAB_ORDER not found in the client")
+        Issue.record("SECTION_ORDER not found in the client")
         return
     }
 
     let declared = source[start.upperBound..<end.lowerBound]
-    for kind in GatewayGroupKind.allCases {
-        #expect(declared.contains(kind.rawValue), "TAB_ORDER is missing '\(kind.rawValue)'")
-    }
+    let expected = GatewaySectionKind.allCases.map { "'\($0.rawValue)'" }.joined(separator: ", ")
+    #expect(declared == Substring(expected), "SECTION_ORDER must be \(expected)")
 }
 
 @Test func theClientCanReachTheTranscriptRouteAndSendPrompts() throws {
@@ -118,22 +115,30 @@ private func commandTypes(in source: String) -> [String] {
     #expect(source.contains("'sendPrompt'"), "client cannot reply to an agent")
 }
 
-@Test func theClientCanSearchSortAndShowEveryBadge() throws {
-    let source = try clientSource
+@Test func theClientCanSearchSortFilterAndShowEveryBadge() throws {
+    let app = try clientSource
+    let listing = try listingSource
 
-    #expect(source.contains("function matches("), "no search predicate in the client")
-    #expect(source.contains("function sortItems("), "no sort in the client")
-    #expect(source.contains("row-badges"), "rows do not render the badge set")
-
-    // Search must look across groups, not just the open tab.
-    #expect(source.contains("function flatten("), "search cannot reach items outside the open tab")
+    #expect(listing.contains("export function matchesQuery("), "no search predicate in the client")
+    #expect(listing.contains("export function matchesFilters("), "no pill filter in the client")
+    #expect(listing.contains("export function sortItems("), "no sort in the client")
+    #expect(app.contains("from '/listing.mjs'"), "the page never loads the list logic")
+    #expect(app.contains("row-badges"), "rows do not render the badge set")
 }
 
-@Test func everySortOrderTheClientOffersIsBackedByAFieldTheServerSends() throws {
-    let source = try clientSource
+@Test func everyFieldTheListLogicReadsIsOneTheServerSends() throws {
+    let listing = try listingSource
+    let item = GatewayItem(
+        id: "a#1", kind: .pr, owner: "o", repo: "r", number: 1, url: nil, title: "t",
+        author: "a", headBranch: "h", baseBranch: "main", attentionReason: nil, agent: nil,
+        badges: [], issueStatus: nil, label: nil, isDisabled: false, ahead: 0, behind: 0,
+        localChanges: 0, lastActivityAt: nil, primaryCommand: nil, addedAt: Date()
+    )
+    let data = try GatewayCoding.encoder.encode(item)
+    let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
 
-    // The sort keys the client exposes, and the GatewayItem fields they read.
-    for field in ["lastActivityAt", "author", "number"] {
-        #expect(source.contains(field), "sort reads '\(field)', which the client never references")
+    for field in ["signals", "resources", "isParked", "addedAt", "statusRank", "title", "author", "headBranch", "number"] {
+        #expect(listing.contains(".\(field)"), "the list logic never reads '\(field)'")
+        #expect(json[field] != nil, "the server does not send '\(field)'")
     }
 }

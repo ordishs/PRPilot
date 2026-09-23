@@ -74,6 +74,9 @@ public final class AppModel {
     public var diffMode: DiffMode { settings.diffMode }
 
     public var webPreloadHandler: ((WorkItem) -> Void)?
+    /// Answers whether the Mac holds a live GitHub web view for an item. The cache lives in
+    /// the app target, so the app hands in the question rather than the cache.
+    public var webViewIsLive: ((String) -> Bool)?
 
     private var transcriptWatchers: [String: TranscriptWatcher] = [:]
     /// Session id of the transcript each watcher is currently tailing. Not the same thing as
@@ -2037,6 +2040,33 @@ public final class AppModel {
         } catch {
             errorMessage = String(describing: error)
         }
+    }
+
+    /// Everything the sidebar filter and row indicators need that is not on the item itself.
+    ///
+    /// The Mac sidebar and the phone both read this, so a pill count on one always matches
+    /// the other.
+    public func sidebarFacts(for review: WorkItem) -> SidebarItemFacts {
+        let status = claudeStatuses[review.id]
+        var needsInput = false
+        if case .awaitingInput = status { needsInput = true }
+        let prStatus = prStatuses[review.id]
+        let authorUpdate = hasUnseenAuthorUpdate(review)
+        return SidebarItemFacts(
+            awaitsMyResponse: review.awaitsMyResponse(myLogin: currentLogin),
+            needsInput: needsInput,
+            isWorking: status == .working,
+            hasAuthorUpdate: authorUpdate,
+            ciFailing: prStatus?.ci == .failing,
+            isBehind: prStatus?.isBehind ?? false,
+            hasConflict: prStatus?.mergeState == .conflict,
+            isReady: prStatus?.isReadyToMerge(prState: review.prState) ?? false,
+            hasLocalChanges: (worktreeLocalChanges[review.id] ?? 0) > 0,
+            hasWorktree: review.worktreePath != nil,
+            hasSession: claudeSessions[review.id] != nil,
+            hasWebView: webViewIsLive?(review.id) ?? false,
+            isParked: isParkedReview(review, hasUnseenAuthorUpdate: authorUpdate)
+        )
     }
 
     /// Whether the "Updated" chip shows for an item: the poll found author activity newer

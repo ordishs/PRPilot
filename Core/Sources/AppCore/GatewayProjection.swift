@@ -35,9 +35,10 @@ public enum GatewayProjection {
     public static func item(
         from work: WorkItem,
         facts: GatewayItemFacts,
+        sidebar: SidebarItemFacts,
         decoration: Decoration
     ) -> GatewayItem {
-        let classification = GatewayGrouping.classify(facts)
+        let attention = GatewayAttentionRule.evaluate(facts)
 
         let kind: GatewayItemKind
         let owner: String?
@@ -76,7 +77,7 @@ public enum GatewayProjection {
             author: work.author,
             headBranch: work.headBranch,
             baseBranch: work.baseBranch,
-            attentionReason: classification.reason,
+            attentionReason: attention.reason,
             agent: decoration.agent,
             badges: decoration.badges,
             issueStatus: decoration.issueStatus,
@@ -86,30 +87,64 @@ public enum GatewayProjection {
             behind: decoration.behind,
             localChanges: decoration.localChanges,
             lastActivityAt: work.claudeLastCompletedAt ?? work.lastOpenedAt ?? work.addedAt,
-            primaryCommand: classification.primaryCommand
+            primaryCommand: attention.primaryCommand,
+            signals: SignalFilter.ordered.filter { sidebar.has($0) }.map(\.key),
+            resources: ResourceFilter.ordered.filter { sidebar.has($0) }.map(\.key),
+            isParked: sidebar.isParked,
+            addedAt: work.addedAt,
+            statusRank: statusRank(work.prState)
         )
     }
 
-    /// Groups are emitted in `GatewayGroupKind.allCases` order — needsYou, running, queued,
-    /// idle — which is the order the client renders them. An empty group is dropped rather
-    /// than sent as an empty heading.
-    public static func groups(
+    /// The Mac's three sections, split and sorted by the same `sidebarSections` call the
+    /// sidebar makes. Every section is sent, empty or not, because the Mac shows every
+    /// heading with its count.
+    public static func sections(
         items: [WorkItem],
+        myLogin: String?,
+        sort: SidebarSort,
         facts: [String: GatewayItemFacts],
+        sidebarFacts: (WorkItem) -> SidebarItemFacts,
         decorate: (WorkItem) -> Decoration
-    ) -> [GatewayGroup] {
-        var buckets: [GatewayGroupKind: [GatewayItem]] = [:]
+    ) -> [GatewaySection] {
+        let known = items.filter { facts[$0.id] != nil }
+        let split = sidebarSections(items: known, myLogin: myLogin, sort: sort)
 
-        for work in items {
-            guard let itemFacts = facts[work.id] else { continue }
-            let projected = item(from: work, facts: itemFacts, decoration: decorate(work))
-            buckets[GatewayGrouping.classify(itemFacts).group, default: []].append(projected)
+        func project(_ works: [WorkItem]) -> [GatewayItem] {
+            works.compactMap { work in
+                guard let itemFacts = facts[work.id] else { return nil }
+                return item(
+                    from: work,
+                    facts: itemFacts,
+                    sidebar: sidebarFacts(work),
+                    decoration: decorate(work)
+                )
+            }
         }
 
-        return GatewayGroupKind.allCases.compactMap { kind in
-            guard let bucket = buckets[kind], !bucket.isEmpty else { return nil }
-            return GatewayGroup(kind: kind, items: bucket)
-        }
+        return [
+            GatewaySection(kind: .myWork, items: project(split.myWork)),
+            GatewaySection(kind: .reviewRequests, items: project(split.reviewRequests)),
+            GatewaySection(kind: .issues, items: project(split.issues)),
+        ]
+    }
+
+    /// The pills and sort orders the Mac sidebar offers, in its order and with its words,
+    /// plus the Mac's own sort and Hide parked as the phone's starting point.
+    public static func listing(sort: SidebarSort, hideParked: Bool) -> GatewayListing {
+        GatewayListing(
+            signalFilters: SignalFilter.ordered.map {
+                GatewayOption(key: $0.key, label: $0.displayName, help: $0.help)
+            },
+            resourceFilters: ResourceFilter.ordered.map {
+                GatewayOption(key: $0.key, label: $0.displayName, help: $0.help)
+            },
+            sorts: SidebarSort.allCases.map {
+                GatewayOption(key: $0.rawValue, label: $0.displayName, help: "")
+            },
+            sort: sort.rawValue,
+            hideParked: hideParked
+        )
     }
 
     /// `AppModel.removeReview` deletes the worktree from disk, including uncommitted work.

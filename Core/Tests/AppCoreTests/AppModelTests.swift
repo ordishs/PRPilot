@@ -5308,7 +5308,7 @@ private func gatewayModel(_ store: ReviewStore) -> AppModel {
     await model.load()
 
     let snapshot = model.snapshot()
-    let projected = snapshot.groups.flatMap(\.items)
+    let projected = snapshot.sections.flatMap(\.items)
 
     #expect(projected.count == 1)
     #expect(projected.first?.number == 944)
@@ -5318,19 +5318,127 @@ private func gatewayModel(_ store: ReviewStore) -> AppModel {
     #expect(snapshot.gatewayVersion == GatewayVersion.current)
 }
 
-@Test @MainActor func anEmptyQueueProjectsNoGroupsRatherThanEmptyOnes() throws {
+@Test @MainActor func anEmptyQueueStillSendsEveryMacSection() throws {
     let model = gatewayModel(try ReviewStore(fileURL: tempStoreURL()))
+    let sections = model.snapshot().sections
 
-    #expect(model.snapshot().groups.isEmpty)
+    #expect(sections.map(\.kind) == [.myWork, .reviewRequests, .issues])
+    #expect(sections.allSatisfy { $0.items.isEmpty })
 }
 
-@Test @MainActor func aQuietItemLandsInTheIdleGroup() async throws {
+@Test @MainActor func somebodyElsesPullRequestLandsInReviewRequests() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     try await store.upsertItem(sampleReview())
     let model = gatewayModel(store)
     await model.load()
 
-    #expect(model.snapshot().groups.map(\.kind) == [.idle])
+    let sections = model.snapshot().sections
+
+    #expect(sections.map { $0.items.map(\.id) } == [[], [sampleReviewID], []])
+}
+
+@Test @MainActor func myOwnPullRequestLandsInMyWork() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = gatewayModel(store)
+    await model.load()
+    model.setCurrentLoginForTesting("icellan")
+
+    let sections = model.snapshot().sections
+
+    #expect(sections.map { $0.items.map(\.id) } == [[sampleReviewID], [], []])
+}
+
+// The phone showed nearly every item under "Needs you": any item the agent had ever
+// reviewed counted, because `claudeReviewedAt` never clears. Once you answer the agent's
+// turn with your own review, the item asks for nothing and reads as parked.
+@Test @MainActor func aReviewYouAnsweredAsksForNothingAndIsParked() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var reviewed = sampleReview()
+    reviewed.claudeReviewedAt = Date(timeIntervalSince1970: 1_800_000_000)
+    reviewed.claudeLastCompletedAt = Date(timeIntervalSince1970: 1_800_000_000)
+    reviewed.myLastReviewAt = Date(timeIntervalSince1970: 1_800_000_600)
+    reviewed.myReviewState = .approved
+    try await store.upsertItem(reviewed)
+    let model = gatewayModel(store)
+    await model.load()
+
+    let projected = try #require(model.snapshot().sections.flatMap(\.items).first)
+
+    #expect(projected.attentionReason == nil)
+    #expect(projected.primaryCommand == nil)
+    #expect(projected.isParked)
+    #expect(!projected.signals.contains("agent"))
+}
+
+@Test @MainActor func aTurnYouHaveNotAnsweredStillAsksForYou() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var waiting = sampleReview()
+    waiting.claudeReviewedAt = Date(timeIntervalSince1970: 1_800_000_000)
+    waiting.claudeLastCompletedAt = Date(timeIntervalSince1970: 1_800_000_900)
+    waiting.myLastReviewAt = Date(timeIntervalSince1970: 1_800_000_600)
+    try await store.upsertItem(waiting)
+    let model = gatewayModel(store)
+    await model.load()
+
+    let projected = try #require(model.snapshot().sections.flatMap(\.items).first)
+
+    #expect(projected.attentionReason == "Agent is waiting for you")
+    #expect(projected.signals.contains("agent"))
+    #expect(!projected.isParked)
+}
+
+@Test @MainActor func theItemCarriesTheSameSignalsAndResourcesAsTheMacRow() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    var seeded = sampleReview()
+    seeded.worktreePath = "/tmp/wt-944"
+    try await store.upsertItem(seeded)
+    let model = gatewayModel(store)
+    await model.load()
+    model.setClaudeStatusForTesting(.awaitingInput(since: Date(), lastVerdictSnippet: nil), for: sampleReviewID)
+    model.webViewIsLive = { $0 == sampleReviewID }
+
+    let projected = try #require(model.snapshot().sections.flatMap(\.items).first)
+    let macFacts = model.sidebarFacts(for: seeded)
+
+    #expect(projected.signals == ["needsInput"])
+    #expect(projected.resources == ["worktree", "web"])
+    #expect(macFacts.needsInput)
+    #expect(macFacts.hasWorktree)
+    #expect(macFacts.hasWebView)
+    #expect(!macFacts.hasSession)
+}
+
+@Test @MainActor func aWorkingAgentShowsAsTheWorkingSignal() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    try await store.upsertItem(sampleReview())
+    let model = gatewayModel(store)
+    await model.load()
+    model.setClaudeStatusForTesting(.working, for: sampleReviewID)
+
+    let projected = try #require(model.snapshot().sections.flatMap(\.items).first)
+
+    #expect(projected.signals == ["working"])
+}
+
+@Test @MainActor func theListingCarriesTheMacSortHideParkedAndEveryPill() async throws {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.sidebarSort = .byAuthor
+    seed.hideParked = true
+    try await seedStore.updateSettings(seed)
+    let model = gatewayModel(try ReviewStore(fileURL: url))
+    await model.load()
+
+    let listing = model.snapshot().listing
+
+    #expect(listing.sort == "byAuthor")
+    #expect(listing.hideParked)
+    #expect(listing.signalFilters.map(\.key) == SignalFilter.ordered.map(\.key))
+    #expect(listing.signalFilters.map(\.label) == SignalFilter.ordered.map(\.displayName))
+    #expect(listing.resourceFilters.map(\.key) == ["worktree", "session", "web"])
+    #expect(listing.sorts.map(\.key) == ["recent", "byStatus", "byAuthor"])
 }
 
 @Test @MainActor func aDisabledItemStaysIdleAndSaysSoOnTheWire() async throws {
@@ -5341,13 +5449,13 @@ private func gatewayModel(_ store: ReviewStore) -> AppModel {
     let model = gatewayModel(store)
     await model.load()
 
-    let projected = try #require(model.snapshot().groups.flatMap(\.items).first)
+    let projected = try #require(model.snapshot().sections.flatMap(\.items).first)
 
     #expect(projected.isDisabled)
     #expect(projected.attentionReason == nil)
 }
 
-@Test @MainActor func aLimitedItemReachesTheNeedsYouGroupWithItsPrimaryCommand() async throws {
+@Test @MainActor func aLimitedItemCarriesItsReasonAndPrimaryCommand() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     var seeded = sampleReview()
     seeded.agentLimitMessage = "5-hour limit reached"
@@ -5356,9 +5464,8 @@ private func gatewayModel(_ store: ReviewStore) -> AppModel {
     await model.load()
 
     let snapshot = model.snapshot()
-    let projected = try #require(snapshot.groups.flatMap(\.items).first)
+    let projected = try #require(snapshot.sections.flatMap(\.items).first)
 
-    #expect(snapshot.groups.map(\.kind) == [.needsYou])
     #expect(projected.attentionReason == "Agent hit its usage limit")
     #expect(projected.primaryCommand == .clearAgentLimit(id: sampleReviewID))
     #expect(projected.badges.contains { $0.text == "Limit" && $0.tone == .red })
@@ -5399,7 +5506,7 @@ private func gatewayModel(_ store: ReviewStore) -> AppModel {
 
     #expect(result.status == .accepted)
     #expect(model.reviews.first?.label == "perf")
-    #expect(result.snapshot.groups.flatMap(\.items).first?.label == "perf")
+    #expect(result.snapshot.sections.flatMap(\.items).first?.label == "perf")
 }
 
 @Test @MainActor func setDisabledTravelsThroughTheGatewayOntoTheStoredItem() async throws {
