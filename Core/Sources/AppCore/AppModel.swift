@@ -201,6 +201,7 @@ public final class AppModel {
     func discoverNow() async {
         var hitsByID: [String: DiscoveryHit] = [:]
         var anyQuerySucceeded = false
+        var everyQueryComplete = true
         var warnings: [String] = []
 
         let groups: [(enabled: Bool, queries: [DiscoveryQuery])] = [
@@ -213,6 +214,7 @@ public final class AppModel {
                 guard !text.isEmpty else { continue }
                 guard query.isScoped || query.allowUnscoped else {
                     warnings.append("Skipped \"\(text)\" — not scoped to you, an org, or a repo. Add a qualifier (author:/org:/repo:/…) or enable \"run anyway\".")
+                    everyQueryComplete = false
                     continue
                 }
                 let results: [DiscoveryHit]
@@ -222,11 +224,13 @@ public final class AppModel {
                     // Swallowing this hid rate limits and auth failures: no new PRs
                     // appeared and nothing said why.
                     warnings.append("\"\(text)\" failed — \(Self.searchFailureReason(error))")
+                    everyQueryComplete = false
                     continue
                 }
                 anyQuerySucceeded = true
                 if results.count >= 100 {
                     warnings.append("\"\(text)\" returned 100+ results (too broad) — refine it. Those results were not added.")
+                    everyQueryComplete = false
                     continue
                 }
                 for hit in results {
@@ -264,7 +268,7 @@ public final class AppModel {
         discoveryWarnings = warnings
         await mergeDiscoveryHits(Array(hitsByID.values))
         if anyQuerySucceeded {
-            await pruneStaleDiscoveredReviews(currentHitIDs: Set(hitsByID.keys))
+            await pruneStaleDiscoveredReviews(currentHitIDs: Set(hitsByID.keys), resultsComplete: everyQueryComplete)
         }
         await mergeDiscoveredIssues(Array(issueHitsByID.values))
         if anyIssueQuerySucceeded {
@@ -285,20 +289,56 @@ public final class AppModel {
         return String(firstLine.prefix(200))
     }
 
-    private func pruneStaleDiscoveredReviews(currentHitIDs: Set<String>) async {
-        let staleIDs = reviews.compactMap { item -> String? in
-            guard item.origin == .discovered else { return nil }
-            guard item.prState == .closed || item.prState == .merged else { return nil }
-            guard let key = prKey(item), !currentHitIDs.contains(key) else { return nil }
-            return item.id
+    /// Drops PRs the discovery queries no longer return.
+    ///
+    /// A merged or closed PR goes unless the user alone added it. An open one goes only when
+    /// the item is purely discovered and every query ran in full: a failed or skipped query
+    /// would otherwise empty the list on a rate limit. Submitting a review clears the
+    /// request, so an open PR leaves as soon as it stops waiting on the user — unless its
+    /// agent is still at work or its worktree holds local changes.
+    private func pruneStaleDiscoveredReviews(currentHitIDs: Set<String>, resultsComplete: Bool) async {
+        var staleIDs: [String] = []
+        for item in reviews {
+            guard let key = prKey(item), !currentHitIDs.contains(key) else { continue }
+            let finished = item.prState == .closed || item.prState == .merged
+            if finished {
+                guard item.origin == .discovered || item.origin == .both else { continue }
+            } else {
+                guard item.origin == .discovered, resultsComplete else { continue }
+                guard !isAgentBusy(item.id) else { continue }
+                guard await hasNoLocalChanges(item) else { continue }
+            }
+            staleIDs.append(item.id)
         }
         for id in staleIDs {
             await releaseWorktree(for: id)
+            terminateAgentSession(for: id)
+            diffStates.removeValue(forKey: id)
             do { try await store.removeItem(id: id) } catch { continue }
+            if selection == id {
+                selection = nil
+            }
         }
         if !staleIDs.isEmpty {
             reviews = await store.allItems()
         }
+    }
+
+    private func isAgentBusy(_ id: String) -> Bool {
+        if claudePreparing.contains(id) { return true }
+        switch claudeStatuses[id] {
+        case .starting, .working:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// A worktree that git cannot read counts as dirty: an unknown state must not cost the
+    /// user their edits.
+    private func hasNoLocalChanges(_ item: WorkItem) async -> Bool {
+        guard let path = item.worktreePath, FileManager.default.fileExists(atPath: path) else { return true }
+        return (try? await worktreeOps.isClean(worktreePath: path)) == true
     }
 
     /// Gives back the worktree of an item that is about to leave the store.
@@ -1300,6 +1340,10 @@ public final class AppModel {
 
     func setPRStatusForTesting(_ status: PRStatus, for id: String) {
         prStatuses[id] = status
+    }
+
+    func setClaudeStatusForTesting(_ status: AgentStatus, for id: String) {
+        claudeStatuses[id] = status
     }
 
     func setCurrentLoginForTesting(_ login: String) {

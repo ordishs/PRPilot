@@ -136,6 +136,7 @@ private struct StubWorktreeProvider: WorktreeProviding {
 private actor StubWorktreeOps: WorktreeManaging {
     var currentBranchResult: String? = nil
     var isCleanResult: Bool = true
+    var isCleanThrows = false
     var rebaseResult: RebaseOutcome = .clean
     var aheadBehindByUpstream: [String: (ahead: Int, behind: Int)] = [:]
     var aheadBehindDefaultResult: (ahead: Int, behind: Int) = (0, 0)
@@ -161,13 +162,17 @@ private actor StubWorktreeOps: WorktreeManaging {
     }
 
     func set(currentBranchResult: String?) { self.currentBranchResult = currentBranchResult }
+    func set(isCleanThrows: Bool) { self.isCleanThrows = isCleanThrows }
     func set(rebaseResult: RebaseOutcome) { self.rebaseResult = rebaseResult }
     func set(aheadBehindDefaultResult: (ahead: Int, behind: Int)) { self.aheadBehindDefaultResult = aheadBehindDefaultResult }
     func set(aheadBehindByUpstream: [String: (ahead: Int, behind: Int)]) { self.aheadBehindByUpstream = aheadBehindByUpstream }
     func set(shouldThrowAheadBehind: Set<String>) { self.shouldThrowAheadBehind = shouldThrowAheadBehind }
 
     func currentBranch(worktreePath: String) async throws -> String? { currentBranchResult }
-    func isClean(worktreePath: String) async throws -> Bool { isCleanResult }
+    func isClean(worktreePath: String) async throws -> Bool {
+        if isCleanThrows { throw NSError(domain: "StubWorktreeOps", code: 128) }
+        return isCleanResult
+    }
     func fetch(clonePath: String, remoteName: String, ref: String) async throws {}
     func rebaseOnto(worktreePath: String, upstream: String) async throws -> RebaseOutcome { rebaseResult }
     func rebaseContinue(worktreePath: String) async throws -> RebaseOutcome { rebaseResult }
@@ -967,7 +972,9 @@ private let prFetchJSON = """
     #expect(model.reviews.first?.origin == .both)
 }
 
-@Test @MainActor func discoverNowKeepsPRsFallingOutOfQuery() async throws {
+// The issue query finds the stub queue empty and fails. That says nothing about PRs, so the
+// PR that fell out of its query still goes.
+@Test @MainActor func discoverNowDropsPRsFallingOutOfQueryWhenOnlyTheIssueQueryFails() async throws {
     let url = tempStoreURL()
     let seedStore = try ReviewStore(fileURL: url)
     var seed = Settings.default
@@ -997,8 +1004,9 @@ private let prFetchJSON = """
 
     await model.discoverNow()
 
-    #expect(model.reviews.count == 1)
-    #expect(model.reviews.first?.prRef?.number == 944)
+    #expect(model.discoveryWarnings.count == 1)
+    #expect(model.discoveryWarnings.first?.contains("assignee:@me") == true)
+    #expect(model.reviews.isEmpty)
 }
 
 @Test @MainActor func discoverNowUpdatesPRState() async throws {
@@ -4891,6 +4899,309 @@ private func managedRootFixture() -> String {
 
     #expect(model.reviews.isEmpty)
     #expect(await ops.removedOrphanPaths.isEmpty)
+}
+
+// MARK: - Open PRs that leave the discovery results
+//
+// Submitting a review clears the request, so the PR drops out of `review-requested:@me`. The
+// item used to stay until the PR merged, which kept every reviewed PR on the list.
+
+private func searchHitJSON(numbers: [Int]) -> String {
+    let rows = numbers.map { n in
+        """
+        {"number": \(n), "title": "pr \(n)", "url": "https://github.com/bsv-blockchain/teranode/pull/\(n)", \
+        "state": "open", "isDraft": false, "author": {"login": "icellan"}, \
+        "repository": {"nameWithOwner": "bsv-blockchain/teranode"}}
+        """
+    }
+    return "[" + rows.joined(separator: ",") + "]"
+}
+
+private func searchOK(_ json: String) -> CommandResult {
+    CommandResult(exitCode: 0, standardOutput: json, standardError: "")
+}
+
+/// Two PR queries (review requests, then my PRs) and no issue query, so each test controls
+/// exactly what every search answers.
+@MainActor
+private func openPruneModel(
+    items: [WorkItem],
+    searchResults: [CommandResult],
+    ops: StubWorktreeOps = StubWorktreeOps()
+) async throws -> AppModel {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.managedRoot = managedRootFixture()
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "review-requested:@me is:open")]
+    seed.myPRsEnabled = true
+    seed.myPRQueries = [DiscoveryQuery(text: "author:@me is:open")]
+    seed.issuesEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    for item in items {
+        try await store.upsertItem(item)
+    }
+    // `load()` asks for the login first; the searches follow in query order.
+    let client = GitHubClient(runner: StubRunner(results: [searchOK("icellan")] + searchResults), ghPath: "gh")
+    let model = AppModel(
+        store: store, client: client, diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(),
+        worktreeOps: ops, claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    return model
+}
+
+private func discoveredOpenReview() -> WorkItem {
+    var item = sampleReview()
+    item.origin = .discovered
+    item.prState = .open
+    return item
+}
+
+private func existingWorktreeFixture() throws -> String {
+    let path = FileManager.default.temporaryDirectory
+        .appendingPathComponent("wt-\(UUID().uuidString)", isDirectory: true).path
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+    return path
+}
+
+@Test @MainActor func anOpenDiscoveredPRLeavesOnceNoQueryReturnsIt() async throws {
+    let model = try await openPruneModel(
+        items: [discoveredOpenReview()],
+        searchResults: [searchOK(emptySearchJSON), searchOK(emptySearchJSON)]
+    )
+    model.selection = sampleReviewID
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.isEmpty)
+    #expect(model.reviews.isEmpty)
+    #expect(model.selection == nil)
+}
+
+@Test @MainActor func anOpenDiscoveredPRStaysWhileAQueryStillReturnsIt() async throws {
+    let model = try await openPruneModel(
+        items: [discoveredOpenReview()],
+        searchResults: [searchOK(searchHitJSON(numbers: [944])), searchOK(emptySearchJSON)]
+    )
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.isEmpty)
+    #expect(model.reviews.map(\.id) == [sampleReviewID])
+}
+
+@Test @MainActor func aFailedQueryKeepsOpenPRsItMayHaveReturned() async throws {
+    // The review-request search hits a rate limit. Its PRs are unknown, not gone.
+    let model = try await openPruneModel(
+        items: [discoveredOpenReview()],
+        searchResults: [
+            CommandResult(exitCode: 1, standardOutput: "", standardError: "HTTP 403: You have exceeded a secondary rate limit."),
+            searchOK(emptySearchJSON),
+        ]
+    )
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.count == 1)
+    #expect(model.discoveryWarnings.first?.contains("secondary rate limit") == true)
+    #expect(model.reviews.map(\.id) == [sampleReviewID])
+}
+
+@Test @MainActor func aTooBroadQueryKeepsOpenPRsItMayHaveReturned() async throws {
+    // 100+ results are thrown away, so the app never saw whether PR 944 was among them.
+    let model = try await openPruneModel(
+        items: [discoveredOpenReview()],
+        searchResults: [searchOK(searchHitJSON(numbers: Array(2000..<2100))), searchOK(emptySearchJSON)]
+    )
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.count == 1)
+    #expect(model.discoveryWarnings.first?.contains("100+") == true)
+    #expect(model.reviews.map(\.id) == [sampleReviewID])
+}
+
+@Test @MainActor func anUnscopedSkippedQueryKeepsOpenPRs() async throws {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.managedRoot = managedRootFixture()
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "review-requested:@me is:open")]
+    seed.myPRsEnabled = true
+    seed.myPRQueries = [DiscoveryQuery(text: "is:open")]
+    seed.issuesEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    try await store.upsertItem(discoveredOpenReview())
+    let client = GitHubClient(runner: StubRunner(results: [searchOK("icellan"), searchOK(emptySearchJSON)]), ghPath: "gh")
+    let model = AppModel(
+        store: store, client: client, diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.count == 1)
+    #expect(model.discoveryWarnings.first?.contains("Skipped") == true)
+    #expect(model.reviews.map(\.id) == [sampleReviewID])
+}
+
+@Test @MainActor func anOpenPRStaysWhileItsAgentWorks() async throws {
+    let model = try await openPruneModel(
+        items: [discoveredOpenReview()],
+        searchResults: [searchOK(emptySearchJSON), searchOK(emptySearchJSON)]
+    )
+    model.setClaudeStatusForTesting(.working, for: sampleReviewID)
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.isEmpty)
+    #expect(model.reviews.map(\.id) == [sampleReviewID])
+}
+
+@Test @MainActor func anOpenPRStaysWhileItsAgentStarts() async throws {
+    let model = try await openPruneModel(
+        items: [discoveredOpenReview()],
+        searchResults: [searchOK(emptySearchJSON), searchOK(emptySearchJSON)]
+    )
+    model.setClaudeStatusForTesting(.starting, for: sampleReviewID)
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.isEmpty)
+    #expect(model.reviews.map(\.id) == [sampleReviewID])
+}
+
+@Test @MainActor func anOpenPRLeavesWhenItsAgentIsIdle() async throws {
+    let model = try await openPruneModel(
+        items: [discoveredOpenReview()],
+        searchResults: [searchOK(emptySearchJSON), searchOK(emptySearchJSON)]
+    )
+    model.setClaudeStatusForTesting(.idle(since: Date(), lastVerdictSnippet: "approved"), for: sampleReviewID)
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.isEmpty)
+    #expect(model.reviews.isEmpty)
+    #expect(model.claudeStatuses[sampleReviewID] == nil)
+}
+
+@Test @MainActor func anOpenPRStaysWhileItsWorktreeHasLocalChanges() async throws {
+    var item = discoveredOpenReview()
+    item.worktreePath = try existingWorktreeFixture()
+    let ops = StubWorktreeOps()
+    await ops.set(isCleanResult: false)
+    let model = try await openPruneModel(
+        items: [item],
+        searchResults: [searchOK(emptySearchJSON), searchOK(emptySearchJSON)],
+        ops: ops
+    )
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.isEmpty)
+    #expect(model.reviews.map(\.id) == [sampleReviewID])
+    #expect(await ops.removedOrphanPaths.isEmpty)
+}
+
+@Test @MainActor func anOpenPRStaysWhenGitCannotReadItsWorktree() async throws {
+    var item = discoveredOpenReview()
+    item.worktreePath = try existingWorktreeFixture()
+    let ops = StubWorktreeOps()
+    await ops.set(isCleanThrows: true)
+    let model = try await openPruneModel(
+        items: [item],
+        searchResults: [searchOK(emptySearchJSON), searchOK(emptySearchJSON)],
+        ops: ops
+    )
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.isEmpty)
+    #expect(model.reviews.map(\.id) == [sampleReviewID])
+}
+
+@Test @MainActor func anOpenPRWithACleanWorktreeLeavesAndGivesItBack() async throws {
+    var item = discoveredOpenReview()
+    let path = try existingWorktreeFixture()
+    item.worktreePath = path
+    let ops = StubWorktreeOps()
+    await ops.set(isCleanResult: true)
+    let model = try await openPruneModel(
+        items: [item],
+        searchResults: [searchOK(emptySearchJSON), searchOK(emptySearchJSON)],
+        ops: ops
+    )
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.isEmpty)
+    #expect(model.reviews.isEmpty)
+    #expect(await ops.removedOrphanPaths == [path])
+}
+
+@Test @MainActor func anOpenPRTheUserAddedStaysWhenNoQueryReturnsIt() async throws {
+    var added = sampleReview()
+    added.origin = .added
+    let both = WorkItem(
+        id: "both-item",
+        title: "second fix",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        headBranch: "fix/second",
+        prRef: PRRef(
+            owner: "bsv-blockchain", repo: "teranode", number: 945,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/pull/945")!,
+            authorLogin: "icellan"
+        ),
+        prState: .open,
+        origin: .both,
+        addedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let model = try await openPruneModel(
+        items: [added, both],
+        searchResults: [searchOK(emptySearchJSON), searchOK(emptySearchJSON)]
+    )
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.isEmpty)
+    #expect(Set(model.reviews.map(\.id)) == [sampleReviewID, "both-item"])
+}
+
+@Test @MainActor func aMergedPRTheUserAlsoAddedLeaves() async throws {
+    var both = sampleReview()
+    both.origin = .both
+    both.prState = .merged
+    let model = try await openPruneModel(
+        items: [both],
+        searchResults: [searchOK(emptySearchJSON), searchOK(emptySearchJSON)]
+    )
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.isEmpty)
+    #expect(model.reviews.isEmpty)
+}
+
+@Test @MainActor func aMergedPROnlyTheUserAddedStays() async throws {
+    var added = sampleReview()
+    added.origin = .added
+    added.prState = .merged
+    let model = try await openPruneModel(
+        items: [added],
+        searchResults: [searchOK(emptySearchJSON), searchOK(emptySearchJSON)]
+    )
+
+    await model.discoverNow()
+
+    #expect(model.discoveryWarnings.isEmpty)
+    #expect(model.reviews.map(\.id) == [sampleReviewID])
 }
 
 @Test @MainActor func pruneOrphanedWorktreesRemovesThroughGit() async throws {
