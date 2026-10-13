@@ -15,6 +15,14 @@ import {
   toggled,
   selectionIsEmpty,
 } from '../App/Resources/web/listing.mjs'
+import {
+  detailOf,
+  availablePanes,
+  activePane,
+  needsSession,
+  agentOptions,
+  itemActions,
+} from '../App/Resources/web/detail.mjs'
 
 function item(overrides = {}) {
   return {
@@ -194,4 +202,185 @@ test('a selection is empty only with no pills and hide parked off', () => {
 
 test('the tab order is the Mac section order', () => {
   assert.deepEqual(SECTION_ORDER, ['myWork', 'reviewRequests', 'issues'])
+})
+
+const listing = {
+  agents: [
+    { key: 'claudeCode', label: 'Claude Code' },
+    { key: 'pi', label: 'pi' },
+    { key: 'codex', label: 'Codex' },
+  ],
+  issueStatuses: [
+    { key: 'onHold', label: 'On hold' },
+    { key: 'done', label: 'Done' },
+  ],
+  defaultAgent: 'claudeCode',
+  failoverAgent: 'codex',
+}
+
+const snap = { listing }
+
+function detailItem(overrides = {}, detail = {}) {
+  return item({
+    id: 'o/r#1',
+    kind: 'pr',
+    url: 'https://github.com/o/r/pull/1',
+    isDisabled: false,
+    agent: null,
+    detail: {
+      pane: 'github',
+      paneState: 'idle',
+      agentKey: 'claudeCode',
+      agentChoice: null,
+      canHandOver: false,
+      sessionID: null,
+      canClearAgentBadge: false,
+      canClearAuthorBadge: false,
+      canClearLimit: false,
+      ...detail,
+    },
+    ...overrides,
+  })
+}
+
+test('an item from an older server has an empty detail rather than none', () => {
+  const old = detailItem()
+  delete old.detail
+  assert.equal(detailOf(old).pane, 'github')
+  assert.equal(detailOf(old).paneState, 'idle')
+})
+
+test('a disabled item offers only the GitHub pane and stays on it', () => {
+  const disabled = detailItem({ isDisabled: true }, { pane: 'claude' })
+  assert.deepEqual(availablePanes(disabled), ['github'])
+  assert.equal(activePane(disabled, null), 'github')
+})
+
+test('an item offers both panes and opens on the remembered one', () => {
+  const pr = detailItem({}, { pane: 'claude' })
+  assert.deepEqual(availablePanes(pr), ['claude', 'github'])
+  assert.equal(activePane(pr, null), 'claude')
+  assert.equal(activePane(pr, 'github'), 'github')
+})
+
+test('a choice of the agent pane on a disabled item is ignored', () => {
+  assert.equal(activePane(detailItem({ isDisabled: true }), 'claude'), 'github')
+})
+
+test('the agent pane asks for a session only while it is idle', () => {
+  assert.equal(needsSession(detailItem({}, { paneState: 'idle' })), true)
+  assert.equal(needsSession(detailItem({}, { paneState: 'live' })), false)
+  assert.equal(needsSession(detailItem({}, { paneState: 'preparing' })), false)
+  assert.equal(needsSession(detailItem({}, { paneState: 'failed' })), false)
+  assert.equal(needsSession(detailItem({ isDisabled: true }, { paneState: 'idle' })), false)
+})
+
+test('the agent menu marks the current choice and leads with the default', () => {
+  const options = agentOptions(snap, detailItem({}, { agentChoice: 'pi', agentKey: 'pi' }))
+  assert.deepEqual(options.map((o) => o.label), [
+    'Default (Claude Code)',
+    'Claude Code',
+    'pi',
+    'Codex',
+  ])
+  assert.deepEqual(options.map((o) => o.checked), [false, false, true, false])
+  assert.deepEqual(options[0].command, { type: 'setAgent', id: 'o/r#1', agent: null })
+  assert.deepEqual(options[3].command, { type: 'setAgent', id: 'o/r#1', agent: 'codex' })
+})
+
+test('a default-following item checks the Default entry', () => {
+  const options = agentOptions(snap, detailItem())
+  assert.equal(options[0].checked, true)
+})
+
+test('the agent menu asks for confirmation while the agent is working', () => {
+  const working = detailItem({ agent: { kind: 'Claude Code', status: 'working' } })
+  assert.ok(agentOptions(snap, working).every((o) => o.confirm))
+  assert.ok(agentOptions(snap, detailItem()).every((o) => !o.confirm))
+})
+
+test('hand over appears in the actions only when the item can be handed over', () => {
+  const blocked = detailItem({}, { canHandOver: true })
+  const actions = itemActions(snap, blocked)
+  assert.ok(actions.find((a) => a.key === 'handOver').label.includes('Codex'))
+  assert.equal(itemActions(snap, detailItem()).find((a) => a.key === 'handOver'), undefined)
+})
+
+test('badge clears appear only when there is a badge to clear', () => {
+  const none = itemActions(snap, detailItem()).map((a) => a.key)
+  assert.ok(!none.includes('clearAgentBadge'))
+  assert.ok(!none.includes('clearAuthorBadge'))
+  assert.ok(!none.includes('clearLimit'))
+
+  const all = itemActions(
+    snap,
+    detailItem({}, { canClearAgentBadge: true, canClearAuthorBadge: true, canClearLimit: true })
+  ).map((a) => a.key)
+  assert.ok(all.includes('clearAgentBadge'))
+  assert.ok(all.includes('clearAuthorBadge'))
+  assert.ok(all.includes('clearLimit'))
+})
+
+test('set status is offered for issues and not for pull requests', () => {
+  const issue = itemActions(snap, detailItem({ kind: 'issue' }))
+  const status = issue.find((a) => a.key === 'setStatus')
+  assert.deepEqual(status.choices.map((c) => c.label), ['On hold', 'Done', 'Clear (Auto)'])
+  assert.deepEqual(status.choices[2].command, { type: 'setIssueStatus', id: 'o/r#1', status: null })
+  assert.equal(itemActions(snap, detailItem()).find((a) => a.key === 'setStatus'), undefined)
+})
+
+test('copy session id needs a session id', () => {
+  assert.equal(itemActions(snap, detailItem()).find((a) => a.key === 'copySession'), undefined)
+  const withSession = itemActions(snap, detailItem({}, { sessionID: 'abc' }))
+  assert.equal(withSession.find((a) => a.key === 'copySession').copy, 'abc')
+})
+
+test('clear session needs a session id', () => {
+  assert.equal(itemActions(snap, detailItem()).find((a) => a.key === 'clearSession'), undefined)
+  const withSession = itemActions(snap, detailItem({}, { sessionID: 'abc' }))
+  assert.deepEqual(withSession.find((a) => a.key === 'clearSession').command, {
+    type: 'clearSession',
+    id: 'o/r#1',
+  })
+})
+
+test('label edits prompt and clearing needs an existing label', () => {
+  const unlabeled = itemActions(snap, detailItem())
+  assert.equal(unlabeled.find((a) => a.key === 'label').label, 'Add Label…')
+  assert.equal(unlabeled.find((a) => a.key === 'clearLabel'), undefined)
+
+  const labeled = itemActions(snap, detailItem({ label: 'urgent' }))
+  assert.equal(labeled.find((a) => a.key === 'label').label, 'Edit Label…')
+  assert.deepEqual(labeled.find((a) => a.key === 'clearLabel').command, {
+    type: 'setLabel',
+    id: 'o/r#1',
+    label: null,
+  })
+})
+
+test('enable and disable flip with the item, and remove is destructive', () => {
+  const on = itemActions(snap, detailItem())
+  assert.deepEqual(on.find((a) => a.key === 'toggleDisabled').command, {
+    type: 'setDisabled',
+    id: 'o/r#1',
+    disabled: true,
+  })
+  const off = itemActions(snap, detailItem({ isDisabled: true }))
+  assert.equal(off.find((a) => a.key === 'toggleDisabled').label, 'Enable')
+  assert.equal(on.find((a) => a.key === 'remove').danger, true)
+  assert.equal(on.find((a) => a.key === 'remove').confirm.includes('worktree'), true)
+})
+
+test('no action ever names a git command', () => {
+  const everything = itemActions(
+    snap,
+    detailItem(
+      { kind: 'issue', label: 'x' },
+      { canHandOver: true, sessionID: 's', canClearAgentBadge: true, canClearAuthorBadge: true, canClearLimit: true }
+    )
+  )
+  const types = JSON.stringify(everything)
+  for (const forbidden of ['push', 'rebase', 'continueRebase', 'abortRebase', 'discard']) {
+    assert.ok(!types.toLowerCase().includes(`"type":"${forbidden.toLowerCase()}`))
+  }
 })
