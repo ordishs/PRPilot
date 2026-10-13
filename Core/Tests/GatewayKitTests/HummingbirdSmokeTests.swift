@@ -16,7 +16,7 @@ import HummingbirdTesting
     }
 }
 
-// Version 2 replaced the attention groups with the Mac's sidebar sections.
-@Test func gatewayVersionIsTwo() {
-    #expect(GatewayVersion.current == 2)
+// Version 3 added the per-item detail and the setAgent command.
+@Test func gatewayVersionIsThree() {
+    #expect(GatewayVersion.current == 3)
 }

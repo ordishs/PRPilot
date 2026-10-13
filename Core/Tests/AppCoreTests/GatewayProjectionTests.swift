@@ -250,7 +250,9 @@ private let plainDecoration = GatewayProjection.Decoration(
 }
 
 @Test func theListingWordsEveryPillAndSortTheWayTheMacDoes() {
-    let listing = GatewayProjection.listing(sort: .byStatus, hideParked: true)
+    let listing = GatewayProjection.listing(
+        sort: .byStatus, hideParked: true, defaultAgent: .claudeCode, failoverAgent: .codex
+    )
 
     #expect(listing.signalFilters.map(\.label) == SignalFilter.ordered.map(\.displayName))
     #expect(listing.signalFilters.map(\.help) == SignalFilter.ordered.map(\.help))
@@ -271,4 +273,59 @@ private let plainDecoration = GatewayProjection.Decoration(
 
     #expect(refusal?.contains("1 local change") == true)
     #expect(refusal?.contains("Remove it at the Mac") == true)
+}
+
+@Test func aLivePaneStateNeedsALiveSession() {
+    #expect(GatewayProjection.paneState(.sessionLive, hasLiveSession: true).state == "live")
+    #expect(GatewayProjection.paneState(.sessionLive, hasLiveSession: false).state == "preparing")
+}
+
+@Test func paneStatesMapToTheMacStatesAndKeepTheirMessage() {
+    #expect(GatewayProjection.paneState(nil, hasLiveSession: false).state == "idle")
+    #expect(GatewayProjection.paneState(.idle, hasLiveSession: false).state == "idle")
+    #expect(GatewayProjection.paneState(.preparingWorktree, hasLiveSession: false).state == "preparing")
+
+    let failed = GatewayProjection.paneState(.worktreeFailed("no space"), hasLiveSession: false)
+    #expect(failed.state == "failed")
+    #expect(failed.message == "no space")
+
+    let missing = GatewayProjection.paneState(.claudeUnavailable("claude not found"), hasLiveSession: false)
+    #expect(missing.state == "unavailable")
+    #expect(missing.message == "claude not found")
+}
+
+@Test func aConflictedRebaseCarriesItsFilesAndAFailedOneItsMessage() {
+    let conflicted = GatewayProjection.rebase(.conflicted(["a.go", "b.go"]))
+    #expect(conflicted == GatewayRebase(state: "conflicted", files: ["a.go", "b.go"], message: nil))
+
+    let failed = GatewayProjection.rebase(.failed("boom"))
+    #expect(failed == GatewayRebase(state: "failed", files: [], message: "boom"))
+
+    #expect(GatewayProjection.rebase(nil) == nil)
+}
+
+@Test func theListingOffersEveryAgentAndTheMacIssueStatusesInMacOrder() {
+    let listing = GatewayProjection.listing(
+        sort: .recent, hideParked: false, defaultAgent: .codex, failoverAgent: .pi
+    )
+
+    #expect(listing.agents.map(\.key) == ["claudeCode", "pi", "codex"])
+    #expect(listing.issueStatuses.map(\.key) == ["onHold", "done", "inReview", "reviewed", "new"])
+    #expect(listing.defaultAgent == "codex")
+    #expect(listing.failoverAgent == "pi")
+}
+
+@Test func theDecorationDetailTravelsOntoTheWireItem() {
+    var decoration = plainDecoration
+    decoration.detail = GatewayDetail(pane: "claude", runLabel: "started today")
+
+    let wire = GatewayProjection.item(
+        from: prItem(),
+        facts: noFacts("bsv-blockchain/teranode#4788"),
+        sidebar: SidebarItemFacts(),
+        decoration: decoration
+    )
+
+    #expect(wire.detail.pane == "claude")
+    #expect(wire.detail.runLabel == "started today")
 }

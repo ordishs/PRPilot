@@ -14,6 +14,7 @@ public enum GatewayProjection {
         public var ahead: Int
         public var behind: Int
         public var localChanges: Int
+        public var detail: GatewayDetail
 
         public init(
             agent: GatewayAgent?,
@@ -21,7 +22,8 @@ public enum GatewayProjection {
             issueStatus: String?,
             ahead: Int,
             behind: Int,
-            localChanges: Int
+            localChanges: Int,
+            detail: GatewayDetail = .empty
         ) {
             self.agent = agent
             self.badges = badges
@@ -29,6 +31,7 @@ public enum GatewayProjection {
             self.ahead = ahead
             self.behind = behind
             self.localChanges = localChanges
+            self.detail = detail
         }
     }
 
@@ -92,7 +95,8 @@ public enum GatewayProjection {
             resources: ResourceFilter.ordered.filter { sidebar.has($0) }.map(\.key),
             isParked: sidebar.isParked,
             addedAt: work.addedAt,
-            statusRank: statusRank(work.prState)
+            statusRank: statusRank(work.prState),
+            detail: decoration.detail
         )
     }
 
@@ -129,10 +133,38 @@ public enum GatewayProjection {
         ]
     }
 
+    public static func paneState(
+        _ state: ClaudePaneState?,
+        hasLiveSession: Bool
+    ) -> (state: String, message: String?) {
+        switch state ?? .idle {
+        case .idle: return ("idle", nil)
+        case .preparingWorktree: return ("preparing", nil)
+        case .worktreeFailed(let message): return ("failed", message)
+        case .claudeUnavailable(let message): return ("unavailable", message)
+        case .sessionLive: return (hasLiveSession ? "live" : "preparing", nil)
+        }
+    }
+
+    public static func rebase(_ state: AppModel.RebaseState?) -> GatewayRebase? {
+        switch state {
+        case .conflicted(let files): return GatewayRebase(state: "conflicted", files: files)
+        case .failed(let message): return GatewayRebase(state: "failed", message: message)
+        case nil: return nil
+        }
+    }
+
     /// The pills and sort orders the Mac sidebar offers, in its order and with its words,
     /// plus the Mac's own sort and Hide parked as the phone's starting point.
-    public static func listing(sort: SidebarSort, hideParked: Bool) -> GatewayListing {
-        GatewayListing(
+    public static func listing(
+        sort: SidebarSort,
+        hideParked: Bool,
+        defaultAgent: AgentKind,
+        failoverAgent: AgentKind
+    ) -> GatewayListing {
+        let statuses: [IssueWorkStatus] = [.onHold, .done, .inReview, .reviewed, .new]
+
+        return GatewayListing(
             signalFilters: SignalFilter.ordered.map {
                 GatewayOption(key: $0.key, label: $0.displayName, help: $0.help)
             },
@@ -143,7 +175,15 @@ public enum GatewayProjection {
                 GatewayOption(key: $0.rawValue, label: $0.displayName, help: "")
             },
             sort: sort.rawValue,
-            hideParked: hideParked
+            hideParked: hideParked,
+            agents: AgentKind.allCases.map {
+                GatewayOption(key: $0.rawValue, label: $0.displayName, help: "")
+            },
+            issueStatuses: statuses.map {
+                GatewayOption(key: $0.rawValue, label: $0.displayName, help: "")
+            },
+            defaultAgent: defaultAgent.rawValue,
+            failoverAgent: failoverAgent.rawValue
         )
     }
 

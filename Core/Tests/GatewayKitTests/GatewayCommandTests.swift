@@ -95,3 +95,23 @@ private func decode(_ json: String) throws -> GatewayCommand {
     #expect(envelope.commandID == "c-1")
     #expect(envelope.command == .refreshAll)
 }
+
+@Test func setAgentCarriesItsChoice() throws {
+    #expect(
+        try decode(#"{"type":"setAgent","id":"a#1","agent":"codex"}"#)
+            == .setAgent(id: "a#1", agent: "codex")
+    )
+}
+
+@Test func setAgentWithNoAgentMeansFollowTheDefault() throws {
+    #expect(
+        try decode(#"{"type":"setAgent","id":"a#1"}"#)
+            == .setAgent(id: "a#1", agent: nil)
+    )
+}
+
+@Test func setAgentSurvivesARoundTrip() throws {
+    let command = GatewayCommand.setAgent(id: "a#1", agent: "pi")
+    let data = try JSONEncoder().encode(command)
+    #expect(try JSONDecoder().decode(GatewayCommand.self, from: data) == command)
+}

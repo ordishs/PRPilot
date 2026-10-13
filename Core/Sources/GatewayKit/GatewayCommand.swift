@@ -19,12 +19,13 @@ public enum GatewayCommand: Codable, Sendable, Hashable {
     case setIssueStatus(id: String, status: String?)
     case setLabel(id: String, label: String?)
     case setDisabled(id: String, disabled: Bool)
+    case setAgent(id: String, agent: String?)
     case removeItem(id: String)
     /// Type a line into the running agent, as if at the keyboard.
     case sendPrompt(id: String, text: String)
 
     private enum CodingKeys: String, CodingKey {
-        case type, id, url, pane, status, label, disabled, forceFresh, text
+        case type, id, url, pane, status, label, disabled, forceFresh, text, agent
     }
 
     public init(from decoder: Decoder) throws {
@@ -73,6 +74,11 @@ public enum GatewayCommand: Codable, Sendable, Hashable {
             self = .setDisabled(
                 id: try id(),
                 disabled: try c.decode(Bool.self, forKey: .disabled)
+            )
+        case "setAgent":
+            self = .setAgent(
+                id: try id(),
+                agent: try c.decodeIfPresent(String.self, forKey: .agent)
             )
         case "removeItem":
             self = .removeItem(id: try id())
@@ -136,6 +142,10 @@ public enum GatewayCommand: Codable, Sendable, Hashable {
             try c.encode("setDisabled", forKey: .type)
             try c.encode(id, forKey: .id)
             try c.encode(disabled, forKey: .disabled)
+        case .setAgent(let id, let agent):
+            try c.encode("setAgent", forKey: .type)
+            try c.encode(id, forKey: .id)
+            try c.encodeIfPresent(agent, forKey: .agent)
         case .removeItem(let id):
             try c.encode("removeItem", forKey: .type)
             try c.encode(id, forKey: .id)

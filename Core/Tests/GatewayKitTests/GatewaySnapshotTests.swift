@@ -87,3 +87,36 @@ private func sampleItem() -> GatewayItem {
     )
     #expect(String(decoding: encoded, as: UTF8.self) == #"["green","orange","red","blue","grey"]"#)
 }
+
+@Test func anItemWithoutADetailDecodesWithAnEmptyOne() throws {
+    let item = sampleItem()
+    var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as! [String: Any]
+    object.removeValue(forKey: "detail")
+    let data = try JSONSerialization.data(withJSONObject: object)
+
+    let decoded = try JSONDecoder().decode(GatewayItem.self, from: data)
+
+    #expect(decoded.detail == .empty)
+}
+
+@Test func theDetailSurvivesARoundTrip() throws {
+    var item = sampleItem()
+    item.detail = GatewayDetail(
+        pane: "claude",
+        paneState: "failed",
+        paneMessage: "worktree failed",
+        runLabel: "started today",
+        rebase: GatewayRebase(state: "conflicted", files: ["a.go"], message: nil),
+        agentChoice: "codex",
+        agentKey: "codex",
+        canHandOver: true,
+        sessionID: "abc",
+        canClearAgentBadge: true,
+        canClearAuthorBadge: false,
+        canClearLimit: true
+    )
+
+    let data = try JSONEncoder().encode(item)
+
+    #expect(try JSONDecoder().decode(GatewayItem.self, from: data) == item)
+}

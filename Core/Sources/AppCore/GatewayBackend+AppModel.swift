@@ -31,7 +31,8 @@ extension AppModel: GatewayBackend {
                     issueStatus: gatewayIssueStatus(for: work),
                     ahead: pushability[work.id]?.ahead ?? 0,
                     behind: pushability[work.id]?.behind ?? 0,
-                    localChanges: worktreeLocalChanges[work.id] ?? 0
+                    localChanges: worktreeLocalChanges[work.id] ?? 0,
+                    detail: gatewayDetail(for: work)
                 )
             }
         )
@@ -41,7 +42,12 @@ extension AppModel: GatewayBackend {
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
             login: currentLogin,
             sections: sections,
-            listing: GatewayProjection.listing(sort: settings.sidebarSort, hideParked: settings.hideParked),
+            listing: GatewayProjection.listing(
+                sort: settings.sidebarSort,
+                hideParked: settings.hideParked,
+                defaultAgent: settings.defaultAgent,
+                failoverAgent: settings.failoverAgent
+            ),
             warnings: discoveryWarnings
         )
     }
@@ -132,6 +138,16 @@ extension AppModel: GatewayBackend {
         case .setDisabled(let id, let disabled):
             await setReviewDisabled(disabled, for: id)
 
+        case .setAgent(let id, let agent):
+            let kind = agent.flatMap(AgentKind.init(rawValue:))
+            if agent != nil, kind == nil {
+                return rejection("unknown agent \(agent ?? "")")
+            }
+            guard reviews.contains(where: { $0.id == id }) else {
+                return rejection("no such item")
+            }
+            await setAgent(kind, for: id)
+
         case .removeItem(let id):
             if let refusal = GatewayProjection.removalRefusal(localChanges: worktreeLocalChanges[id] ?? 0) {
                 return rejection(refusal)
@@ -216,6 +232,31 @@ extension AppModel: GatewayBackend {
 }
 
 extension AppModel {
+    func gatewayDetail(for work: WorkItem) -> GatewayDetail {
+        let pane = GatewayProjection.paneState(
+            claudePaneState[work.id],
+            hasLiveSession: claudeSessions[work.id] != nil
+        )
+
+        return GatewayDetail(
+            pane: resolvedPane(for: work).rawValue,
+            paneState: pane.state,
+            paneMessage: pane.message,
+            runLabel: agentRunLabel(
+                startedAt: work.agentRunStartedAt,
+                lastCompletedAt: work.claudeLastCompletedAt
+            ),
+            rebase: GatewayProjection.rebase(rebaseStates[work.id]),
+            agentChoice: work.agent?.rawValue,
+            agentKey: work.effectiveAgent(default: settings.defaultAgent).rawValue,
+            canHandOver: canHandOver(work),
+            sessionID: work.claudeSessionID,
+            canClearAgentBadge: work.awaitsMyResponse(myLogin: currentLogin),
+            canClearAuthorBadge: work.prRef != nil && hasUnseenAuthorUpdate(work),
+            canClearLimit: work.agentLimitedAt != nil
+        )
+    }
+
     func gatewayAgent(for work: WorkItem) -> GatewayAgent? {
         let kind = work.effectiveAgent(default: settings.defaultAgent)
         guard let status = claudeStatuses[work.id] else { return nil }
