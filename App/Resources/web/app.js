@@ -5,6 +5,7 @@ import {
   useEffect,
   useCallback,
   useMemo,
+  useRef,
 } from '/vendor/preact-htm.mjs'
 import {
   SECTION_ORDER,
@@ -18,6 +19,14 @@ import {
   toggled,
   selectionIsEmpty,
 } from '/listing.mjs'
+import {
+  detailOf,
+  availablePanes,
+  activePane,
+  needsSession,
+  agentOptions,
+  itemActions,
+} from '/detail.mjs'
 
 const TOKEN_KEY = 'prpilot.token'
 
@@ -230,8 +239,33 @@ function ago(iso) {
   return `${Math.round(hours / 24)}d`
 }
 
-function Row({ item, onOpen }) {
+function Row({ item, onOpen, onMenu }) {
+  const timer = useRef(null)
+  const fired = useRef(false)
   const dim = item.isDisabled
+
+  const cancel = () => {
+    clearTimeout(timer.current)
+    timer.current = null
+  }
+  const press = () => {
+    fired.current = false
+    cancel()
+    timer.current = setTimeout(() => {
+      fired.current = true
+      onMenu(item)
+      setTimeout(() => {
+        fired.current = false
+      }, 800)
+    }, 500)
+  }
+  const click = () => {
+    if (fired.current) {
+      fired.current = false
+      return
+    }
+    onOpen(item.id)
+  }
   const meta = [
     item.repo ? `${item.repo} #${item.number}` : 'task',
     item.author,
@@ -242,7 +276,18 @@ function Row({ item, onOpen }) {
     .join(' · ')
 
   return html`
-    <button class=${dim ? 'row dim' : 'row'} onClick=${() => onOpen(item.id)}>
+    <button
+      class=${dim ? 'row dim' : 'row'}
+      onClick=${click}
+      onTouchStart=${press}
+      onTouchEnd=${cancel}
+      onTouchMove=${cancel}
+      onTouchCancel=${cancel}
+      onContextMenu=${(event) => {
+        event.preventDefault()
+        onMenu(item)
+      }}
+    >
       <div class="row-title">${item.title}</div>
       ${item.attentionReason &&
         html`<div class="row-reason">${item.attentionReason}</div>`}
@@ -365,7 +410,7 @@ function Tabs({ counts, tab, onSelect }) {
 
 /// One section at a time. Search and pills narrow every section, as on the Mac, so when
 /// the open tab comes up empty the note says where the matches went.
-function List({ snapshot, tab, query, selection, sort, counts, onOpen }) {
+function List({ snapshot, tab, query, selection, sort, counts, onOpen, onMenu }) {
   const items = visibleItems(snapshot, tab, query, selection, sort)
   const elsewhere = SECTION_ORDER.filter((kind) => kind !== tab && counts[kind] > 0)
   const narrowed = query.trim() !== '' || !selectionIsEmpty(selection)
@@ -382,7 +427,9 @@ function List({ snapshot, tab, query, selection, sort, counts, onOpen }) {
                 .map((kind) => `${SECTION_TITLES[kind]}: ${counts[kind]}`)
                 .join(' · ')}`}
           </p>`
-        : items.map((item) => html`<${Row} key=${item.id} item=${item} onOpen=${onOpen} />`)}
+        : items.map(
+            (item) => html`<${Row} key=${item.id} item=${item} onOpen=${onOpen} onMenu=${onMenu} />`
+          )}
     </div>
   `
 }
@@ -410,11 +457,119 @@ function TokenPrompt({ onToken, failed }) {
   `
 }
 
-function Detail({ item, token, onError, onNotice }) {
+async function runEntry(entry, { token, onError, onNotice }) {
+  if (entry.choices) return { choices: entry.choices }
+
+  if (entry.copy) {
+    try {
+      await navigator.clipboard.writeText(entry.copy)
+      onNotice('Copied.')
+    } catch {
+      onError('Copy failed. The browser blocked the clipboard.')
+    }
+    return {}
+  }
+
+  if (entry.confirm && !window.confirm(entry.confirm)) return {}
+
+  let command = entry.command
+  if (entry.prompt) {
+    const text = window.prompt('Label', entry.prompt.label)
+    if (text === null) return {}
+    command = { ...entry.prompt, label: text.trim() === '' ? null : text.trim() }
+  }
+
+  try {
+    const result = await sendCommand(token, command)
+    if (result.status === 'rejected') {
+      onError(result.message || 'The Mac refused that command.')
+    } else if (result.message) {
+      onNotice(result.message)
+    }
+  } catch (error) {
+    onError(String(error.message || error))
+  }
+  return {}
+}
+
+function ActionMenu({ title, entries, onPick, onClose }) {
+  const openedAt = useRef(Date.now())
+  const closeFromBackdrop = () => {
+    if (Date.now() - openedAt.current > 400) onClose()
+  }
+
+  return html`
+    <div class="menu-backdrop" onClick=${closeFromBackdrop}>
+      <div class="menu" onClick=${(event) => event.stopPropagation()}>
+        <div class="menu-title">${title}</div>
+        ${entries.map(
+          (entry) => html`
+            <button
+              key=${entry.key || entry.label}
+              class=${entry.danger ? 'danger' : ''}
+              onClick=${() => onPick(entry)}
+            >
+              ${entry.checked ? '✓ ' : ''}${entry.label}
+            </button>
+          `
+        )}
+        <button class="menu-cancel" onClick=${onClose}>Cancel</button>
+      </div>
+    </div>
+  `
+}
+
+function MenuHost({ menu, onMenu, token, onError, onNotice }) {
+  if (!menu) return null
+
+  const pick = async (entry) => {
+    const outcome = await runEntry(entry, { token, onError, onNotice })
+    if (outcome.choices) {
+      onMenu({ title: entry.label, entries: outcome.choices })
+    } else {
+      onMenu(null)
+    }
+  }
+
+  return html`
+    <${ActionMenu}
+      title=${menu.title}
+      entries=${menu.entries}
+      onPick=${pick}
+      onClose=${() => onMenu(null)}
+    />
+  `
+}
+
+function RebaseBanner({ rebase }) {
+  if (!rebase) return null
+
+  if (rebase.state === 'conflicted') {
+    const count = rebase.files.length
+    return html`
+      <div class="banner warn">
+        Rebase paused — ${count} conflict${count === 1 ? '' : 's'}. Resolve it on the Mac.
+      </div>
+    `
+  }
+
+  return html`
+    <div class="banner error">Rebase failed: ${rebase.message}. Dismiss it on the Mac.</div>
+  `
+}
+
+function Detail({ item, snapshot, token, onError, onNotice }) {
   const [busy, setBusy] = useState(null)
-  const [moreOpen, setMoreOpen] = useState(false)
-  const [confirmRemove, setConfirmRemove] = useState(false)
-  const [showConversation, setShowConversation] = useState(false)
+  const [chosen, setChosen] = useState(null)
+  const [menu, setMenu] = useState(null)
+  const started = useRef(null)
+
+  const detail = detailOf(item)
+  const pane = activePane(item, chosen)
+  const agentLabel =
+    snapshot.listing.agents.find((agent) => agent.key === detail.agentKey)?.label ||
+    item.agent?.kind ||
+    'Agent'
 
   const run = async (command, key) => {
     setBusy(key)
@@ -422,12 +577,8 @@ function Detail({ item, token, onError, onNotice }) {
       const result = await sendCommand(token, command)
       if (result.status === 'rejected') {
         onError(result.message || 'The Mac refused that command.')
-      } else {
-        // Some commands succeed and still have something to say — a handover names
-        // the agent that picked the work up.
-        if (result.message) onNotice(result.message)
-        setMoreOpen(false)
-        setConfirmRemove(false)
+      } else if (result.message) {
+        onNotice(result.message)
       }
     } catch (error) {
       onError(String(error.message || error))
@@ -436,8 +587,23 @@ function Detail({ item, token, onError, onNotice }) {
     }
   }
 
-  const freshSession = { type: 'startSession', id: item.id, forceFresh: true }
-  const primaryCommand = item.primaryCommand || freshSession
+  const choosePane = (key) => {
+    setChosen(key)
+    sendCommand(token, { type: 'setPane', id: item.id, pane: key }).catch((error) =>
+      onError(String(error.message || error))
+    )
+  }
+
+  useEffect(() => {
+    if (pane !== 'claude' || !needsSession(item)) return
+    if (started.current === item.id) return
+    started.current = item.id
+    sendCommand(token, { type: 'startSession', id: item.id, forceFresh: false }).catch((error) =>
+      onError(String(error.message || error))
+    )
+  }, [pane, item.id, detail.paneState, item.isDisabled])
+
+  const primaryCommand = item.primaryCommand || { type: 'startSession', id: item.id, forceFresh: true }
   const primaryLabel = item.primaryCommand
     ? PRIMARY_LABELS[item.primaryCommand.type] || 'Run'
     : 'Fresh session'
@@ -445,6 +611,8 @@ function Detail({ item, token, onError, onNotice }) {
   const stats = [elapsed(item.agent?.elapsedSeconds), item.agent?.usedPercent != null ? `${item.agent.usedPercent}%` : null]
     .filter(Boolean)
     .join(' · ')
+
+  const paneLabel = (key) => (key === 'claude' ? `${agentLabel} Review` : 'GitHub')
 
   return html`
     <div class="detail">
@@ -458,55 +626,98 @@ function Detail({ item, token, onError, onNotice }) {
       ${item.attentionReason &&
         html`<div class="banner">${item.attentionReason}</div>`}
 
-      ${item.agent &&
-        html`
-          <div class="card">
-            <div class="card-head">
-              <span class="agent-kind">${item.agent.kind} · ${item.agent.status}</span>
-              ${stats && html`<span class="agent-stat">${stats}</span>`}
-            </div>
-            ${item.agent.verdict && html`<p class="verdict">${item.agent.verdict}</p>`}
-          </div>
-        `}
+      <${RebaseBanner} rebase=${detail.rebase} />
 
-      ${item.badges.length > 0 &&
-        html`
-          <div class="label">State</div>
-          <div class="badges">
-            ${item.badges.map(
-              (badge) => html`
-                <span key=${badge.text} class=${`badge ${badge.tone}`}>${badge.text}</span>
-              `
-            )}
-          </div>
-          <div class="badge-help">
-            ${item.badges.map((badge) => html`<div key=${badge.text}>${badge.text} — ${badge.help}</div>`)}
-          </div>
-        `}
-
-      <div class="label">Conversation</div>
-      ${showConversation
-        ? html`<${Conversation} item=${item} token=${token} onError=${onError} />`
-        : html`
-            <button class="conv-open" onClick=${() => setShowConversation(true)}>
-              Show the ${item.agent ? item.agent.kind : 'agent'} conversation
+      <div class="segments" role="tablist">
+        ${availablePanes(item).map(
+          (key) => html`
+            <button
+              key=${key}
+              role="tab"
+              aria-selected=${pane === key}
+              class=${pane === key ? 'on' : ''}
+              onClick=${() => choosePane(key)}
+            >
+              ${paneLabel(key)}
             </button>
-          `}
-
-      <div class="label">Branch</div>
-      <div class="facts">
-        base ${item.baseBranch} · ↑${item.ahead} ↓${item.behind}
-        ${item.localChanges > 0 ? ` · ${item.localChanges} local` : ''}
-        ${item.issueStatus ? ` · ${item.issueStatus}` : ''}
+          `
+        )}
       </div>
 
-      ${item.url &&
-        html`<a class="external" href=${item.url} target="_blank" rel="noreferrer">Open on GitHub ↗</a>`}
+      ${pane === 'claude' && detail.runLabel && html`<div class="run-label">${detail.runLabel}</div>`}
+
+      ${pane === 'github' &&
+        html`
+          ${item.agent &&
+            html`
+              <div class="card">
+                <div class="card-head">
+                  <span class="agent-kind">${item.agent.kind} · ${item.agent.status}</span>
+                  ${stats && html`<span class="agent-stat">${stats}</span>`}
+                </div>
+                ${item.agent.verdict && html`<p class="verdict">${item.agent.verdict}</p>`}
+              </div>
+            `}
+
+          ${item.badges.length > 0 &&
+            html`
+              <div class="label">State</div>
+              <div class="badges">
+                ${item.badges.map(
+                  (badge) => html`
+                    <span key=${badge.text} class=${`badge ${badge.tone}`}>${badge.text}</span>
+                  `
+                )}
+              </div>
+              <div class="badge-help">
+                ${item.badges.map((badge) => html`<div key=${badge.text}>${badge.text} — ${badge.help}</div>`)}
+              </div>
+            `}
+
+          <div class="label">Branch</div>
+          <div class="facts">
+            base ${item.baseBranch} · ↑${item.ahead} ↓${item.behind}
+            ${item.localChanges > 0 ? ` · ${item.localChanges} local` : ''}
+            ${item.issueStatus ? ` · ${item.issueStatus}` : ''}
+          </div>
+
+          ${item.url &&
+            html`<a class="external" href=${item.url} target="_blank" rel="noreferrer">Open on GitHub ↗</a>`}
+        `}
+
+      ${pane === 'claude' &&
+        html`
+          <div class="agent-head">
+            <span class="agent-kind">${agentLabel}${item.agent ? ` · ${item.agent.status}` : ''}</span>
+            <button
+              class="agent-menu"
+              onClick=${() => setMenu({ title: 'Agent', entries: agentOptions(snapshot, item) })}
+            >
+              Agent ▾
+            </button>
+          </div>
+
+          ${detail.paneState === 'live' &&
+            html`<${Conversation} item=${item} token=${token} onError=${onError} />`}
+          ${detail.paneState === 'idle' &&
+            html`
+              <p class="conv-note">No session yet.</p>
+              <button
+                class="start"
+                disabled=${busy !== null}
+                onClick=${() => run({ type: 'startSession', id: item.id, forceFresh: false }, 'start')}
+              >
+                ${busy === 'start' ? 'Working…' : 'Start'}
+              </button>
+            `}
+          ${detail.paneState === 'preparing' && html`<p class="conv-note">Preparing the worktree…</p>`}
+          ${(detail.paneState === 'failed' || detail.paneState === 'unavailable') &&
+            html`<div class="banner error">${detail.paneMessage || 'The agent could not start.'}</div>`}
+        `}
 
       <div class="sheet-spacer"></div>
 
       <div class="sheet">
-        <div class="grabber"></div>
         <button
           class="primary"
           disabled=${busy !== null}
@@ -514,54 +725,28 @@ function Detail({ item, token, onError, onNotice }) {
         >
           ${busy === 'primary' ? 'Working…' : primaryLabel}
         </button>
-
         <div class="sheet-row">
-          <button disabled=${busy !== null} onClick=${() => run(freshSession, 'fresh')}>
+          <button
+            disabled=${busy !== null}
+            onClick=${() => run({ type: 'startSession', id: item.id, forceFresh: true }, 'fresh')}
+          >
             ${busy === 'fresh' ? '…' : item.agent ? 'Restart fresh' : 'Fresh session'}
           </button>
           <button
-            disabled=${busy !== null}
-            onClick=${() => run({ type: 'handOver', id: item.id }, 'handover')}
-          >
-            ${busy === 'handover' ? '…' : 'Hand over'}
-          </button>
-          <button class="more" onClick=${() => setMoreOpen(!moreOpen)}>•••</button>
+            class="more"
+            aria-label="More actions"
+            onClick=${() => setMenu({ title: 'Actions', entries: itemActions(snapshot, item) })}
+          >•••</button>
         </div>
-
-        ${moreOpen &&
-          html`
-            <div class="more-menu">
-              <button
-                disabled=${busy !== null}
-                onClick=${() => run({ type: 'refreshItem', id: item.id }, 'refresh')}
-              >
-                ${busy === 'refresh' ? '…' : 'Refresh from GitHub'}
-              </button>
-              <button
-                disabled=${busy !== null}
-                onClick=${() =>
-                  run({ type: 'setDisabled', id: item.id, disabled: !item.isDisabled }, 'disable')}
-              >
-                ${busy === 'disable' ? '…' : item.isDisabled ? 'Enable' : 'Disable'}
-              </button>
-              ${confirmRemove
-                ? html`
-                    <button
-                      class="danger"
-                      disabled=${busy !== null}
-                      onClick=${() => run({ type: 'removeItem', id: item.id }, 'remove')}
-                    >
-                      ${busy === 'remove' ? '…' : 'Really remove — deletes the worktree'}
-                    </button>
-                  `
-                : html`
-                    <button class="danger" onClick=${() => setConfirmRemove(true)}>
-                      Remove from list
-                    </button>
-                  `}
-            </div>
-          `}
       </div>
+
+      <${MenuHost}
+        menu=${menu}
+        onMenu=${setMenu}
+        token=${token}
+        onError=${onError}
+        onNotice=${onNotice}
+      />
     </div>
   `
 }
@@ -571,6 +756,7 @@ function App() {
   const [openID, setOpenID] = useState(null)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
+  const [menu, setMenu] = useState(null)
   const [tab, setTab] = useState('reviewRequests')
   const [query, setQuery] = useState('')
   // Sort and Hide parked start from the Mac's settings, then belong to the phone. A tap
@@ -662,6 +848,7 @@ function App() {
         ? html`
             <${Detail}
               item=${open}
+              snapshot=${snapshot}
               token=${token}
               onError=${setError}
               onNotice=${setNotice}
@@ -676,8 +863,16 @@ function App() {
               sort=${sort}
               counts=${counts}
               onOpen=${setOpenID}
+              onMenu=${(item) => setMenu({ title: item.title, entries: itemActions(snapshot, item) })}
             />
           `}
+      <${MenuHost}
+        menu=${menu}
+        onMenu=${setMenu}
+        token=${token}
+        onError=${setError}
+        onNotice=${setNotice}
+      />
     </div>
   `
 }

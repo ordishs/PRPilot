@@ -6,13 +6,15 @@ import Foundation
 /// drifting from the decoder. This reads the real file and checks every one.
 private var clientSource: String {
     get throws {
-        let url = URL(fileURLWithPath: #filePath)
+        let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // GatewayKitTests
             .deletingLastPathComponent()   // Tests
             .deletingLastPathComponent()   // Core
             .deletingLastPathComponent()   // repo root
-            .appendingPathComponent("App/Resources/web/app.js")
-        return try String(contentsOf: url, encoding: .utf8)
+            .appendingPathComponent("App/Resources/web")
+        return try ["app.js", "detail.mjs"]
+            .map { try String(contentsOf: root.appendingPathComponent($0), encoding: .utf8) }
+            .joined(separator: "\n")
     }
 }
 
@@ -50,7 +52,7 @@ private func commandTypes(in source: String) -> [String] {
     for type in types {
         // Every command the client builds carries an id except refreshAll, and the extra
         // keys are ignored by the decoder, so one shape covers them all.
-        let json = #"{"type":"\#(type)","id":"a#1","disabled":true,"forceFresh":true,"pane":"github","label":"x","status":"done","text":"x","url":"https://example.com"}"#
+        let json = #"{"type":"\#(type)","id":"a#1","disabled":true,"forceFresh":true,"pane":"github","label":"x","status":"done","agent":"codex","text":"x","url":"https://example.com"}"#
         #expect(
             throws: Never.self,
             "client sends '\(type)', which the server cannot decode"
@@ -141,4 +143,8 @@ private func commandTypes(in source: String) -> [String] {
         #expect(listing.contains(".\(field)"), "the list logic never reads '\(field)'")
         #expect(json[field] != nil, "the server does not send '\(field)'")
     }
+}
+
+@Test func theClientOffersSetAgent() throws {
+    #expect(commandTypes(in: try clientSource).contains("setAgent"))
 }
