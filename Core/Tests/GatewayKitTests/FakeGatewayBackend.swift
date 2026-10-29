@@ -9,6 +9,8 @@ final class FakeGatewayBackend: GatewayBackend {
     var login: String? = "ordishs"
     var sections: [GatewaySection] = []
     var cannedTranscript: GatewayTranscript?
+    var cannedThread: GatewayThread?
+    private(set) var threadRequests: [String] = []
     private(set) var transcriptRequests: [(id: String, limit: Int)] = []
 
     func snapshot() -> GatewaySnapshot {
@@ -32,5 +34,10 @@ final class FakeGatewayBackend: GatewayBackend {
             return .unavailable(itemID: id, note: "no session has run for this item yet")
         }
         return canned
+    }
+
+    func githubThread(for id: String) async -> GatewayThread {
+        threadRequests.append(id)
+        return cannedThread ?? .unavailable(itemID: id, note: "no GitHub page for this item")
     }
 }

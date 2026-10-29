@@ -26,3 +26,19 @@ public func resolvedPane(for item: WorkItem) -> PaneSelection {
     if let remembered = item.lastPane { return remembered }
     return (item.prRef == nil && item.issueRef == nil) ? .claude : .github
 }
+
+/// Agents that get a tab beside GitHub: the ones holding a stored session for the item,
+/// plus the one running right now, whose session may not be written down yet. Order is
+/// the fixed `AgentKind` order so tabs never shuffle between visits. A disabled item has
+/// no agent pane, so it has none.
+public func agentTabs(for item: WorkItem, defaultAgent: AgentKind, isLive: Bool) -> [AgentKind] {
+    guard !item.disabled else { return [] }
+    let running = isLive ? item.effectiveAgent(default: defaultAgent) : nil
+    return AgentKind.allCases.filter { item.sessionID(for: $0) != nil || $0 == running }
+}
+
+/// Agents the "+" menu offers: every one without a tab yet.
+public func addableAgents(for item: WorkItem, defaultAgent: AgentKind, isLive: Bool) -> [AgentKind] {
+    let present = Set(agentTabs(for: item, defaultAgent: defaultAgent, isLive: isLive))
+    return item.disabled ? [] : AgentKind.allCases.filter { !present.contains($0) }
+}

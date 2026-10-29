@@ -17,8 +17,9 @@ import {
 } from '../App/Resources/web/listing.mjs'
 import {
   detailOf,
-  availablePanes,
-  activePane,
+  detailTabs,
+  activeTab,
+  addableAgents,
   needsSession,
   agentOptions,
   itemActions,
@@ -250,21 +251,43 @@ test('an item from an older server has an empty detail rather than none', () => 
   assert.equal(detailOf(old).paneState, 'idle')
 })
 
-test('a disabled item offers only the GitHub pane and stays on it', () => {
-  const disabled = detailItem({ isDisabled: true }, { pane: 'claude' })
-  assert.deepEqual(availablePanes(disabled), ['github'])
-  assert.equal(activePane(disabled, null), 'github')
+test('a disabled item offers only the GitHub tab and stays on it', () => {
+  const disabled = detailItem({ isDisabled: true }, { pane: 'claude', agentTabs: ['claudeCode'] })
+  assert.deepEqual(detailTabs(disabled), ['github'])
+  assert.equal(activeTab(disabled, null), 'github')
+  assert.equal(activeTab(disabled, 'claudeCode'), 'github')
+  assert.deepEqual(addableAgents(snap, disabled), [])
 })
 
-test('an item offers both panes and opens on the remembered one', () => {
-  const pr = detailItem({}, { pane: 'claude' })
-  assert.deepEqual(availablePanes(pr), ['claude', 'github'])
-  assert.equal(activePane(pr, null), 'claude')
-  assert.equal(activePane(pr, 'github'), 'github')
+test('an item with no session has only the GitHub tab', () => {
+  assert.deepEqual(detailTabs(detailItem({}, { agentTabs: [] })), ['github'])
 })
 
-test('a choice of the agent pane on a disabled item is ignored', () => {
-  assert.equal(activePane(detailItem({ isDisabled: true }), 'claude'), 'github')
+test('each agent with a session is a tab after GitHub', () => {
+  const pr = detailItem({}, { agentTabs: ['claudeCode', 'codex'], agentKey: 'codex', pane: 'claude' })
+  assert.deepEqual(detailTabs(pr), ['github', 'claudeCode', 'codex'])
+  assert.equal(activeTab(pr, null), 'codex')
+  assert.equal(activeTab(pr, 'claudeCode'), 'claudeCode')
+  assert.equal(activeTab(pr, 'github'), 'github')
+})
+
+test('a remembered GitHub pane opens on GitHub', () => {
+  const pr = detailItem({}, { agentTabs: ['claudeCode'], agentKey: 'claudeCode', pane: 'github' })
+  assert.equal(activeTab(pr, null), 'github')
+})
+
+test('a tab just added stays chosen before its session is written down', () => {
+  const pr = detailItem({}, { agentTabs: ['claudeCode'], agentKey: 'pi', pane: 'github' })
+  assert.equal(activeTab(pr, 'pi'), 'pi')
+  assert.equal(activeTab(pr, 'codex'), 'github')
+})
+
+test('the add menu offers only agents without a tab', () => {
+  const pr = detailItem({}, { agentTabs: ['claudeCode'] })
+  const options = addableAgents(snap, pr)
+  assert.deepEqual(options.map((o) => o.key), ['pi', 'codex'])
+  assert.deepEqual(options[1].command, { type: 'setAgent', id: 'o/r#1', agent: 'codex' })
+  assert.deepEqual(addableAgents(snap, detailItem({}, { agentTabs: ['claudeCode', 'pi', 'codex'] })), [])
 })
 
 test('the agent pane asks for a session only while it is idle', () => {

@@ -5628,3 +5628,52 @@ private func gatewayModel(_ store: ReviewStore) -> AppModel {
     #expect(result.status == .rejected)
     #expect(result.message == "no such item")
 }
+
+@Test @MainActor func aNewerUpdateStampBumpsTheItemsChangeTickOnce() async throws {
+    func hit(_ stamp: String) -> String {
+        sampleSearchHitJSON.replacingOccurrences(
+            of: "\"isDraft\": false,",
+            with: "\"isDraft\": false,\n    \"updatedAt\": \"\(stamp)\","
+        )
+    }
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestQueries = [DiscoveryQuery(text: "review-requested:@me is:open")]
+    seed.myPRsEnabled = false
+    seed.issuesEnabled = false
+    try await seedStore.updateSettings(seed)
+    let store = try ReviewStore(fileURL: url)
+    try await store.upsertItem(sampleReview())
+    let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: hit("2026-10-28T09:00:00Z"), standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: hit("2026-10-28T09:00:00Z"), standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: hit("2026-10-28T10:00:00Z"), standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: hit("2026-10-28T10:00:00Z"), standardError: "")
+    ])
+    let model = AppModel(
+        store: store,
+        client: GitHubClient(runner: runner, ghPath: "gh"),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    let id = try #require(model.reviews.first?.id)
+
+    await model.discoverNow()
+    #expect(model.remoteChangeTicks[id] == nil)
+
+    await model.discoverNow()
+    #expect(model.remoteChangeTicks[id] == nil)
+
+    await model.discoverNow()
+    #expect(model.remoteChangeTicks[id] == 1)
+
+    await model.discoverNow()
+    #expect(model.remoteChangeTicks[id] == 1)
+}

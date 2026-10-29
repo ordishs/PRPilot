@@ -288,11 +288,12 @@ public struct IssueHit: Sendable, Equatable {
     public let url: String
     public let authorLogin: String
     public let state: String
+    public let updatedAt: String?
 
     public var id: String { "\(owner)/\(repo)/issues/\(number)" }
     public var locator: IssueLocator { IssueLocator(owner: owner, repo: repo, number: number) }
 
-    public init(owner: String, repo: String, number: Int, title: String, url: String, authorLogin: String, state: String) {
+    public init(owner: String, repo: String, number: Int, title: String, url: String, authorLogin: String, state: String, updatedAt: String? = nil) {
         self.owner = owner
         self.repo = repo
         self.number = number
@@ -300,6 +301,7 @@ public struct IssueHit: Sendable, Equatable {
         self.url = url
         self.authorLogin = authorLogin
         self.state = state
+        self.updatedAt = updatedAt
     }
 }
 
@@ -312,11 +314,12 @@ public struct DiscoveryHit: Sendable, Equatable {
     public let authorLogin: String
     public let state: String
     public let isDraft: Bool
+    public let updatedAt: String?
 
     public var id: String { "\(owner)/\(repo)#\(number)" }
     public var ref: PRLocator { PRLocator(owner: owner, repo: repo, number: number) }
 
-    public init(owner: String, repo: String, number: Int, title: String, url: String, authorLogin: String, state: String, isDraft: Bool) {
+    public init(owner: String, repo: String, number: Int, title: String, url: String, authorLogin: String, state: String, isDraft: Bool, updatedAt: String? = nil) {
         self.owner = owner
         self.repo = repo
         self.number = number
@@ -325,6 +328,7 @@ public struct DiscoveryHit: Sendable, Equatable {
         self.authorLogin = authorLogin
         self.state = state
         self.isDraft = isDraft
+        self.updatedAt = updatedAt
     }
 }
 
@@ -336,6 +340,7 @@ private struct GHSearchHit: Decodable {
     let url: String
     let state: String
     let isDraft: Bool
+    let updatedAt: String?
     let author: Author
     let repository: Repository
 }
@@ -356,13 +361,14 @@ private struct GHIssueSearchHit: Decodable {
     let title: String
     let url: String
     let state: String
+    let updatedAt: String?
     let author: Author
     let repository: Repository
 }
 
 extension GitHubClient {
     public func searchPRs(query: String) async throws -> [DiscoveryHit] {
-        let fields = "number,title,url,state,isDraft,author,repository"
+        let fields = "number,title,url,state,isDraft,author,repository,updatedAt"
         let queryTokens = query.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
         let result = try await runner.run(
             executable: ghPath,
@@ -388,7 +394,8 @@ extension GitHubClient {
                 url: row.url,
                 authorLogin: row.author.login,
                 state: row.state,
-                isDraft: row.isDraft
+                isDraft: row.isDraft,
+                updatedAt: row.updatedAt
             )
         }
     }
@@ -404,7 +411,7 @@ extension GitHubClient {
     }
 
     public func searchIssues(query: String) async throws -> [IssueHit] {
-        let fields = "number,title,url,state,author,repository"
+        let fields = "number,title,url,state,author,repository,updatedAt"
         var tokens = query.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
         if !tokens.contains("is:issue") {
             tokens.append("is:issue")
@@ -427,7 +434,8 @@ extension GitHubClient {
             guard parts.count == 2 else { return nil }
             return IssueHit(
                 owner: parts[0], repo: parts[1], number: row.number, title: row.title,
-                url: row.url, authorLogin: row.author.login, state: row.state
+                url: row.url, authorLogin: row.author.login, state: row.state,
+                updatedAt: row.updatedAt
             )
         }
     }
@@ -594,5 +602,108 @@ struct GHPullRequest: Decodable {
         headRefName = try container.decode(String.self, forKey: .headRefName)
         baseRefName = try container.decode(String.self, forKey: .baseRefName)
         closingIssuesReferences = try container.decodeIfPresent([ClosingIssueRef].self, forKey: .closingIssuesReferences) ?? []
+    }
+}
+
+/// The readable part of an issue or PR: its description and the discussion under it.
+public struct GitHubThread: Sendable, Equatable {
+    public struct Entry: Sendable, Equatable {
+        public let author: String
+        public let at: String?
+        public let body: String
+        /// Review verdict such as `APPROVED`, for PR reviews. Nil for plain comments.
+        public let verdict: String?
+
+        public init(author: String, at: String?, body: String, verdict: String? = nil) {
+            self.author = author
+            self.at = at
+            self.body = body
+            self.verdict = verdict
+        }
+    }
+
+    public let title: String
+    public let state: String
+    public let author: String
+    public let createdAt: String?
+    public let body: String
+    public let labels: [String]
+    public let entries: [Entry]
+
+    public init(title: String, state: String, author: String, createdAt: String?, body: String, labels: [String], entries: [Entry]) {
+        self.title = title
+        self.state = state
+        self.author = author
+        self.createdAt = createdAt
+        self.body = body
+        self.labels = labels
+        self.entries = entries
+    }
+}
+
+private struct GHThread: Decodable {
+    struct Author: Decodable { let login: String }
+    struct Label: Decodable { let name: String }
+    struct Comment: Decodable {
+        let author: Author?
+        let body: String
+        let createdAt: String?
+    }
+    struct Review: Decodable {
+        let author: Author?
+        let body: String
+        let state: String
+        let submittedAt: String?
+    }
+    let title: String
+    let state: String
+    let author: Author?
+    let createdAt: String?
+    let body: String
+    let labels: [Label]
+    let comments: [Comment]
+    let reviews: [Review]?
+}
+
+extension GitHubClient {
+    /// Reads the description and discussion of an issue or PR through `gh`. The phone cannot
+    /// embed github.com, so the Mac fetches the text and the phone draws it.
+    public func fetchThread(owner: String, repo: String, number: Int, isPR: Bool) async throws -> GitHubThread {
+        let fields = isPR
+            ? "title,state,author,createdAt,body,labels,comments,reviews"
+            : "title,state,author,createdAt,body,labels,comments"
+        let result = try await runner.run(
+            executable: ghPath,
+            arguments: [isPR ? "pr" : "issue", "view", String(number), "--repo", "\(owner)/\(repo)", "--json", fields]
+        )
+        guard result.exitCode == 0 else {
+            throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
+        }
+        let raw: GHThread
+        do {
+            raw = try JSONDecoder().decode(GHThread.self, from: Data(result.standardOutput.utf8))
+        } catch {
+            throw GitHubError.decodingFailed(String(describing: error))
+        }
+
+        let comments = raw.comments.map {
+            GitHubThread.Entry(author: $0.author?.login ?? "ghost", at: $0.createdAt, body: $0.body)
+        }
+        let reviews = (raw.reviews ?? [])
+            .filter { !$0.body.isEmpty || $0.state != "COMMENTED" }
+            .map {
+                GitHubThread.Entry(author: $0.author?.login ?? "ghost", at: $0.submittedAt, body: $0.body, verdict: $0.state)
+            }
+        let entries = (comments + reviews).sorted { ($0.at ?? "") < ($1.at ?? "") }
+
+        return GitHubThread(
+            title: raw.title,
+            state: raw.state,
+            author: raw.author?.login ?? "ghost",
+            createdAt: raw.createdAt,
+            body: raw.body,
+            labels: raw.labels.map(\.name),
+            entries: entries
+        )
     }
 }

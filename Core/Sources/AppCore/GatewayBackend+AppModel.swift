@@ -220,6 +220,29 @@ extension AppModel: GatewayBackend {
         )
     }
 
+    public func githubThread(for id: String) async -> GatewayThread {
+        do {
+            guard let thread = try await fetchGitHubThread(for: id) else {
+                return .unavailable(itemID: id, note: "this item has no GitHub page")
+            }
+            return GatewayThread(
+                itemID: id,
+                available: true,
+                title: thread.title,
+                state: thread.state,
+                author: thread.author,
+                createdAt: thread.createdAt,
+                body: thread.body,
+                labels: thread.labels,
+                entries: thread.entries.map {
+                    GatewayThread.Entry(author: $0.author, at: $0.at, body: $0.body, verdict: $0.verdict)
+                }
+            )
+        } catch {
+            return .unavailable(itemID: id, note: "GitHub could not be read: \(error)")
+        }
+    }
+
     private func rejection(_ message: String) -> GatewayCommandResult {
         GatewayCommandResult(status: .rejected, message: message, snapshot: snapshot())
     }
@@ -249,6 +272,11 @@ extension AppModel {
             rebase: GatewayProjection.rebase(rebaseStates[work.id]),
             agentChoice: work.agent?.rawValue,
             agentKey: work.effectiveAgent(default: settings.defaultAgent).rawValue,
+            agentTabs: agentTabs(
+                for: work,
+                defaultAgent: settings.defaultAgent,
+                isLive: claudeSessions[work.id] != nil
+            ).map(\.rawValue),
             canHandOver: canHandOver(work),
             sessionID: work.claudeSessionID,
             canClearAgentBadge: work.awaitsMyResponse(myLogin: currentLogin),

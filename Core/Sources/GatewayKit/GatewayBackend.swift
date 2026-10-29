@@ -10,4 +10,6 @@ public protocol GatewayBackend: AnyObject, Sendable {
     /// The recent conversation for one item. Separate from the snapshot because a
     /// transcript is far larger than the queue and is only wanted for the open item.
     func transcript(for id: String, limit: Int) -> GatewayTranscript
+    /// The GitHub description and discussion for one item. Async because it asks GitHub.
+    func githubThread(for id: String) async -> GatewayThread
 }

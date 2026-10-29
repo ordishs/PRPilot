@@ -252,6 +252,7 @@ private let sampleSearchJSON = """
     "url": "https://github.com/bsv-blockchain/teranode/pull/944",
     "state": "open",
     "isDraft": false,
+    "updatedAt": "2026-10-28T09:30:00Z",
     "author": { "login": "icellan" },
     "repository": { "nameWithOwner": "bsv-blockchain/teranode" }
   },
@@ -304,6 +305,8 @@ private let sampleSearchJSONWithMalformedRepo = """
     #expect(hits[0].authorLogin == "icellan")
     #expect(hits[0].state == "open")
     #expect(hits[0].isDraft == false)
+    #expect(hits[0].updatedAt == "2026-10-28T09:30:00Z")
+    #expect(hits[1].updatedAt == nil)
     #expect(hits[0].id == "bsv-blockchain/teranode#944")
 
     #expect(hits[1].owner == "foo")
@@ -312,7 +315,7 @@ private let sampleSearchJSONWithMalformedRepo = """
     #expect(hits[1].authorLogin == "alice")
 
     let args = await runner.lastArguments
-    #expect(args == ["search", "prs", "review-requested:@me", "--json", "number,title,url,state,isDraft,author,repository", "--limit", "100"])
+    #expect(args == ["search", "prs", "review-requested:@me", "--json", "number,title,url,state,isDraft,author,repository,updatedAt", "--limit", "100"])
 }
 
 @Test func searchPRsHandlesEmptyResults() async throws {
@@ -351,7 +354,7 @@ private let sampleSearchJSONWithMalformedRepo = """
     _ = try await client.searchPRs(query: "review-requested:@me is:open")
 
     let args = await runner.lastArguments
-    #expect(args == ["search", "prs", "review-requested:@me", "is:open", "--json", "number,title,url,state,isDraft,author,repository", "--limit", "100"])
+    #expect(args == ["search", "prs", "review-requested:@me", "is:open", "--json", "number,title,url,state,isDraft,author,repository,updatedAt", "--limit", "100"])
 }
 
 @Test func mapDiscoveryStateNormalizesCasing() {
@@ -564,6 +567,7 @@ private let sampleIssueSearchJSON = """
     "title": "Login crashes on empty password",
     "url": "https://github.com/bsv-blockchain/teranode/issues/42",
     "state": "open",
+    "updatedAt": "2026-10-27T08:00:00Z",
     "author": { "login": "alice" },
     "repository": { "nameWithOwner": "bsv-blockchain/teranode" }
   }
@@ -597,10 +601,11 @@ private let repoViewMainJSON = """
     #expect(hits[0].authorLogin == "alice")
     #expect(hits[0].state == "open")
     #expect(hits[0].id == "bsv-blockchain/teranode/issues/42")
+    #expect(hits[0].updatedAt == "2026-10-27T08:00:00Z")
     #expect(hits[0].locator == IssueLocator(owner: "bsv-blockchain", repo: "teranode", number: 42))
 
     let args = await runner.lastArguments
-    #expect(args == ["search", "issues", "assignee:@me", "is:open", "is:issue", "--json", "number,title,url,state,author,repository", "--limit", "100"])
+    #expect(args == ["search", "issues", "assignee:@me", "is:open", "is:issue", "--json", "number,title,url,state,author,repository,updatedAt", "--limit", "100"])
 }
 
 @Test func searchIssuesDoesNotDuplicateIsIssue() async throws {
@@ -608,7 +613,7 @@ private let repoViewMainJSON = """
     let client = GitHubClient(runner: runner, ghPath: "gh")
     _ = try await client.searchIssues(query: "assignee:@me is:issue")
     let args = await runner.lastArguments
-    #expect(args == ["search", "issues", "assignee:@me", "is:issue", "--json", "number,title,url,state,author,repository", "--limit", "100"])
+    #expect(args == ["search", "issues", "assignee:@me", "is:issue", "--json", "number,title,url,state,author,repository,updatedAt", "--limit", "100"])
 }
 
 @Test func searchIssuesThrowsOnNonZeroExit() async {
@@ -776,4 +781,64 @@ private let mixedReviewsSnapshotJSON = """
     let (client, _) = snapshotClient(snapshotJSON())
     let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
     #expect(snapshot.status.unresolvedThreads == 0)
+}
+
+private let samplePRThreadJSON = """
+{
+  "title": "Fix the thing",
+  "state": "OPEN",
+  "author": { "login": "alice" },
+  "createdAt": "2026-10-20T08:00:00Z",
+  "body": "Closes #7",
+  "labels": [{ "name": "bug" }],
+  "comments": [
+    { "author": { "login": "bob" }, "body": "Looks odd", "createdAt": "2026-10-21T09:00:00Z" }
+  ],
+  "reviews": [
+    { "author": { "login": "carol" }, "body": "", "state": "APPROVED", "submittedAt": "2026-10-22T10:00:00Z" },
+    { "author": { "login": "dave" }, "body": "", "state": "COMMENTED", "submittedAt": "2026-10-22T11:00:00Z" },
+    { "author": null, "body": "Gone", "state": "COMMENTED", "submittedAt": "2026-10-20T12:00:00Z" }
+  ]
+}
+"""
+
+@Test func fetchThreadMergesCommentsAndReviewsInTimeOrder() async throws {
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: samplePRThreadJSON, standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+
+    let thread = try await client.fetchThread(owner: "o", repo: "r", number: 9, isPR: true)
+
+    #expect(thread.title == "Fix the thing")
+    #expect(thread.author == "alice")
+    #expect(thread.labels == ["bug"])
+    #expect(thread.entries.map(\.author) == ["ghost", "bob", "carol"])
+    #expect(thread.entries.last?.verdict == "APPROVED")
+    #expect(thread.entries.first?.verdict == "COMMENTED")
+
+    let args = await runner.lastArguments
+    #expect(args == ["pr", "view", "9", "--repo", "o/r", "--json", "title,state,author,createdAt,body,labels,comments,reviews"])
+}
+
+@Test func fetchThreadForAnIssueAsksForNoReviews() async throws {
+    let json = """
+    { "title": "t", "state": "OPEN", "author": { "login": "a" }, "createdAt": null,
+      "body": "", "labels": [], "comments": [] }
+    """
+    let runner = RecordingRunner(result: CommandResult(exitCode: 0, standardOutput: json, standardError: ""))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+
+    let thread = try await client.fetchThread(owner: "o", repo: "r", number: 3, isPR: false)
+
+    #expect(thread.entries.isEmpty)
+    let args = await runner.lastArguments
+    #expect(args == ["issue", "view", "3", "--repo", "o/r", "--json", "title,state,author,createdAt,body,labels,comments"])
+}
+
+@Test func fetchThreadThrowsOnNonZeroExit() async {
+    let runner = RecordingRunner(result: CommandResult(exitCode: 1, standardOutput: "", standardError: "not found"))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+
+    await #expect(throws: GitHubError.self) {
+        try await client.fetchThread(owner: "o", repo: "r", number: 3, isPR: false)
+    }
 }

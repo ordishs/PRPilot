@@ -77,6 +77,8 @@ public struct GatewayDetail: Codable, Sendable, Hashable {
     public var rebase: GatewayRebase?
     public var agentChoice: String?
     public var agentKey: String
+    /// Agents that hold a session for the item, in tab order. Each is a tab beside GitHub.
+    public var agentTabs: [String]
     public var canHandOver: Bool
     public var sessionID: String?
     public var canClearAgentBadge: Bool
@@ -91,6 +93,7 @@ public struct GatewayDetail: Codable, Sendable, Hashable {
         rebase: GatewayRebase? = nil,
         agentChoice: String? = nil,
         agentKey: String = "claudeCode",
+        agentTabs: [String] = [],
         canHandOver: Bool = false,
         sessionID: String? = nil,
         canClearAgentBadge: Bool = false,
@@ -104,6 +107,7 @@ public struct GatewayDetail: Codable, Sendable, Hashable {
         self.rebase = rebase
         self.agentChoice = agentChoice
         self.agentKey = agentKey
+        self.agentTabs = agentTabs
         self.canHandOver = canHandOver
         self.sessionID = sessionID
         self.canClearAgentBadge = canClearAgentBadge

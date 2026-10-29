@@ -107,6 +107,14 @@ public enum GatewayRouter {
             return json(try encoder.encode(transcript))
         }
 
+        guarded.get("/github") { request, _ -> Response in
+            guard let id = request.uri.queryParameters["id"].map(String.init), !id.isEmpty else {
+                throw HTTPError(.badRequest, message: "missing id")
+            }
+            let thread = await backend.githubThread(for: id)
+            return json(try encoder.encode(thread))
+        }
+
         guarded.post("/command") { request, _ -> Response in
             var request = request
             let body = try await request.collectBody(upTo: 64 * 1024)

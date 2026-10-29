@@ -203,6 +203,14 @@ struct ContentView: View {
                     .help("Sort items within each section by recency, status, or author")
                 }
                 ToolbarItem {
+                    Button {
+                        Task { await model.refreshAllNow() }
+                    } label: {
+                        Label("Refresh All", systemImage: "arrow.clockwise")
+                    }
+                    .help("Run discovery again and refresh every open item (⇧⌘R)")
+                }
+                ToolbarItem {
                     Menu {
                         Button { showingNewTask = true } label: { Label("New Task…", systemImage: "hammer") }
                         Button { showingAdd = true } label: { Label("Add PR by URL…", systemImage: "link") }
@@ -272,6 +280,11 @@ struct ContentView: View {
             webViewCache.cap = model.settings.maxLiveWebViews
             _ = webViewCache.ensure(for: review)
             Task { await model.markReviewOpened(id) }
+        }
+        .onChange(of: model.remoteChangeTicks) { old, new in
+            for (id, tick) in new where old[id] != tick {
+                webViewCache.reload(reviewID: id)
+            }
         }
         .onAppear {
             Task { await model.setTerminalAppearance(isDark: colorScheme == .dark) }
@@ -343,7 +356,7 @@ struct ContentView: View {
     private func sidebarRow(for review: WorkItem) -> some View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(review.number.map { "#\($0) · \(review.title)" } ?? review.title)
+                Text(review.displayNumber.map { "#\($0) · \(review.title)" } ?? review.title)
                     .font(.system(size: 14, weight: .semibold))
                     .lineLimit(1)
 

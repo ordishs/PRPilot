@@ -183,7 +183,11 @@ final class WebViewCache {
     }
 
     func reload(for review: WorkItem) {
-        webViews[review.id]?.reload()
+        reload(reviewID: review.id)
+    }
+
+    func reload(reviewID: String) {
+        webViews[reviewID]?.reload()
     }
 
     func loadState(for review: WorkItem) -> WebLoadState {

@@ -21,8 +21,9 @@ import {
 } from '/listing.mjs'
 import {
   detailOf,
-  availablePanes,
-  activePane,
+  detailTabs,
+  activeTab,
+  addableAgents,
   needsSession,
   agentOptions,
   itemActions,
@@ -216,6 +217,75 @@ function Conversation({ item, token, onError }) {
   `
 }
 
+async function fetchThread(token, id) {
+  const response = await fetch(`/api/github?id=${encodeURIComponent(id)}`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  if (!response.ok) throw new Error(`GitHub failed (${response.status})`)
+  return response.json()
+}
+
+function stamp(iso) {
+  if (!iso) return ''
+  const at = new Date(iso)
+  return Number.isNaN(at.getTime())
+    ? ''
+    : at.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+const VERDICT_TONES = { APPROVED: 'green', CHANGES_REQUESTED: 'red' }
+
+/// The issue or PR text, fetched by the Mac. github.com refuses to be framed and the
+/// phone holds no GitHub session, so the page cannot be embedded the way the Mac does.
+/// Bodies are shown as plain text: the markup stays visible rather than being guessed at.
+function GitHubThread({ item, token, onError }) {
+  const [thread, setThread] = useState(null)
+
+  const load = useCallback(async () => {
+    try {
+      setThread(await fetchThread(token, item.id))
+    } catch (error) {
+      onError(String(error.message || error))
+    }
+  }, [token, item.id, onError])
+
+  useEffect(() => {
+    load()
+    const timer = setInterval(load, 30000)
+    return () => clearInterval(timer)
+  }, [load])
+
+  if (!thread) return html`<p class="conv-note">Loading the GitHub page…</p>`
+  if (!thread.available) return html`<p class="conv-note">${thread.note || 'No GitHub page.'}</p>`
+
+  return html`
+    <div class="thread">
+      <div class="thread-head">
+        <span class="badge grey">${thread.state.toLowerCase()}</span>
+        ${thread.labels.map((name) => html`<span key=${name} class="badge blue">${name}</span>`)}
+        <span class="thread-by">${thread.author} · ${stamp(thread.createdAt)}</span>
+      </div>
+      <div class="turn-text thread-body">
+        ${thread.body.trim() === '' ? 'No description provided.' : thread.body}
+      </div>
+      ${thread.entries.map(
+        (entry, index) => html`
+          <div key=${`${entry.at}-${index}`} class="turn">
+            <div class="turn-head">
+              ${entry.author} · ${stamp(entry.at)}
+              ${entry.verdict &&
+                html` <span class=${`badge ${VERDICT_TONES[entry.verdict] || 'grey'}`}>
+                  ${entry.verdict.replace('_', ' ').toLowerCase()}
+                </span>`}
+            </div>
+            ${entry.body.trim() !== '' && html`<div class="turn-text">${entry.body}</div>`}
+          </div>
+        `
+      )}
+    </div>
+  `
+}
+
 function elapsed(seconds) {
   if (seconds == null) return null
   if (seconds < 90) return `${seconds}s`
@@ -239,7 +309,30 @@ function ago(iso) {
   return `${Math.round(hours / 24)}d`
 }
 
-function Row({ item, onOpen, onMenu }) {
+const RESOURCE_GLYPHS = { worktree: '▤', session: '›_', web: '◎' }
+
+const STATUS_TONES = {
+  starting: 'orange',
+  working: 'orange',
+  'awaiting input': 'blue',
+  idle: 'green',
+  finished: 'green',
+  limited: 'red',
+  failed: 'red',
+}
+
+/// The Mac row's trailing status dot: the agent's state at a glance.
+function StatusDot({ agent }) {
+  if (!agent) return null
+  return html`<span
+    class=${`status-dot ${STATUS_TONES[agent.status] || 'grey'}`}
+    title=${`${agent.kind} · ${agent.status}`}
+  ></span>`
+}
+
+/// One sidebar row, laid out as the Mac draws it: number and title, badges, label,
+/// owner/repo and author, then resource icons with the age of the last activity.
+function Row({ item, selected, resourceFilters, onOpen, onMenu }) {
   const timer = useRef(null)
   const fired = useRef(false)
   const dim = item.isDisabled
@@ -266,18 +359,12 @@ function Row({ item, onOpen, onMenu }) {
     }
     onOpen(item.id)
   }
-  const meta = [
-    item.repo ? `${item.repo} #${item.number}` : 'task',
-    item.author,
-    ago(item.lastActivityAt),
-    item.label,
-  ]
-    .filter(Boolean)
-    .join(' · ')
+  const where = item.repo ? `${item.owner}/${item.repo}` : 'task'
+  const meta = [where, item.author].filter(Boolean).join(' · ')
 
   return html`
     <button
-      class=${dim ? 'row dim' : 'row'}
+      class=${`row${dim ? ' dim' : ''}${selected ? ' selected' : ''}`}
       onClick=${click}
       onTouchStart=${press}
       onTouchEnd=${cancel}
@@ -288,22 +375,38 @@ function Row({ item, onOpen, onMenu }) {
         onMenu(item)
       }}
     >
-      <div class="row-title">${item.title}</div>
-      ${item.attentionReason &&
-        html`<div class="row-reason">${item.attentionReason}</div>`}
-      <div class="row-meta">${meta}</div>
-      ${item.badges.length > 0 &&
-        html`
-          <div class="row-badges">
-            ${item.badges.map(
-              (badge) => html`
-                <span key=${badge.text} class=${`badge ${badge.tone}`} title=${badge.help}>
-                  ${badge.text}
-                </span>
-              `
-            )}
-          </div>
-        `}
+      <div class="row-main">
+        <div class="row-title">${item.number != null ? `#${item.number} · ` : ''}${item.title}</div>
+        ${item.attentionReason &&
+          html`<div class="row-reason">${item.attentionReason}</div>`}
+        ${item.badges.length > 0 &&
+          html`
+            <div class="row-badges">
+              ${item.badges.map(
+                (badge) => html`
+                  <span key=${badge.text} class=${`badge ${badge.tone}`} title=${badge.help}>
+                    ${badge.text}
+                  </span>
+                `
+              )}
+            </div>
+          `}
+        ${item.label && html`<div class="row-label">🔖 ${item.label}</div>`}
+        <div class="row-meta">${meta}</div>
+        <div class="row-foot">
+          ${resourceFilters.map(
+            (option) => html`
+              <span
+                key=${option.key}
+                class=${item.resources.includes(option.key) ? 'res on' : 'res'}
+                title=${option.help}
+              >${RESOURCE_GLYPHS[option.key] || '•'}</span>
+            `
+          )}
+          <span class="row-age">${ago(item.lastActivityAt)}</span>
+        </div>
+      </div>
+      <${StatusDot} agent=${item.agent} />
     </button>
   `
 }
@@ -387,49 +490,74 @@ function Pills({ listing, counts, selection, onSelection }) {
   `
 }
 
-function Tabs({ counts, tab, onSelect }) {
-  return html`
-    <nav class="tabs" role="tablist">
-      ${SECTION_ORDER.map(
-        (kind) => html`
-          <button
-            key=${kind}
-            role="tab"
-            aria-selected=${tab === kind}
-            class=${`tab${tab === kind ? ' active' : ''}`}
-            onClick=${() => onSelect(kind)}
-          >
-            <span class="tab-label">${SECTION_TITLES[kind]}</span>
-            <span class="tab-count">${counts[kind]}</span>
-          </button>
-        `
-      )}
-    </nav>
-  `
+const COLLAPSED_KEY = 'prpilot.collapsed'
+
+function loadCollapsed() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]'))
+  } catch {
+    return new Set()
+  }
 }
 
-/// One section at a time. Search and pills narrow every section, as on the Mac, so when
-/// the open tab comes up empty the note says where the matches went.
-function List({ snapshot, tab, query, selection, sort, counts, onOpen, onMenu }) {
-  const items = visibleItems(snapshot, tab, query, selection, sort)
-  const elsewhere = SECTION_ORDER.filter((kind) => kind !== tab && counts[kind] > 0)
+function saveCollapsed(set) {
+  try {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set]))
+  } catch {
+    // Not fatal — the sections stay as the viewer left them for this tab.
+  }
+}
+
+/// The Mac sidebar: all three sections in one scrolling list, each with a collapsible
+/// heading and a count. Search and pills narrow every section, as on the Mac.
+function Sidebar({ snapshot, query, selection, sort, counts, openID, onOpen, onMenu }) {
+  const [collapsed, setCollapsed] = useState(loadCollapsed)
   const narrowed = query.trim() !== '' || !selectionIsEmpty(selection)
+  const total = SECTION_ORDER.reduce((sum, kind) => sum + counts[kind], 0)
+
+  const toggleSection = (kind) => {
+    const next = toggled(collapsed, kind)
+    saveCollapsed(next)
+    setCollapsed(next)
+  }
 
   return html`
     <div class="list">
       ${snapshot.warnings.length > 0 &&
         html`<div class="warnings">${snapshot.warnings.join(' · ')}</div>`}
-      ${items.length === 0
-        ? html`<p class="empty">
-            ${narrowed ? 'Nothing here matches.' : `No items in ${SECTION_TITLES[tab]}.`}
-            ${narrowed && elsewhere.length > 0 &&
-              html`<br />${elsewhere
-                .map((kind) => `${SECTION_TITLES[kind]}: ${counts[kind]}`)
-                .join(' · ')}`}
-          </p>`
-        : items.map(
-            (item) => html`<${Row} key=${item.id} item=${item} onOpen=${onOpen} onMenu=${onMenu} />`
-          )}
+      ${narrowed && total === 0 && html`<p class="empty">Nothing here matches.</p>`}
+      ${SECTION_ORDER.map((kind) => {
+        const items = visibleItems(snapshot, kind, query, selection, sort)
+        const open = !collapsed.has(kind)
+        return html`
+          <section key=${kind} class="section">
+            <button
+              class="section-head"
+              aria-expanded=${open}
+              onClick=${() => toggleSection(kind)}
+            >
+              <span class="chevron">${open ? '▾' : '▸'}</span>
+              <span class="section-title">${SECTION_TITLES[kind]}</span>
+              <span class="section-count">${counts[kind]}</span>
+            </button>
+            ${open &&
+              (items.length === 0
+                ? html`<p class="section-empty">Nothing here yet</p>`
+                : items.map(
+                    (item) => html`
+                      <${Row}
+                        key=${item.id}
+                        item=${item}
+                        selected=${item.id === openID}
+                        resourceFilters=${snapshot.listing.resourceFilters}
+                        onOpen=${onOpen}
+                        onMenu=${onMenu}
+                      />
+                    `
+                  ))}
+          </section>
+        `
+      })}
     </div>
   `
 }
@@ -528,6 +656,7 @@ function MenuHost({ menu, onMenu, token, onError, onNotice }) {
       onMenu({ title: entry.label, entries: outcome.choices })
     } else {
       onMenu(null)
+      if (entry.after) entry.after()
     }
   }
 
@@ -565,11 +694,11 @@ function Detail({ item, snapshot, token, onError, onNotice }) {
   const started = useRef(null)
 
   const detail = detailOf(item)
-  const pane = activePane(item, chosen)
-  const agentLabel =
-    snapshot.listing.agents.find((agent) => agent.key === detail.agentKey)?.label ||
-    item.agent?.kind ||
-    'Agent'
+  const pane = activeTab(item, chosen)
+  const agentName = (key) => snapshot.listing.agents.find((agent) => agent.key === key)?.label
+  const agentLabel = agentName(detail.agentKey) || item.agent?.kind || 'Agent'
+  const onAgentTab = pane !== 'github'
+  const switching = onAgentTab && pane !== detail.agentKey
 
   const run = async (command, key) => {
     setBusy(key)
@@ -587,21 +716,42 @@ function Detail({ item, snapshot, token, onError, onNotice }) {
     }
   }
 
-  const choosePane = (key) => {
+  // Only one agent runs an item at a time, so another agent's tab switches the live
+  // session to it. Each agent keeps its own conversation to come back to.
+  const chooseTab = (key) => {
     setChosen(key)
-    sendCommand(token, { type: 'setPane', id: item.id, pane: key }).catch((error) =>
-      onError(String(error.message || error))
-    )
+    if (key !== 'github' && key !== detail.agentKey) {
+      run({ type: 'setAgent', id: item.id, agent: key }, 'switch')
+    }
+    sendCommand(token, {
+      type: 'setPane',
+      id: item.id,
+      pane: key === 'github' ? 'github' : 'claude',
+    }).catch((error) => onError(String(error.message || error)))
+  }
+
+  const addMenu = () => {
+    const confirm = item.agent?.status === 'working'
+      ? 'The agent is working. Switching ends its live session.'
+      : null
+    setMenu({
+      title: 'Add review',
+      entries: addableAgents(snapshot, item).map((option) => ({
+        ...option,
+        confirm,
+        after: () => setChosen(option.key),
+      })),
+    })
   }
 
   useEffect(() => {
-    if (pane !== 'claude' || !needsSession(item)) return
+    if (!onAgentTab || switching || !needsSession(item)) return
     if (started.current === item.id) return
     started.current = item.id
     sendCommand(token, { type: 'startSession', id: item.id, forceFresh: false }).catch((error) =>
       onError(String(error.message || error))
     )
-  }, [pane, item.id, detail.paneState, item.isDisabled])
+  }, [pane, item.id, detail.paneState, item.isDisabled, detail.agentKey])
 
   const primaryCommand = item.primaryCommand || { type: 'startSession', id: item.id, forceFresh: true }
   const primaryLabel = item.primaryCommand
@@ -612,7 +762,8 @@ function Detail({ item, snapshot, token, onError, onNotice }) {
     .filter(Boolean)
     .join(' · ')
 
-  const paneLabel = (key) => (key === 'claude' ? `${agentLabel} Review` : 'GitHub')
+  const tabLabel = (key) => (key === 'github' ? 'GitHub' : `${agentName(key) || key} Review`)
+  const canAdd = addableAgents(snapshot, item).length > 0
 
   return html`
     <div class="detail">
@@ -629,22 +780,24 @@ function Detail({ item, snapshot, token, onError, onNotice }) {
       <${RebaseBanner} rebase=${detail.rebase} />
 
       <div class="segments" role="tablist">
-        ${availablePanes(item).map(
+        ${detailTabs(item).map(
           (key) => html`
             <button
               key=${key}
               role="tab"
               aria-selected=${pane === key}
               class=${pane === key ? 'on' : ''}
-              onClick=${() => choosePane(key)}
+              onClick=${() => chooseTab(key)}
             >
-              ${paneLabel(key)}
+              ${tabLabel(key)}
             </button>
           `
         )}
+        ${canAdd &&
+          html`<button class="add-tab" aria-label="Add review" onClick=${addMenu}>+</button>`}
       </div>
 
-      ${pane === 'claude' && detail.runLabel && html`<div class="run-label">${detail.runLabel}</div>`}
+      ${onAgentTab && !switching && detail.runLabel && html`<div class="run-label">${detail.runLabel}</div>`}
 
       ${pane === 'github' &&
         html`
@@ -683,9 +836,12 @@ function Detail({ item, snapshot, token, onError, onNotice }) {
 
           ${item.url &&
             html`<a class="external" href=${item.url} target="_blank" rel="noreferrer">Open on GitHub ↗</a>`}
+
+          <div class="label">Discussion</div>
+          <${GitHubThread} item=${item} token=${token} onError=${onError} />
         `}
 
-      ${pane === 'claude' &&
+      ${onAgentTab &&
         html`
           <div class="agent-head">
             <span class="agent-kind">${agentLabel}${item.agent ? ` · ${item.agent.status}` : ''}</span>
@@ -697,9 +853,10 @@ function Detail({ item, snapshot, token, onError, onNotice }) {
             </button>
           </div>
 
-          ${detail.paneState === 'live' &&
+          ${switching && html`<p class="conv-note">Switching to ${agentName(pane) || pane}…</p>`}
+          ${!switching && detail.paneState === 'live' &&
             html`<${Conversation} item=${item} token=${token} onError=${onError} />`}
-          ${detail.paneState === 'idle' &&
+          ${!switching && detail.paneState === 'idle' &&
             html`
               <p class="conv-note">No session yet.</p>
               <button
@@ -710,8 +867,8 @@ function Detail({ item, snapshot, token, onError, onNotice }) {
                 ${busy === 'start' ? 'Working…' : 'Start'}
               </button>
             `}
-          ${detail.paneState === 'preparing' && html`<p class="conv-note">Preparing the worktree…</p>`}
-          ${(detail.paneState === 'failed' || detail.paneState === 'unavailable') &&
+          ${!switching && detail.paneState === 'preparing' && html`<p class="conv-note">Preparing the worktree…</p>`}
+          ${!switching && (detail.paneState === 'failed' || detail.paneState === 'unavailable') &&
             html`<div class="banner error">${detail.paneMessage || 'The agent could not start.'}</div>`}
         `}
 
@@ -757,7 +914,6 @@ function App() {
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
   const [menu, setMenu] = useState(null)
-  const [tab, setTab] = useState('reviewRequests')
   const [query, setQuery] = useState('')
   // Sort and Hide parked start from the Mac's settings, then belong to the phone. A tap
   // here never rearranges the Mac sidebar.
@@ -802,70 +958,70 @@ function App() {
   const counts = sectionCounts(snapshot, query, selection)
 
   return html`
-    <div class="app">
-      <!-- Everything pinned lives here. One sticky container clears the status bar
-           once, and the back button can never scroll out of reach. -->
+    <div class=${open ? 'app has-open' : 'app'}>
       <div class="chrome">
         ${!connected && html`<div class="offline">Reconnecting…</div>`}
         ${error && html`<div class="error" onClick=${() => setError(null)}>${error}</div>`}
         ${notice && html`<div class="notice" onClick=${() => setNotice(null)}>${notice}</div>`}
-        ${open
-          ? html`
-              <div class="detail-bar">
-                <button class="back" onClick=${() => setOpenID(null)}>‹ Back</button>
-                <span class="detail-bar-title">${open.repo ? `${open.repo} #${open.number}` : 'task'}</span>
-              </div>
-            `
-          : html`
-              <header class="bar">
-                <span class="brand">PR Pilot</span>
-                <span class="count">${flatten(snapshot).length} items</span>
-                <!-- Installed to the home screen there is no browser chrome, so no way to
-                     reload and pick up a new client. This is it. -->
-                <button
-                  class="reload"
-                  aria-label="Reload the app"
-                  onClick=${() => location.reload()}
-                >⟳</button>
-              </header>
-              <${FilterBar}
-                query=${query}
-                onQuery=${setQuery}
-                sort=${sort}
-                sorts=${snapshot.listing.sorts}
-                onSort=${setSort}
-              />
-              <${Pills}
-                listing=${snapshot.listing}
-                counts=${pillCounts(snapshot)}
-                selection=${selection}
-                onSelection=${setSelection}
-              />
-              <${Tabs} counts=${counts} tab=${tab} onSelect=${setTab} />
-            `}
       </div>
-      ${open
-        ? html`
-            <${Detail}
-              item=${open}
-              snapshot=${snapshot}
-              token=${token}
-              onError=${setError}
-              onNotice=${setNotice}
-            />
-          `
-        : html`
-            <${List}
-              snapshot=${snapshot}
-              tab=${tab}
+      <div class="layout">
+        <aside class="sidebar">
+          <div class="side-chrome">
+            <header class="bar">
+              <span class="brand">PR Pilot</span>
+              <span class="count">${flatten(snapshot).length} items</span>
+              <!-- Installed to the home screen there is no browser chrome, so no way to
+                   reload and pick up a new client. This is it. -->
+              <button
+                class="reload"
+                aria-label="Reload the app"
+                onClick=${() => location.reload()}
+              >⟳</button>
+            </header>
+            <${FilterBar}
               query=${query}
-              selection=${selection}
+              onQuery=${setQuery}
               sort=${sort}
-              counts=${counts}
-              onOpen=${setOpenID}
-              onMenu=${(item) => setMenu({ title: item.title, entries: itemActions(snapshot, item) })}
+              sorts=${snapshot.listing.sorts}
+              onSort=${setSort}
             />
-          `}
+            <${Pills}
+              listing=${snapshot.listing}
+              counts=${pillCounts(snapshot)}
+              selection=${selection}
+              onSelection=${setSelection}
+            />
+          </div>
+          <${Sidebar}
+            snapshot=${snapshot}
+            query=${query}
+            selection=${selection}
+            sort=${sort}
+            counts=${counts}
+            openID=${openID}
+            onOpen=${setOpenID}
+            onMenu=${(item) => setMenu({ title: item.title, entries: itemActions(snapshot, item) })}
+          />
+        </aside>
+        <main class="main">
+          ${open
+            ? html`
+                <div class="detail-bar">
+                  <button class="back" onClick=${() => setOpenID(null)}>‹ Back</button>
+                  <span class="detail-bar-title">${open.repo ? `${open.repo} #${open.number}` : 'task'}</span>
+                </div>
+                <${Detail}
+                  key=${open.id}
+                  item=${open}
+                  snapshot=${snapshot}
+                  token=${token}
+                  onError=${setError}
+                  onNotice=${setNotice}
+                />
+              `
+            : html`<p class="main-empty">Select an item.</p>`}
+        </main>
+      </div>
       <${MenuHost}
         menu=${menu}
         onMenu=${setMenu}

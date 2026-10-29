@@ -34,15 +34,7 @@ struct DetailView: View {
                 .background(Color.red.opacity(0.12))
             }
             HStack(spacing: 8) {
-                Picker("", selection: $pane) {
-                    ForEach(PaneSelection.allCases, id: \.self) { pane in
-                        Text(pane.displayName(for: effectiveAgent))
-                            .tag(pane)
-                            .disabled(pane == .claude && review.disabled)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                tabStrip
                 if pane == .claude && !review.disabled {
                     agentMenu
                 }
@@ -79,6 +71,78 @@ struct DetailView: View {
             guard !review.disabled else { return }
             Task { await model.setPane(selected, for: review.id) }
         }
+    }
+
+    private var tabAgents: [AgentKind] {
+        var tabs = agentTabs(
+            for: review,
+            defaultAgent: model.settings.defaultAgent,
+            isLive: model.claudeSessions[review.id] != nil
+        )
+        if pane == .claude, !review.disabled, !tabs.contains(effectiveAgent) {
+            tabs.append(effectiveAgent)
+        }
+        return tabs
+    }
+
+    private var addableAgentKinds: [AgentKind] {
+        addableAgents(
+            for: review,
+            defaultAgent: model.settings.defaultAgent,
+            isLive: model.claudeSessions[review.id] != nil
+        )
+        .filter { !tabAgents.contains($0) }
+    }
+
+    /// GitHub first, then one tab per agent that holds a session, then "+" for the rest.
+    /// Only one agent runs an item at a time, so choosing another agent's tab switches the
+    /// live session to it; each agent keeps its own conversation to come back to.
+    private var tabStrip: some View {
+        HStack(spacing: 4) {
+            tabButton(title: "GitHub", selected: pane == .github) {
+                pane = .github
+            }
+            ForEach(tabAgents, id: \.self) { kind in
+                tabButton(
+                    title: PaneSelection.claude.displayName(for: kind),
+                    selected: pane == .claude && effectiveAgent == kind
+                ) {
+                    selectAgentTab(kind)
+                }
+            }
+            if !addableAgentKinds.isEmpty {
+                Menu {
+                    ForEach(addableAgentKinds, id: \.self) { kind in
+                        Button(kind.displayName) { selectAgentTab(kind) }
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Add a review with another agent")
+            }
+        }
+    }
+
+    private func tabButton(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(selected ? Color.accentColor.opacity(0.2) : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func selectAgentTab(_ kind: AgentKind) {
+        guard !review.disabled else { return }
+        pane = .claude
+        guard kind != effectiveAgent else { return }
+        Task { await model.setAgent(kind, for: review.id) }
     }
 
     private var effectiveAgent: AgentKind {

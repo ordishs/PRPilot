@@ -71,6 +71,10 @@ public final class AppModel {
     public private(set) var currentLogin: String?
     public private(set) var settings: Settings = .default
     public private(set) var discoveryWarnings: [String] = []
+    /// Bumps each time GitHub reports a newer update stamp for an item, so the item's web
+    /// view can reload itself. Absent until the first change after launch.
+    public private(set) var remoteChangeTicks: [String: Int] = [:]
+    private var remoteUpdatedAt: [String: String] = [:]
     public var diffMode: DiffMode { settings.diffMode }
 
     public var webPreloadHandler: ((WorkItem) -> Void)?
@@ -380,6 +384,7 @@ public final class AppModel {
         )
         for hit in hits {
             if let existing = existingByKey[hit.id] {
+                noteRemoteUpdate(id: existing.id, stamp: hit.updatedAt)
                 var updated = existing
                 updated.title = hit.title
                 updated.prState = GitHubClient.mapIssueState(state: hit.state)
@@ -410,6 +415,25 @@ public final class AppModel {
         }
     }
 
+    /// Description and discussion of an item's GitHub page. Nil for a task, which has none.
+    public func fetchGitHubThread(for id: String) async throws -> GitHubThread? {
+        guard let item = reviews.first(where: { $0.id == id }) else { return nil }
+        if let pr = item.prRef {
+            return try await client.fetchThread(owner: pr.owner, repo: pr.repo, number: pr.number, isPR: true)
+        }
+        if let issue = item.issueRef {
+            return try await client.fetchThread(owner: issue.owner, repo: issue.repo, number: issue.number, isPR: false)
+        }
+        return nil
+    }
+
+    private func noteRemoteUpdate(id: String, stamp: String?) {
+        guard let stamp else { return }
+        defer { remoteUpdatedAt[id] = stamp }
+        guard let previous = remoteUpdatedAt[id], previous != stamp else { return }
+        remoteChangeTicks[id, default: 0] += 1
+    }
+
     private func mergeDiscoveryHits(_ hits: [DiscoveryHit]) async {
         let existingByPRKey = Dictionary(
             reviews.compactMap { item in prKey(item).map { ($0, item) } },
@@ -417,6 +441,7 @@ public final class AppModel {
         )
         for hit in hits {
             if let existing = existingByPRKey[hit.id] {
+                noteRemoteUpdate(id: existing.id, stamp: hit.updatedAt)
                 var updated = existing
                 updated.title = hit.title
                 updated.prState = GitHubClient.mapDiscoveryState(state: hit.state, isDraft: hit.isDraft)

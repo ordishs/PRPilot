@@ -122,3 +122,42 @@ private func app(_ backend: FakeGatewayBackend) -> some ApplicationProtocol {
 
     #expect(try JSONDecoder().decode(GatewayCommand.self, from: data) == command)
 }
+
+@Test func theGitHubRouteNeedsATokenAndAnId() async throws {
+    let backend = await FakeGatewayBackend()
+    try await app(backend).test(.router) { client in
+        try await client.execute(uri: "/api/github?id=a%231", method: .get) { response in
+            #expect(response.status == .unauthorized)
+        }
+        try await client.execute(uri: "/api/github", method: .get, headers: auth) { response in
+            #expect(response.status == .badRequest)
+        }
+    }
+    #expect(await backend.threadRequests.isEmpty)
+}
+
+@Test func theGitHubRouteReturnsTheThreadForTheDecodedId() async throws {
+    let backend = await FakeGatewayBackend()
+    await MainActor.run {
+        backend.cannedThread = GatewayThread(
+            itemID: "o/r#7",
+            available: true,
+            title: "Fix it",
+            state: "OPEN",
+            author: "alice",
+            body: "details",
+            labels: ["bug"],
+            entries: [GatewayThread.Entry(author: "bob", at: "2026-10-21T09:00:00Z", body: "hm")]
+        )
+    }
+
+    try await app(backend).test(.router) { client in
+        try await client.execute(uri: "/api/github?id=o%2Fr%237", method: .get, headers: auth) { response in
+            #expect(response.status == .ok)
+            let thread = try GatewayCoding.decoder.decode(GatewayThread.self, from: Data(buffer: response.body))
+            #expect(thread.title == "Fix it")
+            #expect(thread.entries.map(\.author) == ["bob"])
+        }
+    }
+    #expect(await backend.threadRequests == ["o/r#7"])
+}

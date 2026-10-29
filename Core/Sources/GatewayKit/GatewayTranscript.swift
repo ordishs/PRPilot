@@ -64,3 +64,60 @@ public struct GatewayTranscript: Codable, Sendable, Hashable {
         )
     }
 }
+
+/// The text of a GitHub issue or PR, for a client that cannot embed github.com.
+public struct GatewayThread: Codable, Sendable, Hashable {
+    public struct Entry: Codable, Sendable, Hashable {
+        public var author: String
+        public var at: String?
+        public var body: String
+        public var verdict: String?
+
+        public init(author: String, at: String?, body: String, verdict: String? = nil) {
+            self.author = author
+            self.at = at
+            self.body = body
+            self.verdict = verdict
+        }
+    }
+
+    public var itemID: String
+    /// False for a task with no GitHub page, or when `gh` failed. `note` says which.
+    public var available: Bool
+    public var note: String?
+    public var title: String
+    public var state: String
+    public var author: String
+    public var createdAt: String?
+    public var body: String
+    public var labels: [String]
+    public var entries: [Entry]
+
+    public init(
+        itemID: String,
+        available: Bool,
+        note: String? = nil,
+        title: String = "",
+        state: String = "",
+        author: String = "",
+        createdAt: String? = nil,
+        body: String = "",
+        labels: [String] = [],
+        entries: [Entry] = []
+    ) {
+        self.itemID = itemID
+        self.available = available
+        self.note = note
+        self.title = title
+        self.state = state
+        self.author = author
+        self.createdAt = createdAt
+        self.body = body
+        self.labels = labels
+        self.entries = entries
+    }
+
+    public static func unavailable(itemID: String, note: String) -> GatewayThread {
+        GatewayThread(itemID: itemID, available: false, note: note)
+    }
+}
