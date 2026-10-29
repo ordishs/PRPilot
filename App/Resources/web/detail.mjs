@@ -112,7 +112,14 @@ export function itemActions(snapshot, item) {
   }
   if (detail.sessionID) {
     actions.push({ key: 'copySession', label: 'Copy Session ID', copy: detail.sessionID })
-    actions.push({ key: 'clearSession', label: 'Clear Session', command: { type: 'clearSession', id } })
+  }
+  if (!item.isDisabled) {
+    actions.push({
+      key: 'freshSession',
+      label: 'Fresh Session…',
+      confirm: 'Start a fresh session? This ends the current conversation and it cannot be resumed.',
+      command: { type: 'startSession', id, forceFresh: true },
+    })
   }
   if (detail.canClearAuthorBadge) {
     actions.push({ key: 'clearAuthorBadge', label: 'Clear Author Badge', command: { type: 'markAuthorUpdateSeen', id } })

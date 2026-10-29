@@ -159,7 +159,6 @@ button {
 
   .back { display: none; }
 
-  .detail-bar { padding-top: max(8px, env(safe-area-inset-top)); }
 
 }
 
@@ -459,11 +458,17 @@ button {
   padding: 0 max(16px, env(safe-area-inset-left)) 0 max(16px, env(safe-area-inset-right));
 }
 
+/* Pinned while the item scrolls, and it clears the status bar itself. */
 .detail-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px max(12px, env(safe-area-inset-left)) 9px max(12px, env(safe-area-inset-right));
+  padding: calc(8px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-left)) 9px max(12px, env(safe-area-inset-right));
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
 }
 
 .back {
@@ -564,7 +569,7 @@ button {
   text-decoration: none;
 }
 
-.sheet-spacer { height: 150px; }
+.sheet-spacer { height: 90px; }
 
 /* ---------- action sheet ---------- */
 
@@ -600,11 +605,16 @@ button {
   font-size: 15px;
 }
 
-.sheet-row { display: flex; gap: 7px; margin-top: 7px; }
-
-.sheet-row button { flex: 1; }
-
-.sheet-row .more { flex: 0 0 52px; }
+/* The actions menu button, pinned in the detail bar so it stays in reach. */
+.detail-bar .more {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  font-weight: 700;
+}
 
 /* ---------- panes and menus ---------- */
 

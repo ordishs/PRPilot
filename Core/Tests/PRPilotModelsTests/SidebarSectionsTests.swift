@@ -110,3 +110,19 @@ private func makeItem(
     #expect(sections.myWork.map(\.id) == [task.id])
     #expect(sections.reviewRequests.isEmpty)
 }
+
+@Test func sidebarSectionsByNumberLeadsWithTheHighestAndSinksTasks() {
+    let base = Date(timeIntervalSince1970: 1_700_000_000)
+    let items = [
+        makeItem(id: "task", addedAt: base.addingTimeInterval(500)),
+        makeItem(id: "n5", authorLogin: "me", number: 5, state: .open, addedAt: base),
+        makeItem(id: "n40", authorLogin: "me", number: 40, state: .open, addedAt: base),
+        makeItem(id: "n12", authorLogin: "me", number: 12, state: .open, addedAt: base),
+    ]
+    let s = sidebarSections(items: items, myLogin: "me", sort: .byNumber)
+    #expect(s.myWork.map(\.id) == ["n40", "n12", "n5", "task"])
+}
+
+@Test func sidebarSortByNumberHasADisplayName() {
+    #expect(SidebarSort.byNumber.displayName == "By number")
+}

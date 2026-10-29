@@ -52,6 +52,17 @@ func sortWorkItems(_ items: [WorkItem], by sort: SidebarSort) -> [WorkItem] {
             if cmp != .orderedSame { return cmp == .orderedAscending }
             return $0.addedAt > $1.addedAt
         }
+    case .byNumber:
+        // Highest first, like Recent: the newest ticket leads. A task has no number and
+        // sinks to the bottom.
+        return items.sorted {
+            switch ($0.displayNumber, $1.displayNumber) {
+            case let (a?, b?) where a != b: return a > b
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return $0.addedAt > $1.addedAt
+            }
+        }
     }
 }
 

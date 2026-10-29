@@ -77,6 +77,15 @@ export function sortItems(items, sort) {
         newestFirst(a, b)
     )
   }
+  if (sort === 'byNumber') {
+    // Highest first, like Recent. An item with no number sinks to the bottom.
+    return copy.sort((a, b) => {
+      const an = a.number ?? -Infinity
+      const bn = b.number ?? -Infinity
+      if (an !== bn) return an === -Infinity ? 1 : bn === -Infinity ? -1 : bn - an
+      return newestFirst(a, b)
+    })
+  }
   return copy.sort(newestFirst)
 }
 

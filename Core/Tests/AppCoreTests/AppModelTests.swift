@@ -5438,7 +5438,7 @@ private func gatewayModel(_ store: ReviewStore) -> AppModel {
     #expect(listing.signalFilters.map(\.key) == SignalFilter.ordered.map(\.key))
     #expect(listing.signalFilters.map(\.label) == SignalFilter.ordered.map(\.displayName))
     #expect(listing.resourceFilters.map(\.key) == ["worktree", "session", "web"])
-    #expect(listing.sorts.map(\.key) == ["recent", "byStatus", "byAuthor"])
+    #expect(listing.sorts.map(\.key) == ["recent", "byStatus", "byAuthor", "byNumber"])
 }
 
 @Test @MainActor func aDisabledItemStaysIdleAndSaysSoOnTheWire() async throws {

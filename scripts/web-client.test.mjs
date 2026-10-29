@@ -244,6 +244,16 @@ function detailItem(overrides = {}, detail = {}) {
   })
 }
 
+test('sort by number puts the highest first and an item with no number last', () => {
+  const items = [
+    item({ id: 'task', number: null, addedAt: '2026-09-09T10:00:00Z' }),
+    item({ id: 'n5', number: 5 }),
+    item({ id: 'n40', number: 40 }),
+    item({ id: 'n12', number: 12 }),
+  ]
+  assert.deepEqual(sortItems(items, 'byNumber').map((i) => i.id), ['n40', 'n12', 'n5', 'task'])
+})
+
 test('an item from an older server has an empty detail rather than none', () => {
   const old = detailItem()
   delete old.detail
@@ -358,13 +368,15 @@ test('copy session id needs a session id', () => {
   assert.equal(withSession.find((a) => a.key === 'copySession').copy, 'abc')
 })
 
-test('clear session needs a session id', () => {
+test('a fresh session is offered, with a confirmation, to any enabled item', () => {
+  for (const detail of [{}, { sessionID: 'abc' }]) {
+    const fresh = itemActions(snap, detailItem({}, detail)).find((a) => a.key === 'freshSession')
+    assert.deepEqual(fresh.command, { type: 'startSession', id: 'o/r#1', forceFresh: true })
+    assert.match(fresh.confirm, /cannot be resumed/)
+  }
+  const disabled = itemActions(snap, detailItem({ isDisabled: true }))
+  assert.equal(disabled.find((a) => a.key === 'freshSession'), undefined)
   assert.equal(itemActions(snap, detailItem()).find((a) => a.key === 'clearSession'), undefined)
-  const withSession = itemActions(snap, detailItem({}, { sessionID: 'abc' }))
-  assert.deepEqual(withSession.find((a) => a.key === 'clearSession').command, {
-    type: 'clearSession',
-    id: 'o/r#1',
-  })
 })
 
 test('label edits prompt and clearing needs an existing label', () => {

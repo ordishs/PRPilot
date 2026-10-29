@@ -687,7 +687,7 @@ function RebaseBanner({ rebase }) {
   `
 }
 
-function Detail({ item, snapshot, token, onError, onNotice }) {
+function Detail({ item, snapshot, token, onBack, onError, onNotice }) {
   const [busy, setBusy] = useState(null)
   const [chosen, setChosen] = useState(null)
   const [menu, setMenu] = useState(null)
@@ -753,10 +753,8 @@ function Detail({ item, snapshot, token, onError, onNotice }) {
     )
   }, [pane, item.id, detail.paneState, item.isDisabled, detail.agentKey])
 
-  const primaryCommand = item.primaryCommand || { type: 'startSession', id: item.id, forceFresh: true }
-  const primaryLabel = item.primaryCommand
-    ? PRIMARY_LABELS[item.primaryCommand.type] || 'Run'
-    : 'Fresh session'
+  const primaryCommand = item.primaryCommand
+  const primaryLabel = primaryCommand ? PRIMARY_LABELS[primaryCommand.type] || 'Run' : null
 
   const stats = [elapsed(item.agent?.elapsedSeconds), item.agent?.usedPercent != null ? `${item.agent.usedPercent}%` : null]
     .filter(Boolean)
@@ -766,6 +764,15 @@ function Detail({ item, snapshot, token, onError, onNotice }) {
   const canAdd = addableAgents(snapshot, item).length > 0
 
   return html`
+    <div class="detail-bar">
+      <button class="back" onClick=${onBack}>‹ Back</button>
+      <span class="detail-bar-title">${item.repo ? `${item.repo} #${item.number}` : 'task'}</span>
+      <button
+        class="more"
+        aria-label="More actions"
+        onClick=${() => setMenu({ title: 'Actions', entries: itemActions(snapshot, item) })}
+      >•••</button>
+    </div>
     <div class="detail">
       <h1 class="detail-title">${item.title}</h1>
       <div class="detail-meta">
@@ -872,30 +879,19 @@ function Detail({ item, snapshot, token, onError, onNotice }) {
             html`<div class="banner error">${detail.paneMessage || 'The agent could not start.'}</div>`}
         `}
 
-      <div class="sheet-spacer"></div>
-
-      <div class="sheet">
-        <button
-          class="primary"
-          disabled=${busy !== null}
-          onClick=${() => run(primaryCommand, 'primary')}
-        >
-          ${busy === 'primary' ? 'Working…' : primaryLabel}
-        </button>
-        <div class="sheet-row">
-          <button
-            disabled=${busy !== null}
-            onClick=${() => run({ type: 'startSession', id: item.id, forceFresh: true }, 'fresh')}
-          >
-            ${busy === 'fresh' ? '…' : item.agent ? 'Restart fresh' : 'Fresh session'}
-          </button>
-          <button
-            class="more"
-            aria-label="More actions"
-            onClick=${() => setMenu({ title: 'Actions', entries: itemActions(snapshot, item) })}
-          >•••</button>
-        </div>
-      </div>
+      ${primaryCommand &&
+        html`
+          <div class="sheet-spacer"></div>
+          <div class="sheet">
+            <button
+              class="primary"
+              disabled=${busy !== null}
+              onClick=${() => run(primaryCommand, 'primary')}
+            >
+              ${busy === 'primary' ? 'Working…' : primaryLabel}
+            </button>
+          </div>
+        `}
 
       <${MenuHost}
         menu=${menu}
@@ -1006,12 +1002,9 @@ function App() {
         <main class="main">
           ${open
             ? html`
-                <div class="detail-bar">
-                  <button class="back" onClick=${() => setOpenID(null)}>‹ Back</button>
-                  <span class="detail-bar-title">${open.repo ? `${open.repo} #${open.number}` : 'task'}</span>
-                </div>
                 <${Detail}
                   key=${open.id}
+                  onBack=${() => setOpenID(null)}
                   item=${open}
                   snapshot=${snapshot}
                   token=${token}
