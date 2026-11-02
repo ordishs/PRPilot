@@ -38,6 +38,11 @@ public final class AppModel {
     private var sessionStartedAt: [String: Date] = [:]
     public private(set) var claudePrepLog: [String: [PrepLogEntry]] = [:]
     public private(set) var claudeStatuses: [String: AgentStatus] = [:]
+    /// Questions the agent asked before its process went away, which the user never got to
+    /// answer. The transcript shows them as interrupted, and the resumed agent only says "No
+    /// response requested", so the pane offers the options again until the user answers,
+    /// types something else, or dismisses them.
+    public private(set) var unansweredQuestions: [String: [AskedQuestion]] = [:]
     public private(set) var prStatuses: [String: PRStatus] = [:]
     /// What each base branch demands before it merges, keyed by `MergeRules.key`. Keyed by
     /// repository and branch rather than by item, because that is what the rules describe —
@@ -882,7 +887,9 @@ public final class AppModel {
                     turnCompleted: event.turnCompleted,
                     workflowPending: event.workflowPending,
                     limitMessage: event.limitMessage,
-                    usage: event.usage
+                    usage: event.usage,
+                    interruptedQuestions: event.interruptedQuestions,
+                    questionsSettled: event.questionsSettled
                 )
             },
             onSessionFile: { [weak self] sessionID in
@@ -899,9 +906,17 @@ public final class AppModel {
         turnCompleted: Bool = false,
         workflowPending: Bool = false,
         limitMessage: String? = nil,
-        usage: AgentUsage? = nil
+        usage: AgentUsage? = nil,
+        interruptedQuestions: [AskedQuestion]? = nil,
+        questionsSettled: Bool = false
     ) {
         guard claudeSessions[reviewID] != nil else { return }
+        if questionsSettled {
+            unansweredQuestions.removeValue(forKey: reviewID)
+        }
+        if let interruptedQuestions {
+            unansweredQuestions[reviewID] = interruptedQuestions
+        }
         let isNewer = lastEventAt[reviewID].map { $0 < date } ?? true
         if isNewer {
             lastEventAt[reviewID] = date
@@ -1156,6 +1171,27 @@ public final class AppModel {
         }
     }
 
+    /// Sends the user's choice back to the agent and takes the question off the pane. The
+    /// agent reads the message as an ordinary prompt, so this works the same whether the
+    /// process was resumed or restarted.
+    public func answerUnansweredQuestion(_ question: AskedQuestion, choices: [String], for id: String) {
+        guard !choices.isEmpty, let session = claudeSessions[id] else { return }
+        session.send(prompt: AskedQuestion.answerMessage(question: question.question, choices: choices))
+        removeUnansweredQuestion(question, for: id)
+    }
+
+    /// Drops one question without answering it, for a user who would rather type in the
+    /// terminal.
+    public func removeUnansweredQuestion(_ question: AskedQuestion, for id: String) {
+        guard var remaining = unansweredQuestions[id] else { return }
+        remaining.removeAll { $0 == question }
+        if remaining.isEmpty {
+            unansweredQuestions.removeValue(forKey: id)
+        } else {
+            unansweredQuestions[id] = remaining
+        }
+    }
+
     func terminateAgentSession(for id: String) {
         claudeSessions[id]?.terminate()
         claudeSessions.removeValue(forKey: id)
@@ -1184,6 +1220,7 @@ public final class AppModel {
         notifiedLimitForSession.remove(id)
         workflowPendingForSession.removeValue(forKey: id)
         notifiedAwaitingForSession.remove(id)
+        unansweredQuestions.removeValue(forKey: id)
     }
 
     /// Shuts a session down to reclaim its process, and nothing more. Unlike
@@ -1216,6 +1253,7 @@ public final class AppModel {
         notifiedLimitForSession.remove(id)
         workflowPendingForSession.removeValue(forKey: id)
         notifiedAwaitingForSession.remove(id)
+        unansweredQuestions.removeValue(forKey: id)
     }
 
     /// Drops sessions whose agent process has already exited. They hold a slot and a watcher
@@ -1396,6 +1434,7 @@ public final class AppModel {
         transcriptWatchers.removeAll()
         watchedSessionID.removeAll()
         claudeStatuses.removeAll()
+        unansweredQuestions.removeAll()
         prStatuses.removeAll()
         rebaseStates.removeAll()
         pushability.removeAll()

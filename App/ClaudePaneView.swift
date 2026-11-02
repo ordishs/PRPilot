@@ -33,6 +33,19 @@ struct ClaudePaneView: View {
                 if let session = model.claudeSessions[review.id] {
                     VStack(spacing: 0) {
                         exitOverlay(for: session)
+                        if let questions = model.unansweredQuestions[review.id] {
+                            ForEach(questions) { question in
+                                UnansweredQuestionBar(
+                                    question: question,
+                                    onAnswer: { choices in
+                                        model.answerUnansweredQuestion(question, choices: choices, for: review.id)
+                                    },
+                                    onDismiss: {
+                                        model.removeUnansweredQuestion(question, for: review.id)
+                                    }
+                                )
+                            }
+                        }
                         TerminalHost(session: session)
                     }
                     .overlay(alignment: .topTrailing) {
@@ -201,6 +214,70 @@ struct ClaudePaneView: View {
         case .starting, .running:
             EmptyView()
         }
+    }
+}
+
+private struct UnansweredQuestionBar: View {
+    let question: AskedQuestion
+    let onAnswer: ([String]) -> Void
+    let onDismiss: () -> Void
+    @State private var selected: [String] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("The agent asked this before it stopped")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(question.question).font(.callout).bold()
+                }
+                Spacer(minLength: 8)
+                Button("Dismiss", action: onDismiss)
+                    .buttonStyle(.borderless)
+                    .help("Hide these options and answer in the terminal instead")
+            }
+            WrappingHStack(spacing: 6) {
+                ForEach(question.options, id: \.label) { option in
+                    optionButton(option)
+                }
+            }
+            if question.multiSelect {
+                Button("Send answer") { onAnswer(selected) }
+                    .disabled(selected.isEmpty)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.accentColor.opacity(0.6), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(8)
+    }
+
+    @ViewBuilder
+    private func optionButton(_ option: AskedQuestion.Option) -> some View {
+        let isSelected = selected.contains(option.label)
+        Button {
+            if question.multiSelect {
+                if isSelected {
+                    selected.removeAll { $0 == option.label }
+                } else {
+                    selected.append(option.label)
+                }
+            } else {
+                onAnswer([option.label])
+            }
+        } label: {
+            Text(option.label)
+        }
+        .buttonStyle(.bordered)
+        .tint(isSelected ? .accentColor : nil)
+        .help(option.detail)
     }
 }
 

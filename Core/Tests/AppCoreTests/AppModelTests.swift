@@ -5677,3 +5677,90 @@ private func gatewayModel(_ store: ReviewStore) -> AppModel {
     await model.discoverNow()
     #expect(model.remoteChangeTicks[id] == 1)
 }
+
+private func askedQuestion(_ text: String) -> AskedQuestion {
+    AskedQuestion(
+        question: text,
+        header: "Q",
+        multiSelect: false,
+        options: [.init(label: "Skip", detail: "")]
+    )
+}
+
+@Test @MainActor func interruptedQuestionsAppearAndSettleOnTypedPrompt() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()
+    try await store.upsertItem(review)
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    await model.ensureAgentSession(for: review)
+    let question = askedQuestion("How to post?")
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, interruptedQuestions: [question])
+    #expect(model.unansweredQuestions[review.id] == [question])
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: "No response requested.")
+    #expect(model.unansweredQuestions[review.id] == [question])
+
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, questionsSettled: true)
+    #expect(model.unansweredQuestions[review.id] == nil)
+}
+
+@Test @MainActor func dismissingOneQuestionKeepsTheOthers() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()
+    try await store.upsertItem(review)
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    await model.ensureAgentSession(for: review)
+    let first = askedQuestion("First?")
+    let second = askedQuestion("Second?")
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, interruptedQuestions: [first, second])
+
+    model.removeUnansweredQuestion(first, for: review.id)
+    #expect(model.unansweredQuestions[review.id] == [second])
+
+    model.removeUnansweredQuestion(second, for: review.id)
+    #expect(model.unansweredQuestions[review.id] == nil)
+}
+
+@Test @MainActor func terminatingTheSessionDropsItsQuestions() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    let review = sampleReview()
+    try await store.upsertItem(review)
+    let model = AppModel(
+        store: store,
+        client: stubClient(),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    await model.ensureAgentSession(for: review)
+    model.handleTranscriptEvent(reviewID: review.id, at: Date(), snippet: nil, interruptedQuestions: [askedQuestion("Q?")])
+
+    model.terminateAgentSession(for: review.id)
+
+    #expect(model.unansweredQuestions[review.id] == nil)
+}

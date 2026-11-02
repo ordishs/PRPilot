@@ -85,6 +85,7 @@ public struct ClaudeCodeBackend: AgentBackend {
         guard let ts = event.timestamp else { return nil }
         guard let date = TranscriptTimestamp.date(from: ts) else { return nil }
         updatePendingWorkflows(from: line, type: event.type, state: &state)
+        let questions = trackQuestions(from: line, type: event.type, state: &state)
         let snippet = extractSnippet(from: line, type: event.type)
         let turnCompleted = isCompletedTurn(from: line, type: event.type) && state.pendingWorkflows == 0
         return TranscriptEvent(
@@ -92,8 +93,119 @@ public struct ClaudeCodeBackend: AgentBackend {
             snippet: snippet,
             turnCompleted: turnCompleted,
             workflowPending: state.pendingWorkflows > 0,
-            limitMessage: limitMessage(from: line, type: event.type)
+            limitMessage: limitMessage(from: line, type: event.type),
+            interruptedQuestions: questions.interrupted,
+            questionsSettled: questions.settled
         )
+    }
+
+    /// Follows `AskUserQuestion` calls through the transcript.
+    ///
+    /// A call that is still open when the process dies gets a synthetic error result on the
+    /// next resume, marked `toolDenialKind: "interrupted"`, followed by an assistant line that
+    /// says "No response requested." That assistant line proves nothing about the user, so it
+    /// settles nothing. Only the user does: a typed prompt, or a real answer to the question.
+    /// A question the user rejected is a choice, not an accident, and is not replayed.
+    private func trackQuestions(
+        from data: Data,
+        type: String?,
+        state: inout TranscriptParseState
+    ) -> (interrupted: [AskedQuestion]?, settled: Bool) {
+        struct Line: Decodable {
+            let toolDenialKind: String?
+            let message: Message?
+
+            struct Message: Decodable {
+                let content: Content?
+
+                enum Content: Decodable {
+                    case text(String)
+                    case blocks([Block])
+
+                    init(from decoder: Decoder) throws {
+                        let container = try decoder.singleValueContainer()
+                        if let single = try? container.decode(String.self) {
+                            self = .text(single)
+                            return
+                        }
+                        self = .blocks(try container.decode([Block].self))
+                    }
+                }
+
+                struct Block: Decodable {
+                    let type: String?
+                    let id: String?
+                    let name: String?
+                    let toolUseId: String?
+                    let input: Input?
+
+                    enum CodingKeys: String, CodingKey {
+                        case type, id, name, input
+                        case toolUseId = "tool_use_id"
+                    }
+
+                    struct Input: Decodable {
+                        let questions: [Question]?
+                    }
+
+                    struct Question: Decodable {
+                        let question: String?
+                        let header: String?
+                        let multiSelect: Bool?
+                        let options: [Option]?
+
+                        struct Option: Decodable {
+                            let label: String?
+                            let description: String?
+                        }
+                    }
+                }
+            }
+        }
+        guard type == "assistant" || type == "user",
+              let line = try? JSONDecoder().decode(Line.self, from: data)
+        else { return (nil, false) }
+
+        switch (type, line.message?.content) {
+        case ("assistant", .blocks(let blocks)):
+            for block in blocks where block.type == "tool_use" && block.name == "AskUserQuestion" {
+                guard let id = block.id, let raw = block.input?.questions else { continue }
+                state.askedQuestions[id] = raw.compactMap { entry -> AskedQuestion? in
+                    guard let question = entry.question, !question.isEmpty else { return nil }
+                    let options = (entry.options ?? []).compactMap { option -> AskedQuestion.Option? in
+                        guard let label = option.label, !label.isEmpty else { return nil }
+                        return AskedQuestion.Option(label: label, detail: option.description ?? "")
+                    }
+                    guard !options.isEmpty else { return nil }
+                    return AskedQuestion(
+                        question: question,
+                        header: entry.header ?? "",
+                        multiSelect: entry.multiSelect ?? false,
+                        options: options
+                    )
+                }
+            }
+            return (nil, false)
+        case ("user", .text(let text)):
+            let plumbing = text.hasPrefix("<system-reminder>") || text.contains("<task-notification>")
+            return (nil, !plumbing)
+        case ("user", .blocks(let blocks)):
+            let results = blocks.filter { $0.type == "tool_result" }
+            guard !results.isEmpty else { return (nil, true) }
+            var interrupted: [AskedQuestion] = []
+            var settled = false
+            for result in results {
+                guard let id = result.toolUseId, let asked = state.askedQuestions.removeValue(forKey: id) else { continue }
+                if line.toolDenialKind == "interrupted" {
+                    interrupted.append(contentsOf: asked)
+                } else {
+                    settled = true
+                }
+            }
+            return (interrupted.isEmpty ? nil : interrupted, settled)
+        default:
+            return (nil, false)
+        }
     }
 
     // MARK: - Handover

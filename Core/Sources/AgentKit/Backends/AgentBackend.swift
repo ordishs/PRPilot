@@ -10,6 +10,9 @@ public struct TranscriptParseState: Sendable {
     /// pi has no workflow concept and leaves this at zero.
     public var pendingWorkflows: Int = 0
 
+    /// `AskUserQuestion` calls seen but not yet answered, by tool call id. Claude Code only.
+    public var askedQuestions: [String: [AskedQuestion]] = [:]
+
     public init() {}
 }
 

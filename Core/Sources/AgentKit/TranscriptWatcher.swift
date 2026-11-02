@@ -17,6 +17,11 @@ public struct TranscriptEvent: Sendable, Equatable {
     /// How much allowance the agent says it has spent, when the line reports it. codex only —
     /// see `AgentUsage`.
     public let usage: AgentUsage?
+    /// Questions the agent asked that the harness closed unanswered because the process went
+    /// away. Nil on every other line. Claude Code only.
+    public let interruptedQuestions: [AskedQuestion]?
+    /// The user has answered, or moved on from, any question the agent left open.
+    public let questionsSettled: Bool
 
     public init(
         date: Date,
@@ -24,7 +29,9 @@ public struct TranscriptEvent: Sendable, Equatable {
         turnCompleted: Bool,
         workflowPending: Bool,
         limitMessage: String? = nil,
-        usage: AgentUsage? = nil
+        usage: AgentUsage? = nil,
+        interruptedQuestions: [AskedQuestion]? = nil,
+        questionsSettled: Bool = false
     ) {
         self.date = date
         self.snippet = snippet
@@ -32,6 +39,8 @@ public struct TranscriptEvent: Sendable, Equatable {
         self.workflowPending = workflowPending
         self.limitMessage = limitMessage
         self.usage = usage
+        self.interruptedQuestions = interruptedQuestions
+        self.questionsSettled = questionsSettled
     }
 }
 
