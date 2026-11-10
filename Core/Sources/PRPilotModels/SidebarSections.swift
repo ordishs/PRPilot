@@ -12,7 +12,14 @@ public struct SidebarSections: Sendable, Equatable {
     }
 }
 
-public func sidebarSections(items: [WorkItem], myLogin: String?, sort: SidebarSort) -> SidebarSections {
+/// - Parameter activity: when something last happened on an item. Recent sorts by it, so the
+///   order matches the date each row shows. It defaults to the date the item arrived.
+public func sidebarSections(
+    items: [WorkItem],
+    myLogin: String?,
+    sort: SidebarSort,
+    activity: (WorkItem) -> Date = { $0.addedAt }
+) -> SidebarSections {
     var myWork: [WorkItem] = []
     var reviews: [WorkItem] = []
     var issues: [WorkItem] = []
@@ -27,22 +34,26 @@ public func sidebarSections(items: [WorkItem], myLogin: String?, sort: SidebarSo
         }
     }
     return SidebarSections(
-        myWork: sortWorkItems(myWork, by: sort),
-        reviewRequests: sortWorkItems(reviews, by: sort),
-        issues: sortWorkItems(issues, by: sort)
+        myWork: sortWorkItems(myWork, by: sort, activity: activity),
+        reviewRequests: sortWorkItems(reviews, by: sort, activity: activity),
+        issues: sortWorkItems(issues, by: sort, activity: activity)
     )
 }
 
-func sortWorkItems(_ items: [WorkItem], by sort: SidebarSort) -> [WorkItem] {
+func sortWorkItems(
+    _ items: [WorkItem],
+    by sort: SidebarSort,
+    activity: (WorkItem) -> Date
+) -> [WorkItem] {
     switch sort {
     case .recent:
-        return items.sorted { $0.addedAt > $1.addedAt }
+        return items.sorted { activity($0) > activity($1) }
     case .byStatus:
         return items.sorted {
             let a = statusRank($0.prState)
             let b = statusRank($1.prState)
             if a != b { return a < b }
-            return $0.addedAt > $1.addedAt
+            return activity($0) > activity($1)
         }
     case .byAuthor:
         return items.sorted {
@@ -50,7 +61,7 @@ func sortWorkItems(_ items: [WorkItem], by sort: SidebarSort) -> [WorkItem] {
             let b = $1.author ?? ""
             let cmp = a.localizedCaseInsensitiveCompare(b)
             if cmp != .orderedSame { return cmp == .orderedAscending }
-            return $0.addedAt > $1.addedAt
+            return activity($0) > activity($1)
         }
     case .byNumber:
         // Highest first, like Recent: the newest ticket leads. A task has no number and
@@ -60,7 +71,7 @@ func sortWorkItems(_ items: [WorkItem], by sort: SidebarSort) -> [WorkItem] {
             case let (a?, b?) where a != b: return a > b
             case (_?, nil): return true
             case (nil, _?): return false
-            default: return $0.addedAt > $1.addedAt
+            default: return activity($0) > activity($1)
             }
         }
     }

@@ -24,6 +24,7 @@ extension AppModel: GatewayBackend {
             sort: settings.sidebarSort,
             facts: facts,
             sidebarFacts: { sidebarFacts(for: $0) },
+            activity: { lastActivity(for: $0) },
             decorate: { work in
                 GatewayProjection.Decoration(
                     agent: gatewayAgent(for: work),
@@ -32,6 +33,7 @@ extension AppModel: GatewayBackend {
                     ahead: pushability[work.id]?.ahead ?? 0,
                     behind: pushability[work.id]?.behind ?? 0,
                     localChanges: worktreeLocalChanges[work.id] ?? 0,
+                    activityAt: lastActivity(for: work),
                     detail: gatewayDetail(for: work)
                 )
             }

@@ -6,7 +6,7 @@ public enum SidebarSort: String, Codable, Sendable, CaseIterable, Equatable {
 
     public var displayName: String {
         switch self {
-        case .recent: return "Recent"
+        case .recent: return "Latest activity"
         case .byStatus: return "By status"
         case .byAuthor: return "By author"
         case .byNumber: return "By number"

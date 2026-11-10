@@ -98,3 +98,10 @@ private func item(addedAt: Date) -> WorkItem {
         == "last reply Today 09:07")
     #expect(agentRunLabel(startedAt: nil, lastCompletedAt: nil, now: now, calendar: utc) == nil)
 }
+
+@Test func githubUpdatedAtCountsAsActivity() {
+    let added = date("2026-08-01T09:00:00Z")
+    let i = item(addedAt: added)
+    #expect(lastActivityAt(i, authorUpdatedAt: nil, prUpdatedAt: date("2026-08-09T10:00:00Z")) == date("2026-08-09T10:00:00Z"))
+    #expect(lastActivityAt(i, authorUpdatedAt: nil, prUpdatedAt: date("2026-07-01T10:00:00Z")) == added)
+}

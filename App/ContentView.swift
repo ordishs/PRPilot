@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var discardTarget: WorkItem?
     @State private var searchText = ""
     @State private var filterSelection = SidebarFilterSelection()
+    @AppStorage("mainViewMode") private var mainViewMode: MainViewMode = .list
     @Environment(\.colorScheme) private var colorScheme
 
     private func facts(for review: WorkItem) -> SidebarItemFacts {
@@ -157,6 +158,46 @@ struct ContentView: View {
     }
 
     var body: some View {
+        Group {
+            switch mainViewMode {
+            case .list:
+                splitView
+            case .board:
+                BoardView(model: model, viewMode: $mainViewMode)
+            }
+        }
+        .frame(minWidth: 900, minHeight: 600)
+        .alert("Couldn't add PR", isPresented: Binding(
+            get: { model.errorMessage != nil },
+            set: { if !$0 { model.dismissError() } }
+        )) {
+            Button("OK") { model.dismissError() }
+        } message: {
+            Text(model.errorMessage ?? "")
+        }
+        .onChange(of: model.selection) { _, newSelection in
+            guard let id = newSelection,
+                  let review = model.reviews.first(where: { $0.id == id }) else { return }
+            model.prefetch(for: review)
+            webViewCache.selectedID = id
+            webViewCache.cap = model.settings.maxLiveWebViews
+            _ = webViewCache.ensure(for: review)
+            Task { await model.markReviewOpened(id) }
+        }
+        .onChange(of: model.remoteChangeTicks) { old, new in
+            for (id, tick) in new where old[id] != tick {
+                webViewCache.reload(reviewID: id)
+            }
+        }
+        .onAppear {
+            Task { await model.setTerminalAppearance(isDark: colorScheme == .dark) }
+        }
+        .onChange(of: colorScheme) { _, newValue in
+            Task { await model.setTerminalAppearance(isDark: newValue == .dark) }
+        }
+    }
+
+    private var splitView: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
                 sidebarHeader
@@ -164,7 +205,8 @@ struct ContentView: View {
                 let sections = sidebarSections(
                     items: filteredReviews,
                     myLogin: model.currentLogin,
-                    sort: model.settings.sidebarSort
+                    sort: model.settings.sidebarSort,
+                    activity: { model.lastActivity(for: $0) }
                 )
                 Section(isExpanded: myWorkExpandedBinding()) {
                     sectionBody(sections.myWork)
@@ -191,6 +233,9 @@ struct ContentView: View {
             .frame(minWidth: 260)
             .toolbar {
                 ToolbarItem {
+                    MainViewPicker(mode: $mainViewMode)
+                }
+                ToolbarItem {
                     Menu {
                         Picker("Sort", selection: sortBinding) {
                             ForEach(SidebarSort.allCases, id: \.self) { mode in
@@ -200,7 +245,7 @@ struct ContentView: View {
                     } label: {
                         Label("Sort", systemImage: "arrow.up.arrow.down")
                     }
-                    .help("Sort items within each section by recency, status, or author")
+                    .help("Sort items within each section by latest activity, status, author, or number. Number follows the order PRs and issues were opened.")
                 }
                 ToolbarItem {
                     Button {
@@ -262,35 +307,6 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .font(.title3)
             }
-        }
-        .frame(minWidth: 900, minHeight: 600)
-        .alert("Couldn't add PR", isPresented: Binding(
-            get: { model.errorMessage != nil },
-            set: { if !$0 { model.dismissError() } }
-        )) {
-            Button("OK") { model.dismissError() }
-        } message: {
-            Text(model.errorMessage ?? "")
-        }
-        .onChange(of: model.selection) { _, newSelection in
-            guard let id = newSelection,
-                  let review = model.reviews.first(where: { $0.id == id }) else { return }
-            model.prefetch(for: review)
-            webViewCache.selectedID = id
-            webViewCache.cap = model.settings.maxLiveWebViews
-            _ = webViewCache.ensure(for: review)
-            Task { await model.markReviewOpened(id) }
-        }
-        .onChange(of: model.remoteChangeTicks) { old, new in
-            for (id, tick) in new where old[id] != tick {
-                webViewCache.reload(reviewID: id)
-            }
-        }
-        .onAppear {
-            Task { await model.setTerminalAppearance(isDark: colorScheme == .dark) }
-        }
-        .onChange(of: colorScheme) { _, newValue in
-            Task { await model.setTerminalAppearance(isDark: newValue == .dark) }
         }
     }
 
@@ -381,6 +397,12 @@ struct ContentView: View {
             StatusDot(status: model.claudeStatuses[review.id])
                 .help(statusTooltip(model.claudeStatuses[review.id]))
         }
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(Color.orange.opacity(0.8), lineWidth: 1)
+                .opacity(facts(for: review).wantsAttention ? 1 : 0)
+        )
         .opacity(review.disabled ? 0.45 : 1.0)
         .contextMenu {
             Button {
@@ -467,6 +489,14 @@ struct ContentView: View {
                 }
                 .disabled(!model.hasUnseenAuthorUpdate(review))
             }
+            if review.prRef != nil {
+                Button {
+                    Task { await model.markReviewerUpdateSeen(id: review.id) }
+                } label: {
+                    Label("Clear Reviewer Badge", systemImage: "bell.slash")
+                }
+                .disabled(!model.hasUnseenReviewerUpdate(review))
+            }
             Button {
                 Task { await model.clearAgentLimit(for: review.id) }
             } label: {
@@ -494,7 +524,7 @@ struct ContentView: View {
     @ViewBuilder
     private func footerLine(for review: WorkItem) -> some View {
         let itemFacts = facts(for: review)
-        let activity = lastActivityAt(review, authorUpdatedAt: model.prStatuses[review.id]?.authorUpdatedAt)
+        let activity = model.lastActivity(for: review)
         HStack(spacing: 6) {
             ForEach(ResourceFilter.ordered, id: \.rawValue) { resource in
                 Image(systemName: resource.symbolName)
@@ -617,7 +647,10 @@ struct ContentView: View {
                     )
                 }
                 if status.readiness == .changesRequested {
-                    StateBadge(text: "changes", color: .red, help: "A reviewer requested changes")
+                    ChangeRequestBadge(
+                        changeRequests: status.changeRequests,
+                        isOnMyPR: review.category(myLogin: model.currentLogin) != .reviewRequest
+                    )
                 }
                 // Only on your own work. On a PR you are reviewing, an unresolved thread is
                 // usually your own comment waiting on the author, not a job for you.
@@ -636,6 +669,9 @@ struct ContentView: View {
                         color: .green,
                         help: "The PR merges cleanly and passes every branch protection rule"
                     )
+                }
+                if let update = model.unseenReviewerUpdate(review) {
+                    ReviewerUpdateBadge(update: update, extraHelp: " Clear it from the context menu.")
                 }
                 if model.hasUnseenAuthorUpdate(review) {
                     StateBadge(
@@ -865,7 +901,7 @@ private struct SidebarSectionHeader: View {
     }
 }
 
-private struct StateBadge: View {
+struct StateBadge: View {
     @Environment(\.colorScheme) private var colorScheme
     let text: String
     let color: Color
@@ -906,7 +942,7 @@ private struct PulsingStatusDot: NSViewRepresentable {
     }
 }
 
-private struct StatusDot: View {
+struct StatusDot: View {
     let status: AgentStatus?
 
     var body: some View {

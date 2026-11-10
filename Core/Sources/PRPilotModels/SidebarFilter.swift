@@ -141,6 +141,8 @@ public struct SidebarItemFacts: Sendable, Equatable {
     public var needsInput: Bool
     public var isWorking: Bool
     public var hasAuthorUpdate: Bool
+    /// A reviewer acted on your own PR since you last did — see `ReviewerUpdate`.
+    public var hasReviewerUpdate: Bool
     public var ciFailing: Bool
     public var isBehind: Bool
     public var hasConflict: Bool
@@ -159,6 +161,7 @@ public struct SidebarItemFacts: Sendable, Equatable {
         needsInput: Bool = false,
         isWorking: Bool = false,
         hasAuthorUpdate: Bool = false,
+        hasReviewerUpdate: Bool = false,
         ciFailing: Bool = false,
         isBehind: Bool = false,
         hasConflict: Bool = false,
@@ -173,6 +176,7 @@ public struct SidebarItemFacts: Sendable, Equatable {
         self.needsInput = needsInput
         self.isWorking = isWorking
         self.hasAuthorUpdate = hasAuthorUpdate
+        self.hasReviewerUpdate = hasReviewerUpdate
         self.ciFailing = ciFailing
         self.isBehind = isBehind
         self.hasConflict = hasConflict
@@ -209,7 +213,7 @@ public struct SidebarItemFacts: Sendable, Equatable {
     }
 
     /// Whether this item wants the user's eye at all, whichever way it asks.
-    public var wantsAttention: Bool { awaitsMyResponse || needsInput }
+    public var wantsAttention: Bool { awaitsMyResponse || needsInput || hasReviewerUpdate }
 }
 
 /// What the user has switched on in the sidebar filter bar.

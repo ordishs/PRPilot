@@ -108,7 +108,6 @@ public final class AppModel {
     private var workflowPendingForSession: [String: Bool] = [:]
     private var notifiedAwaitingForSession: Set<String> = []
     private var lastRefreshedAt: [String: Date] = [:]
-    private static let refreshBatchSize = 4
     /// Merge rules change when somebody edits a ruleset — rarely. A long life keeps the
     /// extra call off the poll path while still picking up a change the same day.
     static let mergeRulesTTL: TimeInterval = 6 * 3600
@@ -1846,17 +1845,31 @@ public final class AppModel {
     }
 
     public func refreshReviewState(for id: String, now: Date = Date()) async {
-        await refreshWorktreeCleanliness(for: id)
-        guard let login = currentLogin,
-              let review = reviews.first(where: { $0.id == id }),
-              review.prState != .merged, review.prState != .closed,
-              let r = review.prRef else { return }
-        let ref = PRLocator(owner: r.owner, repo: r.repo, number: r.number)
+        await refreshReviewStates(ids: [id], now: now)
+    }
 
-        // One GraphQL call carries review state, CI/readiness and author activity. On
-        // failure the previous status stays put — a transient error must not blank the chips.
-        guard let snapshot = try? await client.fetchPRSnapshot(for: ref, login: login) else { return }
+    /// Refreshes the given items with one batched read of GitHub, however many there are. On
+    /// failure the previous status stays put — a transient error must not blank the chips.
+    private func refreshReviewStates(ids: [String], now: Date) async {
+        var targets: [(id: String, ref: PRLocator, owner: String, repo: String, base: String)] = []
+        for id in ids {
+            await refreshWorktreeCleanliness(for: id)
+            guard let review = reviews.first(where: { $0.id == id }),
+                  review.prState != .merged, review.prState != .closed,
+                  let r = review.prRef else { continue }
+            targets.append((id, PRLocator(owner: r.owner, repo: r.repo, number: r.number), r.owner, r.repo, review.baseBranch))
+        }
+        guard let login = currentLogin, !targets.isEmpty else { return }
 
+        let snapshots = await client.fetchPRSnapshots(for: targets.map(\.ref), login: login)
+        for target in targets {
+            guard let snapshot = snapshots[target.ref] else { continue }
+            await apply(snapshot, to: target.id)
+            await refreshMergeRules(owner: target.owner, repo: target.repo, branch: target.base, now: now)
+        }
+    }
+
+    private func apply(_ snapshot: GitHubClient.PRSnapshot, to id: String) async {
         if var current = reviews.first(where: { $0.id == id }),
            current.approvedByMe != snapshot.approvedByMe
             || current.prState != snapshot.prState
@@ -1873,9 +1886,7 @@ public final class AppModel {
                 errorMessage = String(describing: error)
             }
         }
-
         prStatuses[id] = snapshot.status
-        await refreshMergeRules(owner: r.owner, repo: r.repo, branch: review.baseBranch, now: now)
     }
 
     /// Reads the base branch's merge rules when the app has none, or a stale copy. A read
@@ -1891,39 +1902,32 @@ public final class AppModel {
             ?? MergeRules()
     }
 
+    /// Refreshes every open PR in one pass. Batching makes that cheap, so the old rotation
+    /// that refreshed four items a cycle — and left a PR up to fifteen minutes stale — is
+    /// gone.
     func refreshReviewStates() async {
         if currentLogin == nil {
             currentLogin = try? await client.fetchCurrentLogin()
         }
-        let openIDs = reviews
-            .filter { $0.prState != .merged && $0.prState != .closed }
-            .map(\.id)
-        let ids = RefreshScheduler.itemsToRefresh(
-            openIDs: openIDs,
-            selectedID: selection,
-            lastRefreshedAt: lastRefreshedAt,
-            batchSize: Self.refreshBatchSize
-        )
-        for id in ids {
-            await refreshReviewState(for: id)
-            lastRefreshedAt[id] = Date()
-        }
+        await refreshAllOpen()
     }
 
-    /// Runs discovery and refreshes every open item, ignoring the staleness batching that
-    /// `refreshReviewStates` applies. This is the escape hatch for the poll cycle's lag.
+    /// Runs discovery and refreshes every open item. The escape hatch for the poll cycle's lag.
     public func refreshAllNow() async {
         await discoverNow()
         if currentLogin == nil {
             currentLogin = try? await client.fetchCurrentLogin()
         }
+        await refreshAllOpen()
+    }
+
+    private func refreshAllOpen() async {
         let ids = reviews
             .filter { $0.prState != .merged && $0.prState != .closed }
             .map(\.id)
-        for id in ids {
-            await refreshReviewState(for: id)
-            lastRefreshedAt[id] = Date()
-        }
+        await refreshReviewStates(ids: ids, now: Date())
+        let stamp = Date()
+        for id in ids { lastRefreshedAt[id] = stamp }
     }
 
     func refreshedIDsForTesting() -> Set<String> {
@@ -2121,6 +2125,7 @@ public final class AppModel {
             needsInput: needsInput,
             isWorking: status == .working,
             hasAuthorUpdate: authorUpdate,
+            hasReviewerUpdate: hasUnseenReviewerUpdate(review),
             ciFailing: prStatus?.ci == .failing,
             isBehind: prStatus?.isBehind ?? false,
             hasConflict: prStatus?.mergeState == .conflict,
@@ -2133,6 +2138,32 @@ public final class AppModel {
         )
     }
 
+    /// When something last happened on an item. The sidebar shows it, and Recent sorts by it.
+    public func lastActivity(for item: WorkItem) -> Date {
+        let status = prStatuses[item.id]
+        return lastActivityAt(item, authorUpdatedAt: status?.authorUpdatedAt, prUpdatedAt: status?.updatedAt)
+    }
+
+    /// Everything the kanban board needs to place one item, read from the same live state the
+    /// sidebar badges read, so a card never contradicts its row.
+    public func boardInput(for review: WorkItem) -> BoardInput {
+        let isIssue = review.category(myLogin: currentLogin) == .issue
+        return BoardInput(
+            item: review,
+            myLogin: currentLogin,
+            facts: sidebarFacts(for: review),
+            prStatus: prStatuses[review.id],
+            issueStatus: isIssue
+                ? resolveIssueStatus(
+                    manual: review.manualIssueStatus,
+                    prState: review.prState,
+                    claudeReviewedAt: review.claudeReviewedAt,
+                    claudeWorking: claudeStatuses[review.id] == .working
+                )
+                : nil
+        )
+    }
+
     /// Whether the "Updated" chip shows for an item: the poll found author activity newer
     /// than the user's last review, and the user has not dismissed that particular update.
     public func hasUnseenAuthorUpdate(_ item: WorkItem) -> Bool {
@@ -2140,6 +2171,32 @@ public final class AppModel {
             updatedAt: prStatuses[item.id]?.authorUpdatedAt,
             seenAt: item.authorUpdateSeenAt
         )
+    }
+
+    /// What a reviewer did on the user's own PR since the user last acted, unless the user
+    /// has already dismissed it.
+    public func unseenReviewerUpdate(_ item: WorkItem) -> ReviewerUpdate? {
+        guard let update = prStatuses[item.id]?.reviewerUpdate,
+              update.isUnseen(seenAt: item.reviewerUpdateSeenAt) else { return nil }
+        return update
+    }
+
+    public func hasUnseenReviewerUpdate(_ item: WorkItem) -> Bool {
+        unseenReviewerUpdate(item) != nil
+    }
+
+    /// Dismisses the reviewer badge. Records the update's own timestamp, so anything a
+    /// reviewer does afterwards badges the item again.
+    public func markReviewerUpdateSeen(id: String) async {
+        guard var review = reviews.first(where: { $0.id == id }),
+              let updatedAt = prStatuses[id]?.reviewerUpdate?.at else { return }
+        review.reviewerUpdateSeenAt = updatedAt
+        do {
+            try await store.upsertItem(review)
+            reviews = await store.allItems()
+        } catch {
+            errorMessage = String(describing: error)
+        }
     }
 
     /// Dismisses the current "Updated" chip. Records the update's own timestamp rather than

@@ -162,32 +162,82 @@ public struct GitHubClient: Sendable {
         }
     }
 
-    /// Everything the per-item refresh needs, in one GraphQL call: PR state, whether you
-    /// approved it, CI/behind/readiness, and whether the author has moved since your last
-    /// review. Replaced two `gh pr view` calls, halving poll traffic.
+    /// Most PRs one GraphQL request carries. Each PR asks for up to 100 reviews and 100
+    /// threads, so a bigger batch risks GitHub's node limit and a slow answer.
+    static let snapshotBatchSize = 10
+    /// Requests in flight at once. Few enough to stay polite to the API.
+    static let snapshotConcurrency = 3
+
+    /// One PR's snapshot. A batch of one — see `fetchPRSnapshots`.
     public func fetchPRSnapshot(for ref: PRLocator, login: String) async throws -> PRSnapshot {
-        let result = try await runner.run(
-            executable: ghPath,
-            arguments: [
-                "api", "graphql",
-                "-f", "owner=\(ref.owner)",
-                "-f", "repo=\(ref.repo)",
-                "-F", "number=\(ref.number)",
-                "-f", "query=\(Self.snapshotQuery)",
-            ]
-        )
-        guard result.exitCode == 0 else {
-            throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
+        let batch = try await fetchSnapshotBatch(refs: [ref], login: login)
+        guard let snapshot = batch[ref] else {
+            throw GitHubError.decodingFailed("pull request \(ref.owner)/\(ref.repo)#\(ref.number) not returned")
         }
+        return snapshot
+    }
+
+    /// Everything the refresh needs for many PRs: state, whether you approved, CI, readiness,
+    /// and activity by the author or by reviewers. Batches of `snapshotBatchSize` PRs go out
+    /// as one aliased GraphQL request each, a few at a time.
+    ///
+    /// A PR missing from the result was not returned — a failed batch, a deleted repository,
+    /// a token that cannot see it. The caller keeps what it had, so a transient error never
+    /// blanks the chips.
+    public func fetchPRSnapshots(for refs: [PRLocator], login: String) async -> [PRLocator: PRSnapshot] {
+        let unique = Array(Set(refs))
+        let batches = stride(from: 0, to: unique.count, by: Self.snapshotBatchSize).map {
+            Array(unique[$0..<min($0 + Self.snapshotBatchSize, unique.count)])
+        }
+        var merged: [PRLocator: PRSnapshot] = [:]
+        var next = 0
+        await withTaskGroup(of: [PRLocator: PRSnapshot].self) { group in
+            func launch() {
+                guard next < batches.count else { return }
+                let batch = batches[next]
+                next += 1
+                group.addTask { (try? await self.fetchSnapshotBatch(refs: batch, login: login)) ?? [:] }
+            }
+            for _ in 0..<Self.snapshotConcurrency { launch() }
+            while let result = await group.next() {
+                merged.merge(result) { current, _ in current }
+                launch()
+            }
+        }
+        return merged
+    }
+
+    private func fetchSnapshotBatch(refs: [PRLocator], login: String) async throws -> [PRLocator: PRSnapshot] {
+        var arguments = ["api", "graphql"]
+        for (index, ref) in refs.enumerated() {
+            arguments += ["-f", "o\(index)=\(ref.owner)", "-f", "n\(index)=\(ref.repo)", "-F", "p\(index)=\(ref.number)"]
+        }
+        arguments += ["-f", "query=\(Self.snapshotQuery(count: refs.count))"]
+        let result = try await runner.run(executable: ghPath, arguments: arguments)
+
+        // gh exits non-zero when any alias errors, yet still prints the aliases that worked.
+        // One missing repository must not throw away the rest of the batch.
         let payload: GHSnapshotResponse
         do {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             payload = try decoder.decode(GHSnapshotResponse.self, from: Data(result.standardOutput.utf8))
         } catch {
+            if result.exitCode != 0 {
+                throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
+            }
             throw GitHubError.decodingFailed(String(describing: error))
         }
-        let pr = payload.data.repository.pullRequest
+        var snapshots: [PRLocator: PRSnapshot] = [:]
+        for (index, ref) in refs.enumerated() {
+            if let pr = payload.data["r\(index)"]??.pullRequest {
+                snapshots[ref] = Self.snapshot(from: pr, login: login)
+            }
+        }
+        return snapshots
+    }
+
+    static func snapshot(from pr: GHSnapshotResponse.PullRequest, login: String) -> PRSnapshot {
         let headCommit = pr.commits.nodes.first?.commit
 
         let myReviews = pr.reviews.nodes.filter { $0.author?.login == login }
@@ -217,6 +267,10 @@ public struct GitHubClient: Sendable {
                 .compactMap(\.createdAt)
         )
 
+        let reviewerUpdate = pr.author?.login == login
+            ? Self.reviewerUpdate(for: pr, myLogin: login, headCommittedAt: headCommit?.committedDate)
+            : nil
+
         return PRSnapshot(
             prState: GitHubClient.mapState(state: pr.state, isDraft: pr.isDraft),
             approvedByMe: approvedByMe,
@@ -231,8 +285,67 @@ public struct GitHubClient: Sendable {
                     return ReviewSubmission(authorLogin: login, state: $0.state, submittedAt: $0.submittedAt)
                 }),
                 unresolvedThreads: threads.filter { !$0.isResolved }.count,
-                authorUpdatedAt: authorUpdatedAt
+                authorUpdatedAt: authorUpdatedAt,
+                reviewerUpdate: reviewerUpdate,
+                updatedAt: pr.updatedAt,
+                changeRequests: Self.changeRequests(for: pr)
             )
+        )
+    }
+
+    /// Standing requests for changes, split by whether they were made on the current head.
+    /// Bots are excluded, as they are from `reviewerUpdate`.
+    static func changeRequests(for pr: GHSnapshotResponse.PullRequest) -> ChangeRequestTally {
+        ChangeRequestTally.tally(
+            verdicts: pr.reviews.nodes.compactMap { review in
+                guard let login = review.author?.login, review.author?.typename != "Bot" else { return nil }
+                return ReviewVerdict(login: login, state: review.state, commitOID: review.commit?.oid, at: review.submittedAt)
+            },
+            headOID: pr.headRefOid
+        )
+    }
+
+    /// Collects what other people did on your PR, bots excluded. CI and app accounts post
+    /// reviews and comments on every push, so counting them would badge every PR forever.
+    static func reviewerUpdate(
+        for pr: GHSnapshotResponse.PullRequest,
+        myLogin: String,
+        headCommittedAt: Date?
+    ) -> ReviewerUpdate? {
+        var events: [ReviewerEvent] = []
+        var mine: [Date] = []
+
+        func note(_ author: GHSnapshotResponse.Login?, at date: Date?, kind: ReviewerEvent.Kind) {
+            guard let login = author?.login, let date, author?.typename != "Bot" else { return }
+            if login == myLogin {
+                mine.append(date)
+            } else {
+                events.append(ReviewerEvent(login: login, at: date, kind: kind))
+            }
+        }
+
+        for review in pr.reviews.nodes {
+            let kind: ReviewerEvent.Kind
+            switch review.state {
+            case "CHANGES_REQUESTED": kind = .changesRequested
+            case "APPROVED": kind = .approved
+            default: kind = .other
+            }
+            note(review.author, at: review.submittedAt, kind: kind)
+        }
+        for thread in pr.reviewThreads.nodes {
+            for comment in thread.comments.nodes {
+                note(comment.author, at: comment.createdAt, kind: .other)
+            }
+        }
+        for comment in pr.comments?.nodes ?? [] {
+            note(comment.author, at: comment.createdAt, kind: .other)
+        }
+        return ReviewerUpdate.latest(
+            myLogin: myLogin,
+            events: events,
+            myActivity: mine,
+            headCommittedAt: headCommittedAt
         )
     }
 
@@ -255,29 +368,39 @@ public struct GitHubClient: Sendable {
         })
     }
 
-    private static let snapshotQuery = """
-    query($owner:String!,$repo:String!,$number:Int!){
-      repository(owner:$owner,name:$repo){ pullRequest(number:$number){
-        state isDraft reviewDecision mergeStateStatus
-        author{login}
-        commits(last:1){nodes{commit{ committedDate
-          statusCheckRollup{ state contexts(first:100){ totalCount nodes{
-            __typename
-            ... on CheckRun{ status conclusion }
-            ... on StatusContext{ state }
+    /// One aliased `repository` lookup per PR, sharing a fragment. Owner, name and number
+    /// travel as variables, never spliced into the text.
+    static func snapshotQuery(count: Int) -> String {
+        let variables = (0..<count).map { "$o\($0):String!,$n\($0):String!,$p\($0):Int!" }.joined(separator: ",")
+        let lookups = (0..<count).map {
+            "r\($0): repository(owner:$o\($0),name:$n\($0)){ pullRequest(number:$p\($0)){ ...F } }"
+        }.joined(separator: "\n")
+        return """
+        query(\(variables)){
+        \(lookups)
+        }
+        fragment F on PullRequest {
+          state isDraft reviewDecision mergeStateStatus updatedAt headRefOid
+          author{login}
+          commits(last:1){nodes{commit{ committedDate
+            statusCheckRollup{ state contexts(first:100){ totalCount nodes{
+              __typename
+              ... on CheckRun{ status conclusion }
+              ... on StatusContext{ state }
+            }}}
           }}}
-        }}}
-        reviews(first:100){nodes{author{login} state submittedAt}}
-        reviewThreads(first:100){nodes{
-          isResolved resolvedBy{login}
-          comments(first:50){nodes{author{login} createdAt}}
-        }}
-        timelineItems(first:100, itemTypes:[REVIEW_REQUESTED_EVENT]){nodes{
-          ... on ReviewRequestedEvent{ createdAt requestedReviewer{ ... on User{login} } }
-        }}
-      }}
+          reviews(last:100){nodes{author{login __typename} state submittedAt commit{oid}}}
+          reviewThreads(last:100){nodes{
+            isResolved resolvedBy{login}
+            comments(last:10){nodes{author{login __typename} createdAt}}
+          }}
+          comments(last:30){nodes{author{login __typename} createdAt}}
+          timelineItems(last:50, itemTypes:[REVIEW_REQUESTED_EVENT]){nodes{
+            ... on ReviewRequestedEvent{ createdAt requestedReviewer{ ... on User{login} } }
+          }}
+        }
+        """
     }
-    """
 }
 
 public struct IssueHit: Sendable, Equatable {
@@ -505,7 +628,16 @@ struct GHBranchRule: Decodable {
 struct GHSnapshotResponse: Decodable {
     /// `login` is optional because an inline fragment that does not match yields an empty
     /// object rather than null — a team review request decodes as `{}`.
-    struct Login: Decodable { let login: String? }
+    struct Login: Decodable {
+        let login: String?
+        /// Only present where the query asks for it. `Bot` marks CI and app accounts.
+        let typename: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case login
+            case typename = "__typename"
+        }
+    }
 
     struct Context: Decodable {
         let status: String?
@@ -527,10 +659,13 @@ struct GHSnapshotResponse: Decodable {
     struct CommitNode: Decodable { let commit: Commit }
     struct Commits: Decodable { let nodes: [CommitNode] }
 
+    struct ReviewCommit: Decodable { let oid: String? }
     struct Review: Decodable {
         let author: Login?   // null for reviews by deleted accounts
         let state: String
         let submittedAt: Date?
+        /// The commit the review was made against. Null once GitHub has dropped it.
+        let commit: ReviewCommit?
     }
     struct Reviews: Decodable { let nodes: [Review] }
 
@@ -557,15 +692,19 @@ struct GHSnapshotResponse: Decodable {
         let isDraft: Bool
         let reviewDecision: String?
         let mergeStateStatus: String?
+        let updatedAt: Date?
+        let headRefOid: String?
         let author: Login?
         let commits: Commits
         let reviews: Reviews
         let reviewThreads: ReviewThreads
+        let comments: Comments?
         let timelineItems: TimelineItems
     }
-    struct Repository: Decodable { let pullRequest: PullRequest }
-    struct DataPayload: Decodable { let repository: Repository }
-    let data: DataPayload
+    /// `null` for an alias GitHub could not resolve.
+    struct Repository: Decodable { let pullRequest: PullRequest? }
+    /// Keyed by the alias, `r0`, `r1`, … in the order the PRs were asked for.
+    let data: [String: Repository?]
 }
 
 struct GHPullRequest: Decodable {

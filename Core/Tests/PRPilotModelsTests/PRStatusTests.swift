@@ -131,3 +131,21 @@ import Foundation
     let draftReadiness = PRStatus(ci: .passing, mergeState: .clean, readiness: .draft)
     #expect(!draftReadiness.isReadyToMerge(prState: .open))
 }
+
+@Test func prStatusRoundTripsReviewerUpdateAndToleratesItsAbsence() throws {
+    let update = ReviewerUpdate(at: Date(timeIntervalSince1970: 1_700_000_100), requestedChanges: true)
+    let status = PRStatus(ci: .passing, mergeState: .clean, readiness: .approved, reviewerUpdate: update)
+    let data = try JSONEncoder().encode(status)
+    #expect(try JSONDecoder().decode(PRStatus.self, from: data).reviewerUpdate == update)
+
+    let legacy = Data(#"{"ci":"passing","readiness":"approved"}"#.utf8)
+    #expect(try JSONDecoder().decode(PRStatus.self, from: legacy).reviewerUpdate == nil)
+}
+
+@Test func prStatusRoundTripsUpdatedAtAndToleratesItsAbsence() throws {
+    let when = Date(timeIntervalSince1970: 1_700_000_200)
+    let status = PRStatus(ci: .passing, mergeState: .clean, readiness: .none, updatedAt: when)
+    #expect(try JSONDecoder().decode(PRStatus.self, from: JSONEncoder().encode(status)).updatedAt == when)
+    let legacy = Data(#"{"ci":"passing","readiness":"none"}"#.utf8)
+    #expect(try JSONDecoder().decode(PRStatus.self, from: legacy).updatedAt == nil)
+}

@@ -66,6 +66,12 @@ public struct PRStatus: Codable, Sendable, Equatable {
     /// Newest thing the PR author did since your last review — nil when they have done
     /// nothing since, or when you have never reviewed the PR. Drives the "Updated" chip.
     public var authorUpdatedAt: Date?
+    /// On your own PR: what a reviewer did since you last acted. Nil on a PR you review.
+    public var reviewerUpdate: ReviewerUpdate?
+    /// When GitHub last updated the PR, whoever did it.
+    public var updatedAt: Date?
+    /// Standing requests for changes, split by whether they were made on the current head.
+    public var changeRequests: ChangeRequestTally
 
     public var isBehind: Bool { mergeState == .behind }
 
@@ -75,7 +81,10 @@ public struct PRStatus: Codable, Sendable, Equatable {
         readiness: ReviewReadiness,
         approvalCount: Int = 0,
         unresolvedThreads: Int = 0,
-        authorUpdatedAt: Date? = nil
+        authorUpdatedAt: Date? = nil,
+        reviewerUpdate: ReviewerUpdate? = nil,
+        updatedAt: Date? = nil,
+        changeRequests: ChangeRequestTally = ChangeRequestTally()
     ) {
         self.ci = ci
         self.mergeState = mergeState
@@ -83,6 +92,9 @@ public struct PRStatus: Codable, Sendable, Equatable {
         self.approvalCount = approvalCount
         self.unresolvedThreads = unresolvedThreads
         self.authorUpdatedAt = authorUpdatedAt
+        self.reviewerUpdate = reviewerUpdate
+        self.updatedAt = updatedAt
+        self.changeRequests = changeRequests
     }
 
     /// Tolerates a payload written before `mergeState`, `approvalCount` and
@@ -95,6 +107,9 @@ public struct PRStatus: Codable, Sendable, Equatable {
         approvalCount = try container.decodeIfPresent(Int.self, forKey: .approvalCount) ?? 0
         unresolvedThreads = try container.decodeIfPresent(Int.self, forKey: .unresolvedThreads) ?? 0
         authorUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .authorUpdatedAt)
+        reviewerUpdate = try container.decodeIfPresent(ReviewerUpdate.self, forKey: .reviewerUpdate)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
+        changeRequests = try container.decodeIfPresent(ChangeRequestTally.self, forKey: .changeRequests) ?? ChangeRequestTally()
     }
 
     /// Whether nothing but a click stands between this PR and a merge. GitHub computes the

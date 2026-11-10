@@ -1,6 +1,6 @@
 import Foundation
 
-public struct PRLocator: Sendable, Equatable {
+public struct PRLocator: Sendable, Equatable, Hashable {
     public var owner: String
     public var repo: String
     public var number: Int

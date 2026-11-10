@@ -2,11 +2,12 @@ import Foundation
 
 /// Newest moment anything happened on this item.
 ///
-/// Three things count: the item arrived, the agent finished a turn, or the PR author acted.
-/// The author's timestamp lives in `PRStatus` rather than on the item, so the caller passes
-/// it in. `addedAt` is the floor, so the result is never optional.
-public func lastActivityAt(_ item: WorkItem, authorUpdatedAt: Date?) -> Date {
-    let candidates = [item.addedAt, item.claudeLastCompletedAt, authorUpdatedAt].compactMap { $0 }
+/// Four things count: the item arrived, the agent finished a turn, the PR author acted, or
+/// GitHub reports the PR as updated — a push, a review, a comment, a label. The last two
+/// live in `PRStatus` rather than on the item, so the caller passes them in. `addedAt` is
+/// the floor, so the result is never optional.
+public func lastActivityAt(_ item: WorkItem, authorUpdatedAt: Date?, prUpdatedAt: Date? = nil) -> Date {
+    let candidates = [item.addedAt, item.claudeLastCompletedAt, authorUpdatedAt, prUpdatedAt].compactMap { $0 }
     return candidates.max() ?? item.addedAt
 }
 

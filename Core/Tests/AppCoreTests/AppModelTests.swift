@@ -1543,7 +1543,7 @@ private let prFetchJSON = """
     let store = try ReviewStore(fileURL: url)
     try await store.upsertItem(sampleReview())
     let snapshotJSON = """
-    {"data":{"repository":{"pullRequest":{
+    {"data":{"r0":{"pullRequest":{
       "state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","mergeStateStatus":"CLEAN",
       "author":{"login":"icellan"},
       "commits":{"nodes":[{"commit":{"committedDate":null,"statusCheckRollup":null}}]},
@@ -1789,7 +1789,7 @@ private let taskFetchJSON = """
     let store = try ReviewStore(fileURL: url)
     try await store.upsertItem(sampleReview())
     let snapshotJSON = """
-    {"data":{"repository":{"pullRequest":{
+    {"data":{"r0":{"pullRequest":{
       "state":"OPEN","isDraft":false,"reviewDecision":null,"mergeStateStatus":"BEHIND",
       "author":{"login":"icellan"},
       "commits":{"nodes":[{"commit":{"committedDate":"2026-08-06T11:00:00Z","statusCheckRollup":
@@ -2398,7 +2398,7 @@ private let issueSearchHitJSON = """
 
 private func authorUpdateSnapshotJSON(committedDate: String) -> String {
     """
-    {"data":{"repository":{"pullRequest":{
+    {"data":{"r0":{"pullRequest":{
       "state":"OPEN","isDraft":false,"reviewDecision":"CHANGES_REQUESTED","mergeStateStatus":"CLEAN",
       "author":{"login":"icellan"},
       "commits":{"nodes":[{"commit":{"committedDate":"\(committedDate)","statusCheckRollup":null}}]},
@@ -2790,7 +2790,7 @@ private func waitForItem(
 
 @Test @MainActor func refreshPersistsMyReviewStateAndDate() async throws {
     let snapshotJSON = """
-    {"data":{"repository":{"pullRequest":{
+    {"data":{"r0":{"pullRequest":{
       "state":"OPEN","isDraft":false,"reviewDecision":null,"mergeStateStatus":"CLEAN",
       "author":{"login":"icellan"},
       "commits":{"nodes":[]},
@@ -3020,7 +3020,7 @@ private func waitForItem(
     #expect(model.reviews.first { $0.id == item.id }?.worktreePath == afterFirst)
 }
 
-@Test @MainActor func refreshCyclesThroughItemsInsteadOfRefreshingAll() async throws {
+@Test @MainActor func refreshReviewStatesRefreshesEveryOpenItemInOneCycle() async throws {
     let store = try ReviewStore(fileURL: tempStoreURL())
     for index in 1...10 {
         try await store.upsertItem(cappedReview("rf\(index)", number: index, openedMinutesAgo: index))
@@ -3032,7 +3032,7 @@ private func waitForItem(
 
     await model.refreshReviewStates()
 
-    #expect(model.refreshedIDsForTesting().count == 5)
+    #expect(model.refreshedIDsForTesting().count == 10)
     #expect(model.refreshedIDsForTesting().contains("item-rf1"))
 }
 
@@ -4697,7 +4697,7 @@ private func secondReviewInSameRepo() -> WorkItem {
 }
 
 private let blockedSnapshotJSON = """
-{"data":{"repository":{"pullRequest":{
+{"data":{"r0":{"pullRequest":{
   "state":"OPEN","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","mergeStateStatus":"BLOCKED",
   "author":{"login":"ordishs"},
   "commits":{"nodes":[{"commit":{"committedDate":"2026-08-06T11:00:00Z","statusCheckRollup":null}}]},

@@ -396,3 +396,11 @@ private let storedLimitMessage =
     #expect(decoded.agent == .codex)
     #expect(decoded == item)
 }
+
+@Test func reviewerUpdateSeenAtRoundTripsAndDefaultsToNil() throws {
+    var item = WorkItem(title: "t", repoKey: "github.com/a/b", baseBranch: "main", origin: .added, addedAt: Date(timeIntervalSince1970: 1_700_000_000))
+    #expect(item.reviewerUpdateSeenAt == nil)
+    item.reviewerUpdateSeenAt = Date(timeIntervalSince1970: 1_700_000_500)
+    let decoded = try JSONDecoder().decode(WorkItem.self, from: JSONEncoder().encode(item))
+    #expect(decoded.reviewerUpdateSeenAt == item.reviewerUpdateSeenAt)
+}

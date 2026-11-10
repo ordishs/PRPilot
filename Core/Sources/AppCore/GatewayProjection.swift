@@ -15,6 +15,9 @@ public enum GatewayProjection {
         public var behind: Int
         public var localChanges: Int
         public var detail: GatewayDetail
+        /// When something last happened on the item. The caller passes the Mac sidebar's own
+        /// value, so the phone and the Mac never disagree about it.
+        public var activityAt: Date
 
         public init(
             agent: GatewayAgent?,
@@ -23,6 +26,7 @@ public enum GatewayProjection {
             ahead: Int,
             behind: Int,
             localChanges: Int,
+            activityAt: Date,
             detail: GatewayDetail = .empty
         ) {
             self.agent = agent
@@ -32,6 +36,7 @@ public enum GatewayProjection {
             self.behind = behind
             self.localChanges = localChanges
             self.detail = detail
+            self.activityAt = activityAt
         }
     }
 
@@ -89,7 +94,7 @@ public enum GatewayProjection {
             ahead: decoration.ahead,
             behind: decoration.behind,
             localChanges: decoration.localChanges,
-            lastActivityAt: work.claudeLastCompletedAt ?? work.lastOpenedAt ?? work.addedAt,
+            lastActivityAt: decoration.activityAt,
             primaryCommand: attention.primaryCommand,
             signals: SignalFilter.ordered.filter { sidebar.has($0) }.map(\.key),
             resources: ResourceFilter.ordered.filter { sidebar.has($0) }.map(\.key),
@@ -109,10 +114,11 @@ public enum GatewayProjection {
         sort: SidebarSort,
         facts: [String: GatewayItemFacts],
         sidebarFacts: (WorkItem) -> SidebarItemFacts,
+        activity: (WorkItem) -> Date = { $0.addedAt },
         decorate: (WorkItem) -> Decoration
     ) -> [GatewaySection] {
         let known = items.filter { facts[$0.id] != nil }
-        let split = sidebarSections(items: known, myLogin: myLogin, sort: sort)
+        let split = sidebarSections(items: known, myLogin: myLogin, sort: sort, activity: activity)
 
         func project(_ works: [WorkItem]) -> [GatewayItem] {
             works.compactMap { work in

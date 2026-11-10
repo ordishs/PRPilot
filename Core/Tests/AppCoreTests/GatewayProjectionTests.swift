@@ -60,7 +60,8 @@ private let plainDecoration = GatewayProjection.Decoration(
     issueStatus: nil,
     ahead: 0,
     behind: 0,
-    localChanges: 0
+    localChanges: 0,
+    activityAt: Date(timeIntervalSince1970: 1_800_000_000)
 )
 
 @Test func aPullRequestProjectsItsIdentityOntoTheWireItem() {
@@ -74,7 +75,8 @@ private let plainDecoration = GatewayProjection.Decoration(
             issueStatus: nil,
             ahead: 0,
             behind: 12,
-            localChanges: 2
+            localChanges: 2,
+            activityAt: Date(timeIntervalSince1970: 1_800_000_000)
         )
     )
 
@@ -328,4 +330,18 @@ private let plainDecoration = GatewayProjection.Decoration(
 
     #expect(wire.detail.pane == "claude")
     #expect(wire.detail.runLabel == "started today")
+}
+
+@Test func theWireItemCarriesTheMacActivityDate() {
+    let activity = Date(timeIntervalSince1970: 1_800_000_000)
+    let decoration = GatewayProjection.Decoration(
+        agent: nil, badges: [], issueStatus: nil, ahead: 0, behind: 0, localChanges: 0, activityAt: activity
+    )
+    let projected = GatewayProjection.item(
+        from: prItem(),
+        facts: noFacts("bsv-blockchain/teranode#4788"),
+        sidebar: SidebarItemFacts(),
+        decoration: decoration
+    )
+    #expect(projected.lastActivityAt == activity)
 }

@@ -3,7 +3,7 @@ import Foundation
 @testable import PRPilotModels
 
 @Test func sidebarSortDisplayNames() {
-    #expect(SidebarSort.recent.displayName == "Recent")
+    #expect(SidebarSort.recent.displayName == "Latest activity")
     #expect(SidebarSort.byStatus.displayName == "By status")
     #expect(SidebarSort.byAuthor.displayName == "By author")
 }
@@ -125,4 +125,24 @@ private func makeItem(
 
 @Test func sidebarSortByNumberHasADisplayName() {
     #expect(SidebarSort.byNumber.displayName == "By number")
+}
+
+@Test func recentSortsByTheActivityDateNotTheDateAdded() {
+    let base = Date(timeIntervalSince1970: 1_700_000_000)
+    let items = [
+        makeItem(id: "addedLateQuietSince", addedAt: base.addingTimeInterval(1000)),
+        makeItem(id: "addedEarlyActiveNow", addedAt: base),
+    ]
+    let activity: [String: Date] = [
+        "addedLateQuietSince": base.addingTimeInterval(1000),
+        "addedEarlyActiveNow": base.addingTimeInterval(5000),
+    ]
+    let s = sidebarSections(items: items, myLogin: "me", sort: .recent, activity: { activity[$0.id]! })
+    #expect(s.myWork.map(\.id) == ["addedEarlyActiveNow", "addedLateQuietSince"])
+}
+
+@Test func recentDefaultsToTheDateAddedWhenNoActivityIsGiven() {
+    let base = Date(timeIntervalSince1970: 1_700_000_000)
+    let items = [makeItem(id: "old", addedAt: base), makeItem(id: "new", addedAt: base.addingTimeInterval(10))]
+    #expect(sidebarSections(items: items, myLogin: "me", sort: .recent).myWork.map(\.id) == ["new", "old"])
 }

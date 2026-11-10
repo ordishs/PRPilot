@@ -384,17 +384,20 @@ private func snapshotJSON(
     rollupJSON: String = "null",
     reviewsJSON: String = "[]",
     threadsJSON: String = "[]",
-    timelineJSON: String = "[]"
+    timelineJSON: String = "[]",
+    commentsJSON: String = "[]",
+    updatedAt: String = "2026-08-01T00:00:00Z"
 ) -> String {
     let decision = reviewDecision.map { "\"\($0)\"" } ?? "null"
     let committed = committedDate.map { "\"\($0)\"" } ?? "null"
     return """
-    {"data":{"repository":{"pullRequest":{
+    {"data":{"r0":{"pullRequest":{
       "state":"\(state)","isDraft":\(isDraft),"reviewDecision":\(decision),
-      "mergeStateStatus":"\(mergeStateStatus)","author":{"login":"\(author)"},
+      "mergeStateStatus":"\(mergeStateStatus)","updatedAt":"\(updatedAt)","author":{"login":"\(author)"},
       "commits":{"nodes":[{"commit":{"committedDate":\(committed),"statusCheckRollup":\(rollupJSON)}}]},
       "reviews":{"nodes":\(reviewsJSON)},
       "reviewThreads":{"nodes":\(threadsJSON)},
+      "comments":{"nodes":\(commentsJSON)},
       "timelineItems":{"nodes":\(timelineJSON)}
     }}}}
     """
@@ -556,8 +559,9 @@ private let snapshotRef = PRLocator(owner: "bsv-blockchain", repo: "teranode", n
     let args = await runner.lastArguments
     #expect(await runner.invocationCount == 1)
     #expect(args?.prefix(2) == ["api", "graphql"])
-    #expect(args?.contains("owner=bsv-blockchain") == true)
-    #expect(args?.contains("number=944") == true)
+    #expect(args?.contains("o0=bsv-blockchain") == true)
+    #expect(args?.contains("n0=teranode") == true)
+    #expect(args?.contains("p0=944") == true)
 }
 
 private let sampleIssueSearchJSON = """
@@ -649,7 +653,7 @@ private let repoViewMainJSON = """
 }
 
 private let mixedReviewsSnapshotJSON = """
-{"data":{"repository":{"pullRequest":{
+{"data":{"r0":{"pullRequest":{
   "state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","mergeStateStatus":"CLEAN",
   "author":{"login":"icellan"},
   "commits":{"nodes":[{"commit":{"committedDate":"2026-08-01T10:00:00Z","statusCheckRollup":null}}]},
@@ -680,7 +684,7 @@ private let mixedReviewsSnapshotJSON = """
 
 @Test func snapshotIgnoresOtherPeoplesReviews() async throws {
     let json = """
-    {"data":{"repository":{"pullRequest":{
+    {"data":{"r0":{"pullRequest":{
       "state":"OPEN","isDraft":false,"reviewDecision":null,"mergeStateStatus":"CLEAN",
       "author":{"login":"icellan"},
       "commits":{"nodes":[]},
@@ -706,7 +710,7 @@ private let mixedReviewsSnapshotJSON = """
 
 @Test func snapshotTreatsADismissedApprovalAsCommented() async throws {
     let json = """
-    {"data":{"repository":{"pullRequest":{
+    {"data":{"r0":{"pullRequest":{
       "state":"OPEN","isDraft":false,"reviewDecision":null,"mergeStateStatus":"CLEAN",
       "author":{"login":"icellan"},
       "commits":{"nodes":[]},
@@ -841,4 +845,205 @@ private let samplePRThreadJSON = """
     await #expect(throws: GitHubError.self) {
         try await client.fetchThread(owner: "o", repo: "r", number: 3, isPR: false)
     }
+}
+
+@Test func snapshotOnMyPRReportsReviewerRequestedChangesAfterMyPush() async throws {
+    let reviews = """
+    [{"author":{"login":"oskarszoon","__typename":"User"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-01T12:00:00Z"}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(
+        author: "ordishs", committedDate: "2026-08-01T10:00:00Z", reviewsJSON: reviews
+    ))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    let update = try #require(snapshot.status.reviewerUpdate)
+    #expect(update.requestedChanges == true)
+}
+
+@Test func snapshotOnMyPRIgnoresBotsAndMyOwnActivity() async throws {
+    let reviews = """
+    [{"author":{"login":"github-actions","__typename":"Bot"},"state":"COMMENTED","submittedAt":"2026-08-01T12:00:00Z"},
+     {"author":{"login":"ordishs","__typename":"User"},"state":"COMMENTED","submittedAt":"2026-08-01T13:00:00Z"}]
+    """
+    let comments = """
+    [{"author":{"login":"codecov","__typename":"Bot"},"createdAt":"2026-08-01T14:00:00Z"}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(
+        author: "ordishs", committedDate: "2026-08-01T10:00:00Z", reviewsJSON: reviews, commentsJSON: comments
+    ))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.reviewerUpdate == nil)
+}
+
+@Test func snapshotOnMyPRClearsWhenIPushAfterTheReviewer() async throws {
+    let reviews = """
+    [{"author":{"login":"oskarszoon","__typename":"User"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-01T12:00:00Z"}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(
+        author: "ordishs", committedDate: "2026-08-01T15:00:00Z", reviewsJSON: reviews
+    ))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.reviewerUpdate == nil)
+}
+
+@Test func snapshotCountsPRConversationCommentFromAReviewer() async throws {
+    let comments = """
+    [{"author":{"login":"icellan","__typename":"User"},"createdAt":"2026-08-01T12:00:00Z"}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(
+        author: "ordishs", committedDate: "2026-08-01T10:00:00Z", commentsJSON: comments
+    ))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    let update = try #require(snapshot.status.reviewerUpdate)
+    #expect(update.requestedChanges == false)
+}
+
+@Test func snapshotOnSomeoneElsesPRHasNoReviewerUpdate() async throws {
+    let reviews = """
+    [{"author":{"login":"oskarszoon","__typename":"User"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-01T12:00:00Z"}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(
+        author: "icellan", committedDate: "2026-08-01T10:00:00Z", reviewsJSON: reviews
+    ))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.reviewerUpdate == nil)
+}
+
+/// Answers a batched snapshot request the way GitHub would: one aliased entry per PR asked
+/// for, read back out of the request's own variables. A number listed in `missing` comes back
+/// as null, the way an unreachable repository does.
+private actor AliasEchoRunner: CommandRunner {
+    private(set) var calls: [[String]] = []
+    private var inFlight = 0
+    private(set) var peakInFlight = 0
+    let missing: Set<Int>
+    let exitCode: Int32
+
+    init(missing: Set<Int> = [], exitCode: Int32 = 0) {
+        self.missing = missing
+        self.exitCode = exitCode
+    }
+
+    func run(executable: String, arguments: [String]) async throws -> CommandResult {
+        calls.append(arguments)
+        inFlight += 1
+        peakInFlight = max(peakInFlight, inFlight)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        inFlight -= 1
+
+        var entries: [String] = []
+        for argument in arguments {
+            guard argument.hasPrefix("p"), let eq = argument.firstIndex(of: "="),
+                  let index = Int(argument[argument.index(after: argument.startIndex)..<eq]),
+                  let number = Int(argument[argument.index(after: eq)...]) else { continue }
+            if missing.contains(number) {
+                entries.append("\"r\(index)\":null")
+            } else {
+                entries.append("\"r\(index)\":{\"pullRequest\":{\"state\":\"OPEN\",\"isDraft\":false,\"reviewDecision\":null,"
+                    + "\"mergeStateStatus\":\"CLEAN\",\"author\":{\"login\":\"pr\(number)\"},"
+                    + "\"commits\":{\"nodes\":[]},\"reviews\":{\"nodes\":[]},\"reviewThreads\":{\"nodes\":[]},"
+                    + "\"comments\":{\"nodes\":[]},\"timelineItems\":{\"nodes\":[]}}}")
+            }
+        }
+        return CommandResult(exitCode: exitCode, standardOutput: "{\"data\":{\(entries.joined(separator: ","))}}", standardError: "")
+    }
+}
+
+private func refs(_ numbers: ClosedRange<Int>) -> [PRLocator] {
+    numbers.map { PRLocator(owner: "acme", repo: "app", number: $0) }
+}
+
+@Test func batchSendsOneRequestForSeveralPRs() async {
+    let runner = AliasEchoRunner()
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let result = await client.fetchPRSnapshots(for: refs(1...4), login: "me")
+    #expect(result.count == 4)
+    #expect(await runner.calls.count == 1)
+}
+
+@Test func batchMapsEachAliasBackToItsOwnPR() async throws {
+    let runner = AliasEchoRunner()
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let result = await client.fetchPRSnapshots(for: refs(1...3), login: "me")
+    for number in 1...3 {
+        let ref = PRLocator(owner: "acme", repo: "app", number: number)
+        #expect(result[ref]?.prState == .open)
+    }
+}
+
+@Test func batchSplitsTwentyFivePRsIntoThreeRequests() async {
+    let runner = AliasEchoRunner()
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let result = await client.fetchPRSnapshots(for: refs(1...25), login: "me")
+    #expect(result.count == 25)
+    #expect(await runner.calls.count == 3)
+    #expect(await runner.peakInFlight > 1)
+    #expect(await runner.peakInFlight <= GitHubClient.snapshotConcurrency)
+}
+
+@Test func batchKeepsTheRestWhenOnePRIsMissingAndGhExitsNonZero() async {
+    let runner = AliasEchoRunner(missing: [2], exitCode: 1)
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let result = await client.fetchPRSnapshots(for: refs(1...3), login: "me")
+    #expect(Set(result.keys.map(\.number)) == [1, 3])
+}
+
+@Test func batchReturnsNothingWhenEveryRequestFails() async {
+    let runner = RecordingRunner(result: CommandResult(exitCode: 1, standardOutput: "", standardError: "boom"))
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    let result = await client.fetchPRSnapshots(for: refs(1...3), login: "me")
+    #expect(result.isEmpty)
+}
+
+@Test func batchOfNothingMakesNoRequest() async {
+    let runner = AliasEchoRunner()
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    #expect(await client.fetchPRSnapshots(for: [], login: "me").isEmpty)
+    #expect(await runner.calls.isEmpty)
+}
+
+@Test func batchPassesOwnerRepoAndNumberAsVariablesNotQueryText() async {
+    let runner = AliasEchoRunner()
+    let client = GitHubClient(runner: runner, ghPath: "gh")
+    _ = await client.fetchPRSnapshots(for: [PRLocator(owner: "o\"x", repo: "r", number: 9)], login: "me")
+    let args = await runner.calls.first ?? []
+    #expect(args.contains("o0=o\"x"))
+    let query = args.first { $0.hasPrefix("query=") } ?? ""
+    #expect(!query.contains("o\"x"))
+    #expect(!query.contains("(number:9)"))
+}
+
+@Test func snapshotQueryAsksForNoBodies() {
+    let query = GitHubClient.snapshotQuery(count: 2)
+    #expect(!query.contains("body"))
+    #expect(query.contains("r0: repository") && query.contains("r1: repository"))
+    #expect(query.contains("reviews(last:100)"))
+}
+
+@Test func snapshotCarriesGitHubUpdatedAt() async throws {
+    let (client, _) = snapshotClient(snapshotJSON(updatedAt: "2026-09-02T08:30:00Z"))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    let expected = ISO8601DateFormatter().date(from: "2026-09-02T08:30:00Z")
+    #expect(snapshot.status.updatedAt == expected)
+}
+
+@Test func snapshotQueryAsksForUpdatedAt() {
+    #expect(GitHubClient.snapshotQuery(count: 1).contains("updatedAt"))
+}
+
+@Test func snapshotSplitsChangeRequestsByWhetherTheyTargetTheHead() async throws {
+    let reviews = """
+    [{"author":{"login":"alice","__typename":"User"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-01T12:00:00Z","commit":{"oid":"OLD"}},
+     {"author":{"login":"bob","__typename":"User"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-01T13:00:00Z","commit":{"oid":"HEAD1"}},
+     {"author":{"login":"github-actions","__typename":"Bot"},"state":"CHANGES_REQUESTED","submittedAt":"2026-08-01T14:00:00Z","commit":{"oid":"OLD"}}]
+    """
+    let json = snapshotJSON(reviewsJSON: reviews).replacingOccurrences(of: "\"state\":\"OPEN\"", with: "\"state\":\"OPEN\",\"headRefOid\":\"HEAD1\"")
+    let (client, _) = snapshotClient(json)
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.changeRequests == ChangeRequestTally(current: 1, outdated: 1))
+}
+
+@Test func snapshotQueryAsksForTheHeadAndEachReviewsCommit() {
+    let query = GitHubClient.snapshotQuery(count: 1)
+    #expect(query.contains("headRefOid"))
+    #expect(query.contains("commit{oid}"))
 }

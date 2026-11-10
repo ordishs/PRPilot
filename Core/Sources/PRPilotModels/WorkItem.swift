@@ -53,6 +53,9 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
     /// Author activity the user has dismissed by hand, so the "Updated" chip stays off
     /// until the author does something newer.
     public var authorUpdateSeenAt: Date?
+    /// Reviewer activity on the user's own PR that the user has dismissed by hand, so the
+    /// reviewer badge stays off until a reviewer does something newer.
+    public var reviewerUpdateSeenAt: Date?
     /// What the user has posted on this PR, from the last poll. Persisted so the sidebar
     /// badge is right at launch, before the first refresh, and while offline.
     public var myReviewState: MyReviewState?
@@ -83,7 +86,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         case id, title, repoKey, baseBranch, headBranch, worktreePath, prRef, prState, issueRef
         case origin, closingIssueNumber, notes, claudeSessionID, autoReview
         case addedAt, lastOpenedAt, disabled, viewedFiles, claudeReviewedAt, approvedByMe, manualIssueStatus
-        case label, lastPane, authorUpdateSeenAt
+        case label, lastPane, authorUpdateSeenAt, reviewerUpdateSeenAt
         case myReviewState, myLastReviewAt, claudeLastCompletedAt, waitingSeenAt
         case agentRunStartedAt
         case agentLimitedAt, agentLimitMessage
@@ -215,6 +218,7 @@ public struct WorkItem: Codable, Sendable, Identifiable, Equatable {
         self.label = try c.decodeIfPresent(String.self, forKey: .label)
         self.lastPane = try c.decodeIfPresent(PaneSelection.self, forKey: .lastPane)
         self.authorUpdateSeenAt = try c.decodeIfPresent(Date.self, forKey: .authorUpdateSeenAt)
+        self.reviewerUpdateSeenAt = try c.decodeIfPresent(Date.self, forKey: .reviewerUpdateSeenAt)
         self.myReviewState = try c.decodeIfPresent(MyReviewState.self, forKey: .myReviewState)
         self.myLastReviewAt = try c.decodeIfPresent(Date.self, forKey: .myLastReviewAt)
         self.claudeLastCompletedAt = try c.decodeIfPresent(Date.self, forKey: .claudeLastCompletedAt)
