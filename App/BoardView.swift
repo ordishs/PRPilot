@@ -140,6 +140,7 @@ private final class BoardPreviewPanel {
         )
         if let panel, let host = panel.contentViewController as? NSHostingController<BoardPreview> {
             host.rootView = content
+            attach(panel)
             panel.makeKeyAndOrderFront(nil)
             return
         }
@@ -149,7 +150,7 @@ private final class BoardPreviewPanel {
         panel.title = "Details"
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
-        panel.isFloatingPanel = true
+        panel.isFloatingPanel = false
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = false
         panel.isReleasedWhenClosed = false
@@ -157,12 +158,20 @@ private final class BoardPreviewPanel {
         panel.minSize = NSSize(width: 700, height: 480)
         if !panel.setFrameUsingName("BoardPreviewPanel") { panel.center() }
         panel.setFrameAutosaveName("BoardPreviewPanel")
-        panel.makeKeyAndOrderFront(nil)
         self.panel = panel
+        attach(panel)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func attach(_ panel: NSPanel) {
+        guard panel.parent == nil, let main = NSApp.mainWindow ?? NSApp.keyWindow else { return }
+        main.addChildWindow(panel, ordered: .above)
     }
 
     func close() {
-        panel?.orderOut(nil)
+        guard let panel else { return }
+        panel.parent?.removeChildWindow(panel)
+        panel.orderOut(nil)
     }
 }
 
