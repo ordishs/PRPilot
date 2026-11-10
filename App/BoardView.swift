@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import PRPilotModels
 import AppCore
@@ -22,6 +23,7 @@ struct MainViewPicker: View {
 
 struct BoardView: View {
     @Bindable var model: AppModel
+    let webViewCache: WebViewCache
     @Binding var viewMode: MainViewMode
     @State private var searchText = ""
     @AppStorage("boardColumnWidths") private var storedWidths = ""
@@ -78,7 +80,8 @@ struct BoardView: View {
                                     input: inputs[item.id] ?? BoardInput(item: item, myLogin: model.currentLogin),
                                     activity: activity(item)
                                 )
-                                .onTapGesture { open(item) }
+                                .onTapGesture(count: 2) { open(item) }
+                                .onTapGesture { preview(item) }
                             }
                         }
                     }
@@ -105,6 +108,90 @@ struct BoardView: View {
     private func open(_ item: WorkItem) {
         model.selection = item.id
         viewMode = .list
+    }
+
+    private func preview(_ item: WorkItem) {
+        model.selection = item.id
+        BoardPreviewPanel.shared.show(
+            model: model,
+            webViewCache: webViewCache,
+            review: item,
+            onOpenInList: { open(item) }
+        )
+    }
+}
+
+@MainActor
+private final class BoardPreviewPanel {
+    static let shared = BoardPreviewPanel()
+
+    private var panel: NSPanel?
+
+    func show(model: AppModel, webViewCache: WebViewCache, review: WorkItem, onOpenInList: @escaping () -> Void) {
+        let content = BoardPreview(
+            model: model,
+            webViewCache: webViewCache,
+            review: review,
+            onOpenInList: { [weak self] in
+                self?.close()
+                onOpenInList()
+            },
+            onClose: { [weak self] in self?.close() }
+        )
+        if let panel, let host = panel.contentViewController as? NSHostingController<BoardPreview> {
+            host.rootView = content
+            panel.makeKeyAndOrderFront(nil)
+            return
+        }
+        let host = NSHostingController(rootView: content)
+        let panel = NSPanel(contentViewController: host)
+        panel.styleMask = [.titled, .closable, .resizable, .fullSizeContentView]
+        panel.title = "Details"
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+        panel.isMovableByWindowBackground = false
+        panel.isReleasedWhenClosed = false
+        panel.setContentSize(NSSize(width: 1100, height: 760))
+        panel.minSize = NSSize(width: 700, height: 480)
+        if !panel.setFrameUsingName("BoardPreviewPanel") { panel.center() }
+        panel.setFrameAutosaveName("BoardPreviewPanel")
+        panel.makeKeyAndOrderFront(nil)
+        self.panel = panel
+    }
+
+    func close() {
+        panel?.orderOut(nil)
+    }
+}
+
+private struct BoardPreview: View {
+    let model: AppModel
+    let webViewCache: WebViewCache
+    let review: WorkItem
+    let onOpenInList: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(review.displayNumber.map { "#\($0) · \(review.title)" } ?? review.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer()
+                Button("Show in List", action: onOpenInList)
+                    .help("Leave the board and select this item in the list")
+                Button("Close", action: onClose)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(.leading, 78)
+            .padding(.trailing, 10)
+            .padding(.vertical, 10)
+            Divider()
+            DetailView(model: model, webViewCache: webViewCache, review: review)
+        }
+        .frame(minWidth: 700, minHeight: 480)
     }
 }
 

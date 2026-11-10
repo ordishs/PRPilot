@@ -163,7 +163,7 @@ struct ContentView: View {
             case .list:
                 splitView
             case .board:
-                BoardView(model: model, viewMode: $mainViewMode)
+                BoardView(model: model, webViewCache: webViewCache, viewMode: $mainViewMode)
             }
         }
         .frame(minWidth: 900, minHeight: 600)
