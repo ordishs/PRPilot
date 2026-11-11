@@ -23,7 +23,7 @@ public enum BoardColumn: String, Sendable, Equatable, CaseIterable {
         switch self {
         case .notStarted: return "Nothing has begun: no agent, no worktree, no review posted"
         case .inProgress: return "Work you or an agent must do: a fix, a rebase, failing CI, or an unfinished draft"
-        case .reviewing: return "Your turn to review: PRs others asked you to review, and issues an agent has analysed"
+        case .reviewing: return "Your turn to review: PRs that other people asked you to review"
         case .inReview: return "Your own PRs, waiting for other people to review them"
         case .waiting: return "Blocked on somebody or something else: CI, other reviewers, the author, or a hold"
         case .done: return "Merged or closed"
@@ -92,7 +92,7 @@ private func myPRColumn(item: WorkItem, facts: SidebarItemFacts, status: PRStatu
     if status.readiness == .changesRequested {
         return status.changeRequests.isOutdatedOnly ? .waiting : .inProgress
     }
-    if status.unresolvedThreads > 0 { return .inProgress }
+    if status.openThreadsForMe > 0 { return .inProgress }
     if status.ci == .pending { return .waiting }
     if status.readiness == .approved, !status.isReadyToMerge(prState: item.prState) { return .waiting }
     return .inReview
@@ -113,8 +113,7 @@ private func reviewRequestColumn(item: WorkItem, facts: SidebarItemFacts) -> Boa
 
 private func issueColumn(input: BoardInput) -> BoardColumn {
     switch input.issueStatus ?? .new {
-    case .inReview: return .inProgress
-    case .reviewed: return .reviewing
+    case .inReview, .reviewed: return .inProgress
     case .onHold: return .waiting
     case .done, .closed: return .done
     case .new: return hasStarted(input.facts) ? .inProgress : .notStarted

@@ -252,7 +252,11 @@ public struct GitHubClient: Sendable {
                 resolvedByLogin: node.resolvedBy?.login,
                 comments: node.comments.nodes.compactMap { comment in
                     guard let login = comment.author?.login else { return nil }
-                    return ThreadComment(authorLogin: login, createdAt: comment.createdAt)
+                    return ThreadComment(
+                        authorLogin: login,
+                        createdAt: comment.createdAt,
+                        isBot: comment.author?.typename == "Bot"
+                    )
                 }
             )
         }
@@ -285,6 +289,7 @@ public struct GitHubClient: Sendable {
                     return ReviewSubmission(authorLogin: login, state: $0.state, submittedAt: $0.submittedAt)
                 }),
                 unresolvedThreads: threads.filter { !$0.isResolved }.count,
+                threadsAwaitingMe: threads.filter { $0.awaitsReply(from: login) }.count,
                 authorUpdatedAt: authorUpdatedAt,
                 reviewerUpdate: reviewerUpdate,
                 updatedAt: pr.updatedAt,

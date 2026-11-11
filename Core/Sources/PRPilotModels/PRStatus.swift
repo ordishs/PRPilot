@@ -63,6 +63,9 @@ public struct PRStatus: Codable, Sendable, Equatable {
     /// Review threads nobody has resolved. Work waiting on the PR author, whether or not
     /// the repository requires resolution before a merge.
     public var unresolvedThreads: Int
+    /// The unresolved threads where you did not speak last. Nil in a payload written before
+    /// this existed, which reads as "all of them".
+    public var threadsAwaitingMe: Int?
     /// Newest thing the PR author did since your last review — nil when they have done
     /// nothing since, or when you have never reviewed the PR. Drives the "Updated" chip.
     public var authorUpdatedAt: Date?
@@ -75,12 +78,15 @@ public struct PRStatus: Codable, Sendable, Equatable {
 
     public var isBehind: Bool { mergeState == .behind }
 
+    public var openThreadsForMe: Int { threadsAwaitingMe ?? unresolvedThreads }
+
     public init(
         ci: CIStatus,
         mergeState: MergeState,
         readiness: ReviewReadiness,
         approvalCount: Int = 0,
         unresolvedThreads: Int = 0,
+        threadsAwaitingMe: Int? = nil,
         authorUpdatedAt: Date? = nil,
         reviewerUpdate: ReviewerUpdate? = nil,
         updatedAt: Date? = nil,
@@ -91,6 +97,7 @@ public struct PRStatus: Codable, Sendable, Equatable {
         self.readiness = readiness
         self.approvalCount = approvalCount
         self.unresolvedThreads = unresolvedThreads
+        self.threadsAwaitingMe = threadsAwaitingMe
         self.authorUpdatedAt = authorUpdatedAt
         self.reviewerUpdate = reviewerUpdate
         self.updatedAt = updatedAt
@@ -106,6 +113,7 @@ public struct PRStatus: Codable, Sendable, Equatable {
         readiness = try container.decode(ReviewReadiness.self, forKey: .readiness)
         approvalCount = try container.decodeIfPresent(Int.self, forKey: .approvalCount) ?? 0
         unresolvedThreads = try container.decodeIfPresent(Int.self, forKey: .unresolvedThreads) ?? 0
+        threadsAwaitingMe = try container.decodeIfPresent(Int.self, forKey: .threadsAwaitingMe)
         authorUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .authorUpdatedAt)
         reviewerUpdate = try container.decodeIfPresent(ReviewerUpdate.self, forKey: .reviewerUpdate)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)

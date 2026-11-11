@@ -195,3 +195,32 @@ private func thread(
     #expect(AuthorUpdate.isUnseen(updatedAt: at(12), seenAt: at(12)) == false)
     #expect(AuthorUpdate.isUnseen(updatedAt: at(10), seenAt: at(12)) == false)
 }
+
+@Test func openThreadAwaitsReplyFromEveryoneButTheLastSpeaker() {
+    let t = ReviewThreadSnapshot(
+        isResolved: false, resolvedByLogin: nil,
+        comments: [ThreadComment(authorLogin: "liam", createdAt: at(1)), ThreadComment(authorLogin: "me", createdAt: at(2))]
+    )
+    #expect(!t.awaitsReply(from: "me"))
+    #expect(t.awaitsReply(from: "liam"))
+}
+
+@Test func resolvedThreadAwaitsNobody() {
+    let t = ReviewThreadSnapshot(
+        isResolved: true, resolvedByLogin: "liam",
+        comments: [ThreadComment(authorLogin: "liam", createdAt: at(1))]
+    )
+    #expect(!t.awaitsReply(from: "me"))
+}
+
+@Test func openThreadWithNoCommentsAwaitsReply() {
+    #expect(ReviewThreadSnapshot(isResolved: false, resolvedByLogin: nil, comments: []).awaitsReply(from: "me"))
+}
+
+@Test func openThreadWhoseLastCommentIsABotAwaitsNobody() {
+    let t = ReviewThreadSnapshot(
+        isResolved: false, resolvedByLogin: nil,
+        comments: [ThreadComment(authorLogin: "liam", createdAt: at(1)), ThreadComment(authorLogin: "ci", createdAt: at(2), isBot: true)]
+    )
+    #expect(!t.awaitsReply(from: "me"))
+}

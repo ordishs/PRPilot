@@ -3,10 +3,12 @@ import Foundation
 public struct ThreadComment: Sendable, Equatable, Codable {
     public var authorLogin: String
     public var createdAt: Date
+    public var isBot: Bool
 
-    public init(authorLogin: String, createdAt: Date) {
+    public init(authorLogin: String, createdAt: Date, isBot: Bool = false) {
         self.authorLogin = authorLogin
         self.createdAt = createdAt
+        self.isBot = isBot
     }
 }
 
@@ -20,6 +22,16 @@ public struct ReviewThreadSnapshot: Sendable, Equatable, Codable {
         self.isResolved = isResolved
         self.resolvedByLogin = resolvedByLogin
         self.comments = comments
+    }
+}
+
+extension ReviewThreadSnapshot {
+    /// An open thread is somebody's turn. When the last comment is yours, the turn is theirs.
+    /// A bot's comment asks nobody for an answer, so it never makes the thread yours.
+    public func awaitsReply(from login: String) -> Bool {
+        guard !isResolved else { return false }
+        guard let last = comments.last else { return true }
+        return last.authorLogin != login && !last.isBot
     }
 }
 

@@ -781,6 +781,29 @@ private let mixedReviewsSnapshotJSON = """
     #expect(snapshot.status.unresolvedThreads == 2)
 }
 
+@Test func snapshotCountsOnlyThreadsWhereIDidNotSpeakLast() async throws {
+    let threads = """
+    [{"isResolved":false,"resolvedBy":null,"comments":{"nodes":[{"author":{"login":"liam"},"createdAt":"2026-08-01T10:00:00Z"},{"author":{"login":"ordishs"},"createdAt":"2026-08-01T11:00:00Z"}]}},
+     {"isResolved":false,"resolvedBy":null,"comments":{"nodes":[{"author":{"login":"ordishs"},"createdAt":"2026-08-01T10:00:00Z"},{"author":{"login":"liam"},"createdAt":"2026-08-01T12:00:00Z"}]}},
+     {"isResolved":true,"resolvedBy":{"login":"liam"},"comments":{"nodes":[{"author":{"login":"liam"},"createdAt":"2026-08-01T09:00:00Z"}]}}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(threadsJSON: threads))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.unresolvedThreads == 2)
+    #expect(snapshot.status.threadsAwaitingMe == 1)
+}
+
+@Test func snapshotIgnoresOpenThreadsWhoseLastCommentIsABot() async throws {
+    let threads = """
+    [{"isResolved":false,"resolvedBy":null,"comments":{"nodes":[{"author":{"login":"github-actions","__typename":"Bot"},"createdAt":"2026-08-01T10:00:00Z"}]}},
+     {"isResolved":false,"resolvedBy":null,"comments":{"nodes":[{"author":{"login":"liam","__typename":"User"},"createdAt":"2026-08-01T10:00:00Z"}]}}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(threadsJSON: threads))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.unresolvedThreads == 2)
+    #expect(snapshot.status.threadsAwaitingMe == 1)
+}
+
 @Test func snapshotCountsNoUnresolvedThreadsWhenThereAreNone() async throws {
     let (client, _) = snapshotClient(snapshotJSON())
     let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")

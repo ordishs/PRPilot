@@ -88,8 +88,14 @@ private func status(
     #expect(column(issue(), facts: SidebarItemFacts(isWorking: true), issueStatus: .inReview) == .inProgress)
 }
 
-@Test func issueAgentHasReviewedIsReviewing() {
-    #expect(column(issue(), issueStatus: .reviewed) == .reviewing)
+@Test func issueAnAgentHasAnalysedStaysInProgressNotReviewing() {
+    #expect(column(issue(), issueStatus: .reviewed) == .inProgress)
+}
+
+@Test func issuesNeverLandInReviewing() {
+    for status in IssueWorkStatus.allCases {
+        #expect(column(issue(), issueStatus: status) != .reviewing)
+    }
 }
 
 @Test func taskWithoutResourcesIsNotStartedAndWithOneIsInProgress() {
@@ -218,4 +224,21 @@ private func status(
     let outdated = PRStatus(ci: .passing, mergeState: .blocked, readiness: .changesRequested,
                             changeRequests: ChangeRequestTally(current: 0, outdated: 1))
     #expect(column(pr(author: me), facts: SidebarItemFacts(hasReviewerUpdate: true), status: outdated) == .inProgress)
+}
+
+@Test func myPRWhoseOpenThreadsAllWaitOnTheReviewerIsAwaitingReview() {
+    let replied = PRStatus(ci: .passing, mergeState: .clean, readiness: .reviewRequired,
+                           unresolvedThreads: 2, threadsAwaitingMe: 0)
+    #expect(column(pr(author: me), status: replied) == .inReview)
+}
+
+@Test func myPRWithAThreadIHaveNotAnsweredIsInProgress() {
+    let open = PRStatus(ci: .passing, mergeState: .clean, readiness: .reviewRequired,
+                        unresolvedThreads: 2, threadsAwaitingMe: 1)
+    #expect(column(pr(author: me), status: open) == .inProgress)
+}
+
+@Test func anOlderPayloadWithoutTheAnswerCountTreatsEveryOpenThreadAsMine() {
+    let legacy = PRStatus(ci: .passing, mergeState: .clean, readiness: .reviewRequired, unresolvedThreads: 1)
+    #expect(column(pr(author: me), status: legacy) == .inProgress)
 }
