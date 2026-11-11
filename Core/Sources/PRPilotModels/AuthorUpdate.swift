@@ -27,11 +27,14 @@ public struct ReviewThreadSnapshot: Sendable, Equatable, Codable {
 
 extension ReviewThreadSnapshot {
     /// An open thread is somebody's turn. When the last comment is yours, the turn is theirs.
-    /// A bot's comment asks nobody for an answer, so it never makes the thread yours.
-    public func awaitsReply(from login: String) -> Bool {
+    /// A bot's comment asks nobody for an answer. A reviewer who approved after writing the
+    /// comment has nothing more to ask, so neither makes the thread yours.
+    public func awaitsReply(from login: String, approvedAt: [String: Date] = [:]) -> Bool {
         guard !isResolved else { return false }
         guard let last = comments.last else { return true }
-        return last.authorLogin != login && !last.isBot
+        if last.authorLogin == login || last.isBot { return false }
+        if let approved = approvedAt[last.authorLogin], approved >= last.createdAt { return false }
+        return true
     }
 }
 

@@ -224,3 +224,21 @@ private func thread(
     )
     #expect(!t.awaitsReply(from: "me"))
 }
+
+@Test func openThreadAwaitsNobodyWhenItsLastSpeakerApprovedAfterwards() {
+    let t = ReviewThreadSnapshot(
+        isResolved: false, resolvedByLogin: nil,
+        comments: [ThreadComment(authorLogin: "me", createdAt: at(1)), ThreadComment(authorLogin: "liam", createdAt: at(2))]
+    )
+    #expect(!t.awaitsReply(from: "me", approvedAt: ["liam": at(3)]))
+    #expect(!t.awaitsReply(from: "me", approvedAt: ["liam": at(2)]))
+}
+
+@Test func anApprovalBeforeTheCommentOrByAnotherPersonDoesNotClearTheThread() {
+    let t = ReviewThreadSnapshot(
+        isResolved: false, resolvedByLogin: nil,
+        comments: [ThreadComment(authorLogin: "liam", createdAt: at(5))]
+    )
+    #expect(t.awaitsReply(from: "me", approvedAt: ["liam": at(4)]))
+    #expect(t.awaitsReply(from: "me", approvedAt: ["sam": at(9)]))
+}

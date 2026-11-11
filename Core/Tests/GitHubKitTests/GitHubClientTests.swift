@@ -804,6 +804,21 @@ private let mixedReviewsSnapshotJSON = """
     #expect(snapshot.status.threadsAwaitingMe == 1)
 }
 
+@Test func snapshotIgnoresOpenThreadsWhoseLastSpeakerApprovedAfterwards() async throws {
+    let threads = """
+    [{"isResolved":false,"resolvedBy":null,"comments":{"nodes":[{"author":{"login":"liam","__typename":"User"},"createdAt":"2026-08-01T10:00:00Z"}]}},
+     {"isResolved":false,"resolvedBy":null,"comments":{"nodes":[{"author":{"login":"sam","__typename":"User"},"createdAt":"2026-08-01T10:00:00Z"}]}}]
+    """
+    let reviews = """
+    [{"author":{"login":"liam"},"state":"APPROVED","submittedAt":"2026-08-01T10:05:00Z","commit":{"oid":"a"}},
+     {"author":{"login":"sam"},"state":"APPROVED","submittedAt":"2026-08-01T09:00:00Z","commit":{"oid":"a"}}]
+    """
+    let (client, _) = snapshotClient(snapshotJSON(reviewsJSON: reviews, threadsJSON: threads))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+    #expect(snapshot.status.unresolvedThreads == 2)
+    #expect(snapshot.status.threadsAwaitingMe == 1)
+}
+
 @Test func snapshotCountsNoUnresolvedThreadsWhenThereAreNone() async throws {
     let (client, _) = snapshotClient(snapshotJSON())
     let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")

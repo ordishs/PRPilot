@@ -260,6 +260,11 @@ public struct GitHubClient: Sendable {
                 }
             )
         }
+        var approvedAt: [String: Date] = [:]
+        for review in pr.reviews.nodes where review.state == "APPROVED" {
+            guard let name = review.author?.login, let date = review.submittedAt else { continue }
+            approvedAt[name] = max(approvedAt[name] ?? date, date)
+        }
         let authorUpdatedAt = AuthorUpdate.latestUpdate(
             myLogin: login,
             authorLogin: pr.author?.login ?? "",
@@ -289,7 +294,7 @@ public struct GitHubClient: Sendable {
                     return ReviewSubmission(authorLogin: login, state: $0.state, submittedAt: $0.submittedAt)
                 }),
                 unresolvedThreads: threads.filter { !$0.isResolved }.count,
-                threadsAwaitingMe: threads.filter { $0.awaitsReply(from: login) }.count,
+                threadsAwaitingMe: threads.filter { $0.awaitsReply(from: login, approvedAt: approvedAt) }.count,
                 authorUpdatedAt: authorUpdatedAt,
                 reviewerUpdate: reviewerUpdate,
                 updatedAt: pr.updatedAt,

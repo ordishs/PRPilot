@@ -37,7 +37,9 @@ public struct ReviewerUpdate: Sendable, Equatable, Codable {
     /// has spoken after that is waiting on you, and the result returns to nil the moment you
     /// push or reply. That is what makes the badge clear itself.
     ///
-    /// The caller removes bots before passing events. Activity by you never counts.
+    /// A reviewer whose newest act is an approval has nothing left to ask, so none of their
+    /// activity counts. The caller removes bots before passing events. Activity by you never
+    /// counts.
     public static func latest(
         myLogin: String,
         events: [ReviewerEvent],
@@ -45,8 +47,11 @@ public struct ReviewerUpdate: Sendable, Equatable, Codable {
         headCommittedAt: Date?
     ) -> ReviewerUpdate? {
         let anchor = (myActivity + [headCommittedAt].compactMap { $0 }).max() ?? .distantPast
-        let fresh = events
-            .filter { $0.login.caseInsensitiveCompare(myLogin) != .orderedSame && $0.at > anchor }
+        let others = events.filter { $0.login.caseInsensitiveCompare(myLogin) != .orderedSame }
+        let newestKind = Dictionary(grouping: others, by: { $0.login.lowercased() })
+            .mapValues { $0.max { $0.at < $1.at }?.kind }
+        let fresh = others
+            .filter { $0.at > anchor && newestKind[$0.login.lowercased()] != .approved }
             .sorted { $0.at < $1.at }
         guard let newest = fresh.last else { return nil }
         let newestVerdict = fresh.last { $0.kind != .other }

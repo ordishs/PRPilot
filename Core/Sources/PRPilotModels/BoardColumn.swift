@@ -86,7 +86,8 @@ private func hasStarted(_ facts: SidebarItemFacts) -> Bool {
 
 private func myPRColumn(item: WorkItem, facts: SidebarItemFacts, status: PRStatus?) -> BoardColumn {
     if item.prState == .draft { return .inProgress }
-    if facts.ciFailing || facts.hasConflict || facts.isBehind || facts.isWorking { return .inProgress }
+    let ciNeedsFixing = facts.ciFailing && status?.readiness != .reviewRequired
+    if ciNeedsFixing || facts.hasConflict || facts.isBehind || facts.isWorking { return .inProgress }
     if facts.needsInput || facts.hasAuthorUpdate || facts.hasReviewerUpdate { return .inProgress }
     guard let status else { return .inReview }
     if status.readiness == .changesRequested {

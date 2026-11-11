@@ -242,3 +242,23 @@ private func status(
     let legacy = PRStatus(ci: .passing, mergeState: .clean, readiness: .reviewRequired, unresolvedThreads: 1)
     #expect(column(pr(author: me), status: legacy) == .inProgress)
 }
+
+@Test func myPRWithFailingCIThatWaitsOnReviewersIsAwaitingReview() {
+    let facts = SidebarItemFacts(ciFailing: true)
+    let waiting = status(ci: .failing, readiness: .reviewRequired)
+    #expect(column(pr(author: me), facts: facts, status: waiting) == .inReview)
+}
+
+@Test func myPRWithFailingCIAndNoWaitingReviewIsStillInProgress() {
+    let facts = SidebarItemFacts(ciFailing: true)
+    #expect(column(pr(author: me), facts: facts, status: status(ci: .failing, readiness: .approved)) == .inProgress)
+    #expect(column(pr(author: me), facts: facts, status: status(ci: .failing, readiness: .changesRequested)) == .inProgress)
+    #expect(column(pr(author: me), facts: facts) == .inProgress)
+}
+
+@Test func failingCIDoesNotHideAnOpenThreadOrAConflict() {
+    let facts = SidebarItemFacts(ciFailing: true)
+    #expect(column(pr(author: me), facts: facts, status: status(ci: .failing, threads: 1)) == .inProgress)
+    #expect(column(pr(author: me), facts: SidebarItemFacts(ciFailing: true, hasConflict: true),
+                   status: status(ci: .failing)) == .inProgress)
+}

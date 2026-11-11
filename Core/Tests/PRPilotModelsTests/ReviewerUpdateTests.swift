@@ -69,3 +69,27 @@ private func latest(
     #expect(!update.isUnseen(seenAt: at(100)))
     #expect(update.isUnseen(seenAt: at(99)))
 }
+
+@Test func reviewerWhoApprovedAfterCommentingIsNotAnUpdate() {
+    let r = latest(events: [
+        ReviewerEvent(login: "rev", at: at(100), kind: .other),
+        ReviewerEvent(login: "rev", at: at(130), kind: .approved),
+    ], head: at(50))
+    #expect(r == nil)
+}
+
+@Test func approvalBeforeALaterCommentStillCounts() {
+    let r = latest(events: [
+        ReviewerEvent(login: "rev", at: at(100), kind: .approved),
+        ReviewerEvent(login: "rev", at: at(130), kind: .other),
+    ], head: at(50))
+    #expect(r == ReviewerUpdate(at: at(130), requestedChanges: false))
+}
+
+@Test func anApprovalByOneReviewerDoesNotHideAnotherReviewersReply() {
+    let r = latest(events: [
+        ReviewerEvent(login: "a", at: at(100), kind: .approved),
+        ReviewerEvent(login: "b", at: at(120), kind: .other),
+    ], head: at(50))
+    #expect(r == ReviewerUpdate(at: at(120), requestedChanges: false))
+}
