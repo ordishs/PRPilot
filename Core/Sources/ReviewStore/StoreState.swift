@@ -5,4 +5,5 @@ struct StoreState: Codable, Sendable {
     var reviews: [WorkItem]
     var registeredRepos: [RegisteredRepo]
     var settings: Settings
+    var recentTrail: RecentTrail?
 }

@@ -63,6 +63,15 @@ public actor ReviewStore {
         try persist()
     }
 
+    public func recentTrail() -> RecentTrail {
+        state.recentTrail ?? RecentTrail()
+    }
+
+    public func updateRecentTrail(_ trail: RecentTrail) throws {
+        state.recentTrail = trail
+        try persist()
+    }
+
     private func persist() throws {
         let data = try ReviewStore.makeEncoder().encode(state)
         try data.write(to: fileURL, options: [.atomic])
@@ -88,7 +97,8 @@ public actor ReviewStore {
             schemaVersion: PRPilotModels.schemaVersion,
             reviews: [],
             registeredRepos: [],
-            settings: .default
+            settings: .default,
+            recentTrail: nil
         )
         let data = try makeEncoder().encode(initial)
         try data.write(to: url, options: [.atomic])

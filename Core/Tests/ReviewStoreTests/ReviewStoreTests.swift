@@ -152,3 +152,28 @@ private func sampleItem(number: Int = 944, title: String = "centrifuge fix") -> 
     #expect(reloadedItems.count == 1)
     #expect(reloadedItems[0].id == item.id)
 }
+
+@Test func recentTrailRoundTripsThroughDisk() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    var trail = RecentTrail()
+    trail.visit("a", at: Date(timeIntervalSince1970: 1_700_000_000))
+    trail.visit("b", at: Date(timeIntervalSince1970: 1_700_000_060))
+    try await store.updateRecentTrail(trail)
+
+    let reloaded = try ReviewStore(fileURL: url)
+
+    #expect(await reloaded.recentTrail() == trail)
+}
+
+@Test func storeWithoutTrailLoadsEmptyTrail() async throws {
+    let url = tempStoreURL()
+    _ = try ReviewStore(fileURL: url)
+    var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+    json.removeValue(forKey: "recentTrail")
+    try JSONSerialization.data(withJSONObject: json).write(to: url)
+
+    let reloaded = try ReviewStore(fileURL: url)
+
+    #expect(await reloaded.recentTrail() == RecentTrail())
+}
