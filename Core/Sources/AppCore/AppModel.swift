@@ -20,6 +20,7 @@ public enum ClaudePaneState: Sendable, Equatable {
 public final class AppModel {
     public private(set) var reviews: [WorkItem] = []
     public var selection: String?
+    public private(set) var recentTrail = RecentTrail()
     public private(set) var errorMessage: String?
     public private(set) var isAdding = false
     public private(set) var diffStates: [String: DiffLoadState] = [:]
@@ -157,6 +158,15 @@ public final class AppModel {
         reviews = await store.allItems()
         registeredRepos = await store.allRepos()
         settings = await store.settings()
+
+        let storedTrail = await store.recentTrail()
+        recentTrail = storedTrail
+        recentTrail.prune(keeping: Set(reviews.map(\.id)))
+
+        if recentTrail != storedTrail {
+            await persistTrail()
+        }
+
         switch settings.appearance {
         case .light: terminalIsDark = false
         case .dark: terminalIsDark = true
@@ -166,12 +176,18 @@ public final class AppModel {
             currentLogin = try? await client.fetchCurrentLogin()
         }
         if selection == nil {
-            selection = reviews
+            selection = recentTrail.entries.first?.itemID ?? reviews
                 .sorted { (a, b) in
                     (a.lastOpenedAt ?? a.addedAt) > (b.lastOpenedAt ?? b.addedAt)
                 }
                 .first?.id
         }
+
+        if let selection, recentTrail.entries.first?.itemID != selection,
+           reviews.contains(where: { $0.id == selection }) {
+            await recordVisit(selection, at: Date())
+        }
+
         startTickTimerIfNeeded()
         recomputeReviewQueue()
     }
@@ -1557,6 +1573,41 @@ public final class AppModel {
         }
     }
 
+    public struct RecentItem: Identifiable, Equatable, Sendable {
+        public let item: WorkItem
+        public let visitedAt: Date
+
+        public var id: String { item.id }
+    }
+
+    public var recentItems: [RecentItem] {
+        let live = Dictionary(reviews.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        return recentTrail.entries.compactMap { entry in
+            live[entry.itemID].map { RecentItem(item: $0, visitedAt: entry.visitedAt) }
+        }
+    }
+
+    public func jump(to itemID: String) {
+        guard reviews.contains(where: { $0.id == itemID }) else { return }
+
+        selection = itemID
+    }
+
+    private func recordVisit(_ id: String, at date: Date) async {
+        recentTrail.prune(keeping: Set(reviews.map(\.id)))
+        recentTrail.visit(id, at: date)
+        await persistTrail()
+    }
+
+    private func persistTrail() async {
+        do {
+            try await store.updateRecentTrail(recentTrail)
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
     public func selectedReview() -> WorkItem? {
         guard let selection else { return nil }
         return reviews.first { $0.id == selection }
@@ -1566,9 +1617,12 @@ public final class AppModel {
         errorMessage = nil
     }
 
-    public func markReviewOpened(_ id: String) async {
+    public func markReviewOpened(_ id: String, now: Date = Date()) async {
         guard var review = reviews.first(where: { $0.id == id }) else { return }
-        review.lastOpenedAt = Date()
+
+        await recordVisit(id, at: now)
+
+        review.lastOpenedAt = now
         do {
             try await store.upsertItem(review)
             reviews = await store.allItems()

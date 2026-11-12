@@ -5764,3 +5764,144 @@ private func askedQuestion(_ text: String) -> AskedQuestion {
 
     #expect(model.unansweredQuestions[review.id] == nil)
 }
+
+private func trailItem(_ number: Int) -> WorkItem {
+    WorkItem(
+        title: "trail \(number)",
+        repoKey: "github.com/o/r",
+        baseBranch: "main",
+        headBranch: "trail-\(number)",
+        prRef: PRRef(
+            owner: "o", repo: "r", number: number,
+            url: URL(string: "https://github.com/o/r/pull/\(number)")!,
+            authorLogin: "a"
+        ),
+        prState: .open,
+        origin: .added,
+        addedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+}
+
+@MainActor private func trailModel(at url: URL, seed: [WorkItem] = []) async throws -> AppModel {
+    let store = try ReviewStore(fileURL: url)
+    for item in seed { try await store.upsertItem(item) }
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+    return model
+}
+
+@Test @MainActor func openedTicketsEnterTheTrailNewestFirst() async throws {
+    let a = trailItem(1), b = trailItem(2)
+    let model = try await trailModel(at: tempStoreURL(), seed: [a, b])
+    let t1 = Date(timeIntervalSince1970: 1_800_000_000)
+    let t2 = Date(timeIntervalSince1970: 1_800_000_060)
+
+    await model.markReviewOpened(a.id, now: t1)
+    await model.markReviewOpened(b.id, now: t2)
+
+    #expect(model.recentItems.map(\.id) == [b.id, a.id])
+    #expect(model.recentItems[0].visitedAt == t2)
+}
+
+@Test @MainActor func reopenedTicketMovesToTheTopOnce() async throws {
+    let a = trailItem(1), b = trailItem(2)
+    let model = try await trailModel(at: tempStoreURL(), seed: [a, b])
+
+    await model.markReviewOpened(a.id)
+    await model.markReviewOpened(b.id)
+    await model.markReviewOpened(a.id)
+
+    #expect(model.recentItems.map(\.id) == [a.id, b.id])
+}
+
+@Test @MainActor func unknownTicketRecordsNothing() async throws {
+    let model = try await trailModel(at: tempStoreURL())
+
+    await model.markReviewOpened("nope")
+
+    #expect(model.recentTrail.entries.isEmpty)
+}
+
+@Test @MainActor func removedTicketLeavesTheTrail() async throws {
+    let a = trailItem(1), b = trailItem(2)
+    let model = try await trailModel(at: tempStoreURL(), seed: [a, b])
+    await model.markReviewOpened(a.id)
+    await model.markReviewOpened(b.id)
+
+    await model.removeReview(id: b.id)
+
+    #expect(model.recentItems.map(\.id) == [a.id])
+
+    await model.markReviewOpened(a.id)
+
+    #expect(model.recentTrail.entries.map(\.itemID) == [a.id])
+}
+
+@Test @MainActor func trailSurvivesAReload() async throws {
+    let url = tempStoreURL()
+    let a = trailItem(1), b = trailItem(2)
+    let model = try await trailModel(at: url, seed: [a, b])
+    await model.markReviewOpened(a.id)
+    await model.markReviewOpened(b.id)
+
+    let reloaded = try await trailModel(at: url)
+
+    #expect(reloaded.recentItems.map(\.id) == [b.id, a.id])
+}
+
+@Test @MainActor func loadPrunesTicketsThatAreGone() async throws {
+    let url = tempStoreURL()
+    let a = trailItem(1)
+    let seedStore = try ReviewStore(fileURL: url)
+    var stored = RecentTrail()
+    stored.visit("gone", at: Date(timeIntervalSince1970: 1))
+    stored.visit(a.id, at: Date(timeIntervalSince1970: 2))
+    try await seedStore.updateRecentTrail(stored)
+
+    let model = try await trailModel(at: url, seed: [a])
+
+    #expect(model.recentTrail.entries.map(\.itemID) == [a.id])
+    let persisted = await (try ReviewStore(fileURL: url)).recentTrail()
+
+    #expect(persisted.entries.map(\.itemID) == [a.id])
+}
+
+@Test @MainActor func ticketSelectedAtLoadEntersTheTrail() async throws {
+    let url = tempStoreURL()
+    let a = trailItem(1)
+    let model = try await trailModel(at: url, seed: [a])
+
+    #expect(model.selection == a.id)
+    #expect(model.recentTrail.entries.map(\.itemID) == [a.id])
+
+    await model.load()
+
+    #expect(model.recentTrail.entries.map(\.itemID) == [a.id])
+}
+
+@Test @MainActor func tabChangeShowsInTheTrailLabel() async throws {
+    let a = trailItem(1)
+    let model = try await trailModel(at: tempStoreURL(), seed: [a])
+    await model.markReviewOpened(a.id)
+
+    await model.setPane(.claude, for: a.id)
+
+    #expect(trailTabLabel(for: model.recentItems[0].item, defaultAgent: .claudeCode) == "Claude Code")
+
+    await model.setPane(.github, for: a.id)
+
+    #expect(trailTabLabel(for: model.recentItems[0].item, defaultAgent: .claudeCode) == "GitHub")
+}
+
+@Test @MainActor func jumpSelectsALiveTicketAndIgnoresADeadOne() async throws {
+    let a = trailItem(1), b = trailItem(2)
+    let model = try await trailModel(at: tempStoreURL(), seed: [a, b])
+
+    model.jump(to: b.id)
+
+    #expect(model.selection == b.id)
+
+    model.jump(to: "gone")
+
+    #expect(model.selection == b.id)
+}
