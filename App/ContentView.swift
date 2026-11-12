@@ -236,6 +236,9 @@ struct ContentView: View {
                     MainViewPicker(mode: $mainViewMode)
                 }
                 ToolbarItem {
+                    RecentButton(model: model, viewMode: $mainViewMode)
+                }
+                ToolbarItem {
                     Menu {
                         Picker("Sort", selection: sortBinding) {
                             ForEach(SidebarSort.allCases, id: \.self) { mode in
