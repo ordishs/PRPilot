@@ -92,3 +92,42 @@ struct RecentButton: View {
         }
     }
 }
+
+struct TrailSwitcherOverlay: View {
+    let model: AppModel
+    let controller: TrailSwitcherController
+
+    var body: some View {
+        if let highlight = controller.switcher.highlight {
+            let ids = controller.switcher.ids
+            let recents = Dictionary(model.recentItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let now = Date()
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Recent")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 2)
+
+                ForEach(Array(ids.enumerated()), id: \.element) { index, id in
+                    if let recent = recents[id] {
+                        TrailRow(
+                            model: model,
+                            recent: recent,
+                            isCurrent: index == 0,
+                            isHighlighted: index == highlight,
+                            now: now
+                        )
+                    }
+                }
+            }
+            .padding(8)
+            .frame(width: 420)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .shadow(radius: 20)
+            .transaction { $0.animation = nil }
+        }
+    }
+}

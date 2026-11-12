@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var filterSelection = SidebarFilterSelection()
     @AppStorage("mainViewMode") private var mainViewMode: MainViewMode = .list
+    @State private var trailSwitcher: TrailSwitcherController?
     @Environment(\.colorScheme) private var colorScheme
 
     private func facts(for review: WorkItem) -> SidebarItemFacts {
@@ -165,6 +166,31 @@ struct ContentView: View {
             case .board:
                 BoardView(model: model, webViewCache: webViewCache, viewMode: $mainViewMode)
             }
+        }
+        .overlay {
+            if let trailSwitcher {
+                TrailSwitcherOverlay(model: model, controller: trailSwitcher)
+            }
+        }
+        .background(WindowAccessor { trailSwitcher?.window = $0 })
+        .onAppear {
+            guard trailSwitcher == nil else { return }
+
+            let controller = TrailSwitcherController(model: model) { itemID in
+                mainViewMode = .list
+                model.jump(to: itemID)
+            }
+            controller.start()
+            trailSwitcher = controller
+        }
+        .onDisappear {
+            trailSwitcher?.stop()
+            trailSwitcher = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
+            guard let trailSwitcher, (note.object as? NSWindow) === trailSwitcher.window else { return }
+
+            trailSwitcher.cancel()
         }
         .frame(minWidth: 900, minHeight: 600)
         .alert("Couldn't add PR", isPresented: Binding(
