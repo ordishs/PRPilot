@@ -77,3 +77,20 @@ private func prItem() -> WorkItem {
     let rendered = LaunchPrompt.render("/review {url}", for: prItem(), url: nil)
     #expect(rendered == "/review ")
 }
+
+@Test func rendersBaseFromTheItemAndChecksFromTheExtras() {
+    let rendered = LaunchPrompt.render(
+        "rebase on {base}; failed: {checks}",
+        for: prItem(),
+        url: prURL,
+        extras: ["{checks}": "build, lint"]
+    )
+
+    #expect(rendered == "rebase on main; failed: build, lint")
+}
+
+@Test func checksPlaceholderStaysVerbatimWithoutExtras() {
+    let rendered = LaunchPrompt.render("failed: {checks}", for: prItem(), url: prURL)
+
+    #expect(rendered == "failed: {checks}")
+}

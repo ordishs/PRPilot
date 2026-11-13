@@ -91,6 +91,18 @@ public struct Settings: Codable, Sendable, Equatable {
     /// is a different risk from driving an agent that runs with permissions skipped: with
     /// this on, whoever holds the token can tell Claude to do anything in your worktrees.
     public var gatewayAllowPrompts: Bool
+    /// Whether the coordinator starts the next step itself. Off by default: it notifies and
+    /// offers the step instead.
+    public var coordinatorAuto: Bool
+    /// First prompt of a fix session for failing CI. Placeholders: the usual ones, `{checks}`
+    /// and `{base}`.
+    public var ciFixPromptTemplate: String
+    /// First prompt of a fix session for requested changes and open review threads.
+    public var changesFixPromptTemplate: String
+    /// First prompt of a fix session for a merge conflict.
+    public var conflictFixPromptTemplate: String
+    /// First prompt of the coordinator agent.
+    public var coordinatorPromptTemplate: String
 
     private enum LegacyKeys: String, CodingKey {
         case discoveryQueries
@@ -148,6 +160,11 @@ public struct Settings: Codable, Sendable, Equatable {
         case gatewayPort
         case gatewayBindScope
         case gatewayAllowPrompts
+        case coordinatorAuto
+        case ciFixPromptTemplate
+        case changesFixPromptTemplate
+        case conflictFixPromptTemplate
+        case coordinatorPromptTemplate
     }
 
     public init(
@@ -196,7 +213,12 @@ public struct Settings: Codable, Sendable, Equatable {
         gatewayEnabled: Bool = false,
         gatewayPort: Int = 8776,
         gatewayBindScope: GatewayBindScope = .loopback,
-        gatewayAllowPrompts: Bool = false
+        gatewayAllowPrompts: Bool = false,
+        coordinatorAuto: Bool = false,
+        ciFixPromptTemplate: String = Settings.defaultCIFixPromptTemplate,
+        changesFixPromptTemplate: String = Settings.defaultChangesFixPromptTemplate,
+        conflictFixPromptTemplate: String = Settings.defaultConflictFixPromptTemplate,
+        coordinatorPromptTemplate: String = Settings.defaultCoordinatorPromptTemplate
     ) {
         self.managedRoot = managedRoot
         self.reviewRequestQueries = reviewRequestQueries
@@ -244,6 +266,11 @@ public struct Settings: Codable, Sendable, Equatable {
         self.gatewayPort = gatewayPort
         self.gatewayBindScope = gatewayBindScope
         self.gatewayAllowPrompts = gatewayAllowPrompts
+        self.coordinatorAuto = coordinatorAuto
+        self.ciFixPromptTemplate = ciFixPromptTemplate
+        self.changesFixPromptTemplate = changesFixPromptTemplate
+        self.conflictFixPromptTemplate = conflictFixPromptTemplate
+        self.coordinatorPromptTemplate = coordinatorPromptTemplate
     }
 
     public init(from decoder: Decoder) throws {
@@ -315,6 +342,15 @@ public struct Settings: Codable, Sendable, Equatable {
         gatewayPort = try c.decodeIfPresent(Int.self, forKey: .gatewayPort) ?? 8776
         gatewayBindScope = try c.decodeIfPresent(GatewayBindScope.self, forKey: .gatewayBindScope) ?? .loopback
         gatewayAllowPrompts = try c.decodeIfPresent(Bool.self, forKey: .gatewayAllowPrompts) ?? false
+        coordinatorAuto = try c.decodeIfPresent(Bool.self, forKey: .coordinatorAuto) ?? false
+        ciFixPromptTemplate = try c.decodeIfPresent(String.self, forKey: .ciFixPromptTemplate)
+            ?? Settings.defaultCIFixPromptTemplate
+        changesFixPromptTemplate = try c.decodeIfPresent(String.self, forKey: .changesFixPromptTemplate)
+            ?? Settings.defaultChangesFixPromptTemplate
+        conflictFixPromptTemplate = try c.decodeIfPresent(String.self, forKey: .conflictFixPromptTemplate)
+            ?? Settings.defaultConflictFixPromptTemplate
+        coordinatorPromptTemplate = try c.decodeIfPresent(String.self, forKey: .coordinatorPromptTemplate)
+            ?? Settings.defaultCoordinatorPromptTemplate
 
         if let rrq = try c.decodeIfPresent([DiscoveryQuery].self, forKey: .reviewRequestQueries) {
             reviewRequestQueries = rrq
@@ -344,6 +380,35 @@ public struct Settings: Codable, Sendable, Equatable {
     /// than a flag, so the same prose defaults apply.
     public static let defaultCodexReviewPromptTemplate = "Review the pull request at {url}."
     public static let defaultCodexIssuePromptTemplate = "Start work on issue {number}."
+
+    static let fixPromptRules = """
+        Commit the fix. Push with `git push --force-with-lease`. Do not merge the PR. \
+        Do not post a review or a comment. Write replies to review comments as drafts in your output.
+        """
+
+    public static let defaultCIFixPromptTemplate = """
+        CI fails on {url} (#{number}). The failed checks are: {checks}. \
+        Find the cause, fix it and run the tests. \
+        \(Settings.fixPromptRules)
+        """
+
+    public static let defaultChangesFixPromptTemplate = """
+        Reviewers asked for changes on {url} (#{number}). \
+        Read the open review comments with `gh`, then make the fixes and run the tests. \
+        \(Settings.fixPromptRules)
+        """
+
+    public static let defaultConflictFixPromptTemplate = """
+        {url} (#{number}) conflicts with {base}. \
+        Rebase the branch onto origin/{base}, resolve the conflicts and run the tests. \
+        \(Settings.fixPromptRules)
+        """
+
+    public static let defaultCoordinatorPromptTemplate = """
+        You coordinate my open tickets. Read state.json in this directory first. \
+        Use `gh` and `git` to read more. Answer in short lists with ticket numbers. \
+        Never merge a PR. Never post a review or a comment. Never push.
+        """
 
     public static let defaultReviewRequestQueries: [DiscoveryQuery] = [
         DiscoveryQuery(text: "review-requested:@me is:open"),

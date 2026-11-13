@@ -177,3 +177,50 @@ private func sampleItem(number: Int = 944, title: String = "centrifuge fix") -> 
 
     #expect(await reloaded.recentTrail() == RecentTrail())
 }
+
+@Test func handledCausesAndAutoLogSurviveAReload() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    let entry = AutoLogEntry(
+        at: Date(timeIntervalSince1970: 1_700_000_000), itemID: "a", title: "#1 fix",
+        kase: .ciRed, action: "start fix", result: "started"
+    )
+    try await store.setHandledCauses(["a|3|h1": .acted, "b|6|h2": .notified])
+    try await store.appendAutoLog(entry)
+
+    let reloaded = try ReviewStore(fileURL: url)
+
+    #expect(await reloaded.handledCauses() == ["a|3|h1": .acted, "b|6|h2": .notified])
+    #expect(await reloaded.autoLog() == [entry])
+}
+
+@Test func autoLogKeepsTheLastFiftyEntries() async throws {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+
+    for index in 0..<60 {
+        try await store.appendAutoLog(AutoLogEntry(
+            at: Date(timeIntervalSince1970: Double(index)), itemID: "a", title: "t",
+            kase: .behind, action: "rebase", result: "\(index)"
+        ))
+    }
+
+    let log = await store.autoLog()
+
+    #expect(log.count == 50)
+    #expect(log.first?.result == "10")
+    #expect(log.last?.result == "59")
+}
+
+@Test func storeWithoutCausesOrLogLoadsEmpty() async throws {
+    let url = tempStoreURL()
+    _ = try ReviewStore(fileURL: url)
+    var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+    json.removeValue(forKey: "handledCauses")
+    json.removeValue(forKey: "autoLog")
+    try JSONSerialization.data(withJSONObject: json).write(to: url)
+
+    let reloaded = try ReviewStore(fileURL: url)
+
+    #expect(await reloaded.handledCauses().isEmpty)
+    #expect(await reloaded.autoLog().isEmpty)
+}

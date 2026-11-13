@@ -6,4 +6,6 @@ struct StoreState: Codable, Sendable {
     var registeredRepos: [RegisteredRepo]
     var settings: Settings
     var recentTrail: RecentTrail?
+    var handledCauses: [String: HandledKind]?
+    var autoLog: [AutoLogEntry]?
 }

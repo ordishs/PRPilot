@@ -8,7 +8,7 @@ import PRPilotModels
 /// change. The rendered string is passed as a single shell-escaped argument, so quotes and
 /// newlines in a template are safe.
 public enum LaunchPrompt {
-    static let placeholders = ["{url}", "{number}", "{owner}", "{repo}", "{title}"]
+    static let placeholders = ["{url}", "{number}", "{owner}", "{repo}", "{title}", "{base}", "{checks}"]
 
     /// Sentence that points a newly launched agent at the handover note.
     ///
@@ -22,8 +22,13 @@ public enum LaunchPrompt {
         """
     }
 
-    public static func render(_ template: String, for item: WorkItem, url: URL?) -> String {
-        let body = renderTemplate(template, for: item, url: url)
+    public static func render(
+        _ template: String,
+        for item: WorkItem,
+        url: URL?,
+        extras: [String: String] = [:]
+    ) -> String {
+        let body = renderTemplate(template, for: item, url: url, extras: extras)
         guard let handover = item.pendingHandoverPath else { return body }
         // A blank template still gets the pointer. Otherwise a user who deliberately launches
         // with no prompt would silently lose the handover.
@@ -31,7 +36,12 @@ public enum LaunchPrompt {
         return handoverPointer(handover) + "\n\n" + body
     }
 
-    private static func renderTemplate(_ template: String, for item: WorkItem, url: URL?) -> String {
+    private static func renderTemplate(
+        _ template: String,
+        for item: WorkItem,
+        url: URL?,
+        extras: [String: String]
+    ) -> String {
         guard !template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
         var rendered = template
         let values: [String: String] = [
@@ -40,7 +50,8 @@ public enum LaunchPrompt {
             "{owner}": item.owner,
             "{repo}": item.repo,
             "{title}": item.title,
-        ]
+            "{base}": item.baseBranch,
+        ].merging(extras) { _, extra in extra }
         // Only known placeholders are substituted. An unknown one is left verbatim so a typo
         // shows up in the transcript instead of silently rendering a different prompt.
         for (placeholder, value) in values {

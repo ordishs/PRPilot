@@ -72,6 +72,26 @@ public actor ReviewStore {
         try persist()
     }
 
+    public func handledCauses() -> [String: HandledKind] {
+        state.handledCauses ?? [:]
+    }
+
+    public func setHandledCauses(_ causes: [String: HandledKind]) throws {
+        state.handledCauses = causes
+        try persist()
+    }
+
+    public func autoLog() -> [AutoLogEntry] {
+        state.autoLog ?? []
+    }
+
+    public func appendAutoLog(_ entry: AutoLogEntry) throws {
+        state.autoLog = Array(((state.autoLog ?? []) + [entry]).suffix(Self.autoLogLimit))
+        try persist()
+    }
+
+    private static let autoLogLimit = 50
+
     private func persist() throws {
         let data = try ReviewStore.makeEncoder().encode(state)
         try data.write(to: fileURL, options: [.atomic])
