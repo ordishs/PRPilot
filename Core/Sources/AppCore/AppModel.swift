@@ -222,6 +222,7 @@ public final class AppModel {
 
         startTickTimerIfNeeded()
         recomputeReviewQueue()
+        recomputeNextUp()
     }
 
     private func startTickTimerIfNeeded() {

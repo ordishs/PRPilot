@@ -22,6 +22,9 @@ struct SettingsView: View {
             ClaudeSettingsTab(model: model)
                 .tabItem { Label("Claude", systemImage: "terminal") }
 
+            CoordinatorSettingsTab(model: model)
+                .tabItem { Label("Coordinator", systemImage: "list.number") }
+
             RemoteSettingsTab(model: model)
                 .tabItem { Label("Remote", systemImage: "iphone") }
         }
@@ -565,6 +568,82 @@ private struct ClaudeSettingsTab: View {
 /// The listener binds to loopback, so `tailscale serve` is the only thing that can reach it
 /// from another device. The token is what authenticates — a proxy header cannot, because any
 /// local process can forge one.
+private struct CoordinatorSettingsTab: View {
+    let model: AppModel
+
+    @State private var auto = false
+    @State private var ciFix = ""
+    @State private var changesFix = ""
+    @State private var conflictFix = ""
+    @State private var coordinatorPrompt = ""
+
+    private var edited: [String] { [ciFix, changesFix, conflictFix, coordinatorPrompt] }
+
+    var body: some View {
+        Form {
+            Section("AUTO mode") {
+                Toggle("Start the next step without asking", isOn: $auto)
+                Text("Off: PR Pilot tells you and offers the step. On: it starts a review, a fix, or a rebase with a push, one time for each cause. It never merges a PR and never posts a review or a comment. It obeys the live session limit and never stops a running agent.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("On Claude Code, the sessions AUTO starts launch with deny rules for merge, review, comment and GitHub API writes. On pi and codex the limit rests on the prompt alone.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Fix prompts") {
+                promptEditor(title: "CI fails", text: $ciFix, defaultValue: Settings.defaultCIFixPromptTemplate)
+                promptEditor(title: "Changes requested", text: $changesFix, defaultValue: Settings.defaultChangesFixPromptTemplate)
+                promptEditor(title: "Merge conflict", text: $conflictFix, defaultValue: Settings.defaultConflictFixPromptTemplate)
+                Text("Placeholders: {url}, {number}, {owner}, {repo}, {title}, {base}, {checks}. Keep the lines that forbid a merge, a review, and a comment: the prompt is the only limit on pi and codex.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Coordinator agent") {
+                promptEditor(title: "Launch prompt", text: $coordinatorPrompt, defaultValue: Settings.defaultCoordinatorPromptTemplate)
+                Text("The coordinator reads a state file for every ticket and answers your questions. On Claude Code it launches with deny rules for merge, review, comment, GitHub API writes, and git push. On pi and codex the prompt is the only limit.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear {
+            auto = model.settings.coordinatorAuto
+            ciFix = model.settings.ciFixPromptTemplate
+            changesFix = model.settings.changesFixPromptTemplate
+            conflictFix = model.settings.conflictFixPromptTemplate
+            coordinatorPrompt = model.settings.coordinatorPromptTemplate
+        }
+        .onChange(of: auto) { _, _ in commit() }
+        .onChange(of: edited) { _, _ in commit() }
+    }
+
+    private func promptEditor(title: String, text: Binding<String>, defaultValue: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title).font(.callout.weight(.medium))
+                Spacer()
+                Button("Reset") { text.wrappedValue = defaultValue }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .disabled(text.wrappedValue == defaultValue)
+            }
+            TextEditor(text: text)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 68)
+                .padding(4)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+        }
+    }
+
+    private func commit() {
+        var updated = model.settings
+        updated.coordinatorAuto = auto
+        updated.ciFixPromptTemplate = ciFix
+        updated.changesFixPromptTemplate = changesFix
+        updated.conflictFixPromptTemplate = conflictFix
+        updated.coordinatorPromptTemplate = coordinatorPrompt
+        Task { await model.updateSettings(updated) }
+    }
+}
+
 private struct RemoteSettingsTab: View {
     let model: AppModel
 

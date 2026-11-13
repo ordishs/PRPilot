@@ -32,6 +32,9 @@ struct ClaudePaneView: View {
             case .sessionLive:
                 if let session = model.claudeSessions[review.id] {
                     VStack(spacing: 0) {
+                        if model.hasAutoLimits(review.id) {
+                            AutoLimitsBadge()
+                        }
                         exitOverlay(for: session)
                         if let questions = model.unansweredQuestions[review.id] {
                             ForEach(questions) { question in
@@ -312,7 +315,7 @@ private struct ExitBanner: View {
     }
 }
 
-private struct TerminalHost: NSViewRepresentable {
+struct TerminalHost: NSViewRepresentable {
     let session: AgentSession
 
     func makeNSView(context: Context) -> NSView {
@@ -335,4 +338,23 @@ private struct TerminalHost: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+struct AutoLimitsBadge: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "lock.fill")
+            Text("AUTO limits")
+        }
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(.orange)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Color.orange.opacity(0.15))
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.top, 6)
+        .help("PR Pilot started this session on its own. It cannot merge a PR or post a review or comment. Restart the session to remove the limits.")
+    }
 }

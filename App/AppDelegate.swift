@@ -2,9 +2,10 @@ import AppKit
 import AppCore
 import GatewayKit
 import SwiftUI
+import UserNotifications
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     var model: AppModel?
 
     private var quitWindow: NSWindow?
@@ -16,6 +17,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // versus the crisp system UI. Disabling CG font smoothing for our process
         // overrides it, so text renders sharp like the rest of macOS.
         UserDefaults.standard.set(true, forKey: "CGFontRenderingFontSmoothingDisabled")
+        UNUserNotificationCenter.current().delegate = self
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let info = response.notification.request.content.userInfo
+        let reviewID = info["reviewID"] as? String
+        let isNeedsYou = (info["kind"] as? String) == UserNotificationsPoster.needsYouKind
+
+        Task { @MainActor in
+            if isNeedsYou, let reviewID, let model = self.model {
+                model.jump(to: reviewID)
+                model.coordinatorPanelOpen = true
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+
+        completionHandler()
     }
 
     /// Starts or stops the gateway to match Settings. Called once the model has loaded and

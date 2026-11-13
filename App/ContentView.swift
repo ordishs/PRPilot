@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var filterSelection = SidebarFilterSelection()
     @AppStorage("mainViewMode") private var mainViewMode: MainViewMode = .list
     @State private var trailSwitcher: TrailSwitcherController?
+    @AppStorage("coordinatorPanelWidth") private var coordinatorPanelWidth: Double = 360
     @Environment(\.colorScheme) private var colorScheme
 
     private func facts(for review: WorkItem) -> SidebarItemFacts {
@@ -159,12 +160,20 @@ struct ContentView: View {
     }
 
     var body: some View {
-        Group {
-            switch mainViewMode {
-            case .list:
-                splitView
-            case .board:
-                BoardView(model: model, webViewCache: webViewCache, viewMode: $mainViewMode)
+        HStack(spacing: 0) {
+            Group {
+                switch mainViewMode {
+                case .list:
+                    splitView
+                case .board:
+                    BoardView(model: model, webViewCache: webViewCache, viewMode: $mainViewMode)
+                }
+            }
+
+            if model.coordinatorPanelOpen {
+                CoordinatorResizeHandle(width: $coordinatorPanelWidth)
+                CoordinatorPanel(model: model, viewMode: $mainViewMode)
+                    .frame(width: coordinatorPanelWidth)
             }
         }
         .overlay {
@@ -263,6 +272,9 @@ struct ContentView: View {
                 }
                 ToolbarItem {
                     RecentButton(model: model, viewMode: $mainViewMode)
+                }
+                ToolbarItem {
+                    CoordinatorPill(model: model)
                 }
                 ToolbarItem {
                     Menu {

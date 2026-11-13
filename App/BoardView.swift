@@ -95,6 +95,7 @@ struct BoardView: View {
         .toolbar {
             ToolbarItem { MainViewPicker(mode: $viewMode) }
             ToolbarItem { RecentButton(model: model, viewMode: $viewMode) }
+            ToolbarItem { CoordinatorPill(model: model) }
             ToolbarItem {
                 Button {
                     Task { await model.refreshAllNow() }
