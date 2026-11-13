@@ -43,6 +43,7 @@ public final class AppModel {
     public private(set) var coordinatorError: String?
     private var coordinatorStartedAt = Date()
     private var coordinatorSessionIDs: [String: String] = [:]
+    private var needsCauseBaseline = false
     private var loggedSkips: Set<String> = []
     private var autoLimitSessions: Set<String> = []
     private var localConflicts: [String: String] = [:]
@@ -185,6 +186,7 @@ public final class AppModel {
         reviews = await store.allItems()
         registeredRepos = await store.allRepos()
         settings = await store.settings()
+        needsCauseBaseline = !(await store.hasHandledCauses())
         handledCauses = await store.handledCauses()
         autoLog = await store.autoLog()
         coordinatorSessionIDs = await store.coordinatorSessionIDs()
@@ -1960,9 +1962,30 @@ public final class AppModel {
 
     /// Refreshes the given items with one batched read of GitHub, however many there are. On
     /// failure the previous status stays put — a transient error must not blank the chips.
-    private func refreshReviewStates(ids: [String], now: Date) async {
+    private func refreshReviewStates(ids: [String], now: Date, isFullRefresh: Bool = false) async {
         await fetchReviewStates(ids: ids, now: now)
+
+        if isFullRefresh {
+            await baselineCausesIfNeeded(now: now)
+        }
+
         await runCoordinatorPass()
+    }
+
+    /// The first full refresh of a store that has never held coordinator state marks every
+    /// row it finds as already notified. Without it, switching the coordinator on would post
+    /// one notification for each ticket that already needed the user.
+    private func baselineCausesIfNeeded(now: Date) async {
+        guard needsCauseBaseline else { return }
+
+        needsCauseBaseline = false
+        recomputeNextUp(now: now)
+
+        for row in nextUpRows where handledCauses[row.cause.key] == nil {
+            handledCauses[row.cause.key] = .notified
+        }
+
+        try? await store.setHandledCauses(handledCauses)
     }
 
     private func fetchReviewStates(ids: [String], now: Date) async {
@@ -2040,7 +2063,7 @@ public final class AppModel {
         let ids = reviews
             .filter { $0.prState != .merged && $0.prState != .closed }
             .map(\.id)
-        await refreshReviewStates(ids: ids, now: Date())
+        await refreshReviewStates(ids: ids, now: Date(), isFullRefresh: true)
         let stamp = Date()
         for id in ids { lastRefreshedAt[id] = stamp }
     }

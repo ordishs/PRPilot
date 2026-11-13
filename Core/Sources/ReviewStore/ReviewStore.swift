@@ -72,6 +72,10 @@ public actor ReviewStore {
         try persist()
     }
 
+    public func hasHandledCauses() -> Bool {
+        state.handledCauses != nil
+    }
+
     public func handledCauses() -> [String: HandledKind] {
         state.handledCauses ?? [:]
     }

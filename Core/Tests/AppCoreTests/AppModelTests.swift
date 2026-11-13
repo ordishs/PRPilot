@@ -6698,3 +6698,40 @@ private func stateFile(_ directory: URL) throws -> [String: Any] {
 
     #expect(await (try ReviewStore(fileURL: url)).coordinatorSessionIDs()["claudeCode"] == sessionID)
 }
+
+@Test @MainActor func firstFullRefreshBaselinesExistingRowsWithoutNotifying() async throws {
+    let poster = StubNotificationPoster()
+    let old = withWorktree(myPR(60))
+    let fresh = withWorktree(myPR(61))
+    let model = try await coordinatorModel(at: tempStoreURL(), seed: [old, fresh], poster: poster)
+    model.setPRStatusForTesting(redCI(head: "h1"), for: old.id)
+
+    await model.refreshReviewStates()
+    await poster.settle()
+
+    #expect(await poster.needsYou.isEmpty)
+    #expect(model.nextUpRows.map(\.itemID) == [old.id])
+    #expect(model.handledCauses.count == 1)
+
+    model.setPRStatusForTesting(redCI(head: "h2"), for: fresh.id)
+    await model.refreshReviewStates()
+    await poster.waitForNeedsYou(atLeast: 1)
+
+    #expect(await poster.needsYou.map(\.reviewID) == [fresh.id])
+}
+
+@Test @MainActor func baselineHappensOnlyOnceAcrossReloads() async throws {
+    let url = tempStoreURL()
+    let item = withWorktree(myPR(62))
+    let first = try await coordinatorModel(at: url, seed: [item])
+    first.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+    await first.refreshReviewStates()
+
+    let poster = StubNotificationPoster()
+    let reloaded = try await coordinatorModel(at: url, poster: poster)
+    reloaded.setPRStatusForTesting(redCI(head: "h2"), for: item.id)
+    await reloaded.refreshReviewStates()
+    await poster.waitForNeedsYou(atLeast: 1)
+
+    #expect(await poster.needsYou.count == 1)
+}
