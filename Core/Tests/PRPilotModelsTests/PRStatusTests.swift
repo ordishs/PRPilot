@@ -149,3 +149,26 @@ import Foundation
     let legacy = Data(#"{"ci":"passing","readiness":"none"}"#.utf8)
     #expect(try JSONDecoder().decode(PRStatus.self, from: legacy).updatedAt == nil)
 }
+
+@Test func oldPayloadDecodesWithoutHeadOIDOrFailedChecks() throws {
+    let json = #"{"ci":"failing","mergeState":"clean","readiness":"none"}"#
+    let status = try JSONDecoder().decode(PRStatus.self, from: Data(json.utf8))
+
+    #expect(status.headOID == nil)
+    #expect(status.failedChecks == [])
+}
+
+@Test func headOIDAndFailedChecksSurviveARoundTrip() throws {
+    let status = PRStatus(ci: .failing, mergeState: .clean, readiness: .none, headOID: "abc", failedChecks: ["build"])
+    let decoded = try JSONDecoder().decode(PRStatus.self, from: JSONEncoder().encode(status))
+
+    #expect(decoded.headOID == "abc")
+    #expect(decoded.failedChecks == ["build"])
+}
+
+@Test func checkFailureRuleMatchesAggregation() {
+    #expect(PRStatus.isFailure(CICheck(status: "COMPLETED", conclusion: "TIMED_OUT")))
+    #expect(PRStatus.isFailure(CICheck(state: "ERROR")))
+    #expect(!PRStatus.isFailure(CICheck(status: "COMPLETED", conclusion: "SUCCESS")))
+    #expect(!PRStatus.isFailure(CICheck(state: "PENDING")))
+}

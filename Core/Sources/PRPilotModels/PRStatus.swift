@@ -75,6 +75,11 @@ public struct PRStatus: Codable, Sendable, Equatable {
     public var updatedAt: Date?
     /// Standing requests for changes, split by whether they were made on the current head.
     public var changeRequests: ChangeRequestTally
+    /// The head commit these signals describe. A new push makes a new head, so a case that
+    /// recurs on it is a new cause for the coordinator.
+    public var headOID: String?
+    /// Names of the checks that fail on the head commit.
+    public var failedChecks: [String]
 
     public var isBehind: Bool { mergeState == .behind }
 
@@ -90,7 +95,9 @@ public struct PRStatus: Codable, Sendable, Equatable {
         authorUpdatedAt: Date? = nil,
         reviewerUpdate: ReviewerUpdate? = nil,
         updatedAt: Date? = nil,
-        changeRequests: ChangeRequestTally = ChangeRequestTally()
+        changeRequests: ChangeRequestTally = ChangeRequestTally(),
+        headOID: String? = nil,
+        failedChecks: [String] = []
     ) {
         self.ci = ci
         self.mergeState = mergeState
@@ -102,6 +109,8 @@ public struct PRStatus: Codable, Sendable, Equatable {
         self.reviewerUpdate = reviewerUpdate
         self.updatedAt = updatedAt
         self.changeRequests = changeRequests
+        self.headOID = headOID
+        self.failedChecks = failedChecks
     }
 
     /// Tolerates a payload written before `mergeState`, `approvalCount` and
@@ -118,6 +127,8 @@ public struct PRStatus: Codable, Sendable, Equatable {
         reviewerUpdate = try container.decodeIfPresent(ReviewerUpdate.self, forKey: .reviewerUpdate)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
         changeRequests = try container.decodeIfPresent(ChangeRequestTally.self, forKey: .changeRequests) ?? ChangeRequestTally()
+        headOID = try container.decodeIfPresent(String.self, forKey: .headOID)
+        failedChecks = try container.decodeIfPresent([String].self, forKey: .failedChecks) ?? []
     }
 
     /// Whether nothing but a click stands between this PR and a merge. GitHub computes the
@@ -154,26 +165,38 @@ public struct PRStatus: Codable, Sendable, Equatable {
             .count
     }
 
+    public static func isFailure(_ check: CICheck) -> Bool {
+        if let conclusion = check.conclusion, !conclusion.isEmpty {
+            switch conclusion.uppercased() {
+            case "FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE":
+                return true
+            default:
+                return false
+            }
+        }
+
+        if let status = check.status, !status.isEmpty { return false }
+
+        switch check.state?.uppercased() {
+        case "FAILURE", "ERROR": return true
+        default: return false
+        }
+    }
+
     public static func aggregateCI(_ checks: [CICheck]) -> CIStatus {
         var anyChecked = false
         var anyPending = false
         for c in checks {
+            if isFailure(c) { return .failing }
+
             if let conclusion = c.conclusion, !conclusion.isEmpty {
                 anyChecked = true
-                switch conclusion.uppercased() {
-                case "FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE":
-                    return .failing
-                default:
-                    break
-                }
             } else if let status = c.status, !status.isEmpty {
                 anyChecked = true
                 if status.uppercased() != "COMPLETED" { anyPending = true }
             } else if let state = c.state, !state.isEmpty {
                 anyChecked = true
                 switch state.uppercased() {
-                case "FAILURE", "ERROR":
-                    return .failing
                 case "PENDING", "EXPECTED":
                     anyPending = true
                 default:

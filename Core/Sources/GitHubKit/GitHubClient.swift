@@ -298,7 +298,9 @@ public struct GitHubClient: Sendable {
                 authorUpdatedAt: authorUpdatedAt,
                 reviewerUpdate: reviewerUpdate,
                 updatedAt: pr.updatedAt,
-                changeRequests: Self.changeRequests(for: pr)
+                changeRequests: Self.changeRequests(for: pr),
+                headOID: pr.headRefOid,
+                failedChecks: Self.failedCheckNames(rollup: headCommit?.statusCheckRollup)
             )
         )
     }
@@ -359,6 +361,15 @@ public struct GitHubClient: Sendable {
         )
     }
 
+    static func failedCheckNames(rollup: GHSnapshotResponse.StatusCheckRollup?) -> [String] {
+        (rollup?.contexts.nodes ?? []).compactMap { node in
+            guard PRStatus.isFailure(CICheck(status: node.status, conclusion: node.conclusion, state: node.state)) else {
+                return nil
+            }
+            return node.name ?? node.context
+        }
+    }
+
     /// `contexts` is paginated at 100. Within that, aggregate the individual checks exactly
     /// as before; beyond it an unfetched check could hide a failure, so defer to the
     /// rollup's own state rather than report a wrong answer confidently.
@@ -395,8 +406,8 @@ public struct GitHubClient: Sendable {
           commits(last:1){nodes{commit{ committedDate
             statusCheckRollup{ state contexts(first:100){ totalCount nodes{
               __typename
-              ... on CheckRun{ status conclusion }
-              ... on StatusContext{ state }
+              ... on CheckRun{ name status conclusion }
+              ... on StatusContext{ context state }
             }}}
           }}}
           reviews(last:100){nodes{author{login __typename} state submittedAt commit{oid}}}
@@ -650,6 +661,8 @@ struct GHSnapshotResponse: Decodable {
     }
 
     struct Context: Decodable {
+        let name: String?
+        let context: String?
         let status: String?
         let conclusion: String?
         let state: String?

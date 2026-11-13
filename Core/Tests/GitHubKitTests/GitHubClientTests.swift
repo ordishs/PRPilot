@@ -386,14 +386,16 @@ private func snapshotJSON(
     threadsJSON: String = "[]",
     timelineJSON: String = "[]",
     commentsJSON: String = "[]",
-    updatedAt: String = "2026-08-01T00:00:00Z"
+    updatedAt: String = "2026-08-01T00:00:00Z",
+    headRefOid: String? = nil
 ) -> String {
+    let oid = headRefOid.map { "\"\($0)\"" } ?? "null"
     let decision = reviewDecision.map { "\"\($0)\"" } ?? "null"
     let committed = committedDate.map { "\"\($0)\"" } ?? "null"
     return """
     {"data":{"r0":{"pullRequest":{
       "state":"\(state)","isDraft":\(isDraft),"reviewDecision":\(decision),
-      "mergeStateStatus":"\(mergeStateStatus)","updatedAt":"\(updatedAt)","author":{"login":"\(author)"},
+      "mergeStateStatus":"\(mergeStateStatus)","updatedAt":"\(updatedAt)","headRefOid":\(oid),"author":{"login":"\(author)"},
       "commits":{"nodes":[{"commit":{"committedDate":\(committed),"statusCheckRollup":\(rollupJSON)}}]},
       "reviews":{"nodes":\(reviewsJSON)},
       "reviewThreads":{"nodes":\(threadsJSON)},
@@ -1084,4 +1086,34 @@ private func refs(_ numbers: ClosedRange<Int>) -> [PRLocator] {
     let query = GitHubClient.snapshotQuery(count: 1)
     #expect(query.contains("headRefOid"))
     #expect(query.contains("commit{oid}"))
+}
+
+@Test func snapshotCarriesHeadOIDAndFailedCheckNames() async throws {
+    let rollup = """
+    {"state":"FAILURE","contexts":{"totalCount":4,"nodes":[
+      {"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"FAILURE"},
+      {"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"SUCCESS"},
+      {"__typename":"StatusContext","context":"ci/x","state":"ERROR"},
+      {"__typename":"StatusContext","context":"ci/y","state":"SUCCESS"}]}}
+    """
+    let (client, _) = snapshotClient(snapshotJSON(rollupJSON: rollup, headRefOid: "abc"))
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+
+    #expect(snapshot.status.headOID == "abc")
+    #expect(snapshot.status.failedChecks == ["build", "ci/x"])
+}
+
+@Test func snapshotHasNoFailedChecksWhenRollupIsNull() async throws {
+    let (client, _) = snapshotClient(snapshotJSON())
+    let snapshot = try await client.fetchPRSnapshot(for: snapshotRef, login: "ordishs")
+
+    #expect(snapshot.status.headOID == nil)
+    #expect(snapshot.status.failedChecks.isEmpty)
+}
+
+@Test func snapshotQueryAsksForCheckNames() {
+    let query = GitHubClient.snapshotQuery(count: 1)
+
+    #expect(query.contains("... on CheckRun{ name status conclusion }"))
+    #expect(query.contains("... on StatusContext{ context state }"))
 }
