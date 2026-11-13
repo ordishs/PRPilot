@@ -21,6 +21,9 @@ public final class AppModel {
     public private(set) var reviews: [WorkItem] = []
     public var selection: String?
     public private(set) var recentTrail = RecentTrail()
+    public private(set) var nextUpRows: [NextUpRow] = []
+    public private(set) var handledCauses: [String: HandledKind] = [:]
+    public var coordinatorPanelOpen = false
     public private(set) var errorMessage: String?
     public private(set) var isAdding = false
     public private(set) var diffStates: [String: DiffLoadState] = [:]
@@ -158,6 +161,7 @@ public final class AppModel {
         reviews = await store.allItems()
         registeredRepos = await store.allRepos()
         settings = await store.settings()
+        handledCauses = await store.handledCauses()
 
         let storedTrail = await store.recentTrail()
         recentTrail = storedTrail
@@ -1059,6 +1063,9 @@ public final class AppModel {
         )
         let oldStatus = claudeStatuses[reviewID]
         claudeStatuses[reviewID] = newStatus
+        if oldStatus?.tag != newStatus.tag {
+            Task { await self.runCoordinatorPass() }
+        }
         if case .working = newStatus {
             notifiedAwaitingForSession.remove(reviewID)
         }
@@ -1905,6 +1912,11 @@ public final class AppModel {
     /// Refreshes the given items with one batched read of GitHub, however many there are. On
     /// failure the previous status stays put — a transient error must not blank the chips.
     private func refreshReviewStates(ids: [String], now: Date) async {
+        await fetchReviewStates(ids: ids, now: now)
+        await runCoordinatorPass()
+    }
+
+    private func fetchReviewStates(ids: [String], now: Date) async {
         var targets: [(id: String, ref: PRLocator, owner: String, repo: String, base: String)] = []
         for id in ids {
             await refreshWorktreeCleanliness(for: id)
@@ -2214,8 +2226,51 @@ public final class AppModel {
                     claudeReviewedAt: review.claudeReviewedAt,
                     claudeWorking: claudeStatuses[review.id] == .working
                 )
-                : nil
+                : nil,
+            agentStoppedAt: claudeStatuses[review.id]?.stoppedAt
         )
+    }
+
+    func recomputeNextUp(now: Date = Date()) {
+        let visible = reviews.filter { !isIssueCoveredByPR($0, among: reviews) }
+        nextUpRows = nextUp(inputs: visible.map(boardInput(for:)), now: now)
+    }
+
+    /// Ranks the tickets again, then notifies once for each row whose cause is new. Marking
+    /// the cause handled comes before any suspension, so two passes that overlap cannot both
+    /// notify. Causes of removed tickets are dropped.
+    public func runCoordinatorPass(now: Date = Date()) async {
+        recomputeNextUp(now: now)
+
+        let live = Set(reviews.map(\.id))
+        let kept = handledCauses.filter { live.contains(String($0.key.prefix { $0 != "|" })) }
+        var changed = kept.count != handledCauses.count
+        handledCauses = kept
+
+        for row in nextUpRows {
+            let decision = autoDecision(row: row, mode: .ask, facts: AutoFacts(), handled: handledCauses)
+
+            guard case .notify(.newCause) = decision else { continue }
+
+            handledCauses[row.cause.key] = .notified
+            changed = true
+            postNeedsYouNotification(for: row)
+        }
+
+        if changed {
+            try? await store.setHandledCauses(handledCauses)
+        }
+    }
+
+    private func postNeedsYouNotification(for row: NextUpRow) {
+        guard settings.notificationsEnabled, let item = reviews.first(where: { $0.id == row.itemID }) else { return }
+
+        let number = item.displayNumber.map { "#\($0)" } ?? item.title
+        let title = "Needs you · \(number)"
+        let body = "\(row.reason) · \(item.owner)/\(item.repo)"
+        let poster = notificationPoster
+
+        Task { await poster.postNeedsYou(reviewID: row.itemID, title: title, body: body) }
     }
 
     /// Whether the "Updated" chip shows for an item: the poll found author activity newer
@@ -2355,6 +2410,27 @@ public final class AppModel {
         }
         if queriesChanged {
             Task { await self.discoverNow() }
+        }
+    }
+}
+
+private extension AgentStatus {
+    var tag: Int {
+        switch self {
+        case .starting: return 0
+        case .working: return 1
+        case .awaitingInput: return 2
+        case .idle: return 3
+        case .limited: return 4
+        case .ready: return 5
+        case .failed: return 6
+        }
+    }
+
+    var stoppedAt: Date? {
+        switch self {
+        case .awaitingInput(let since, _), .idle(let since, _): return since
+        default: return nil
         }
     }
 }

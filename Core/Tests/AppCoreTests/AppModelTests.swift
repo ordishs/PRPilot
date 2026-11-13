@@ -95,8 +95,20 @@ private actor RecordingDiffLoader: DiffLoading {
 
 private actor StubNotificationPoster: NotificationPosting {
     private(set) var posted: [(reviewID: String, title: String, body: String)] = []
+    private(set) var needsYou: [(reviewID: String, title: String, body: String)] = []
     func postReviewReady(reviewID: String, title: String, body: String) async {
         posted.append((reviewID: reviewID, title: title, body: body))
+    }
+
+    func postNeedsYou(reviewID: String, title: String, body: String) async {
+        needsYou.append((reviewID: reviewID, title: title, body: body))
+    }
+
+    func waitForNeedsYou(atLeast count: Int, timeout: TimeInterval = 5) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while needsYou.count < count, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
     }
 
     /// Waits until at least `count` notifications have arrived, or the deadline passes.
@@ -5904,4 +5916,159 @@ private func trailItem(_ number: Int) -> WorkItem {
     model.jump(to: "gone")
 
     #expect(model.selection == b.id)
+}
+
+
+private func myPR(_ number: Int, id: String = UUID().uuidString) -> WorkItem {
+    WorkItem(
+        id: id,
+        title: "mine \(number)",
+        repoKey: "github.com/o/r",
+        baseBranch: "main",
+        headBranch: "mine-\(number)",
+        prRef: PRRef(
+            owner: "o", repo: "r", number: number,
+            url: URL(string: "https://github.com/o/r/pull/\(number)")!,
+            authorLogin: "me"
+        ),
+        prState: .open,
+        origin: .added,
+        addedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+}
+
+private func redCI(head: String) -> PRStatus {
+    PRStatus(ci: .failing, mergeState: .clean, readiness: .reviewRequired, headOID: head, failedChecks: ["build"])
+}
+
+@MainActor private func coordinatorModel(
+    at url: URL,
+    seed: [WorkItem] = [],
+    poster: StubNotificationPoster = StubNotificationPoster()
+) async throws -> AppModel {
+    let store = try ReviewStore(fileURL: url)
+    for item in seed { try await store.upsertItem(item) }
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: poster)
+    await model.load()
+    model.setCurrentLoginForTesting("me")
+    return model
+}
+
+@Test @MainActor func askPassNotifiesOncePerCauseAndStartsNothing() async throws {
+    let poster = StubNotificationPoster()
+    let item = myPR(1)
+    let model = try await coordinatorModel(at: tempStoreURL(), seed: [item], poster: poster)
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+
+    await model.runCoordinatorPass()
+    await model.runCoordinatorPass()
+    await poster.waitForNeedsYou(atLeast: 1)
+    await poster.settle()
+
+    #expect(await poster.needsYou.count == 1)
+    #expect(await poster.needsYou[0].reviewID == item.id)
+    #expect(await poster.needsYou[0].body.contains("CI red: build"))
+    #expect(model.nextUpRows.map(\.itemID) == [item.id])
+    #expect(model.claudeSessions.isEmpty)
+}
+
+@Test @MainActor func newHeadCommitNotifiesAgain() async throws {
+    let poster = StubNotificationPoster()
+    let item = myPR(1)
+    let model = try await coordinatorModel(at: tempStoreURL(), seed: [item], poster: poster)
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+    await model.runCoordinatorPass()
+
+    model.setPRStatusForTesting(redCI(head: "h2"), for: item.id)
+    await model.runCoordinatorPass()
+    await poster.waitForNeedsYou(atLeast: 2)
+
+    #expect(await poster.needsYou.count == 2)
+}
+
+@Test @MainActor func disabledNotificationsPostNothingButTheRowStaysAndTheCauseIsSpent() async throws {
+    let poster = StubNotificationPoster()
+    let item = myPR(1)
+    let model = try await coordinatorModel(at: tempStoreURL(), seed: [item], poster: poster)
+    var quiet = model.settings
+    quiet.notificationsEnabled = false
+    await model.updateSettings(quiet)
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+
+    await model.runCoordinatorPass()
+    await poster.settle()
+
+    #expect(await poster.needsYou.isEmpty)
+    #expect(model.nextUpRows.count == 1)
+
+    var loud = model.settings
+    loud.notificationsEnabled = true
+    await model.updateSettings(loud)
+    await model.runCoordinatorPass()
+    await poster.settle()
+
+    #expect(await poster.needsYou.isEmpty)
+}
+
+@Test @MainActor func handledCausesSurviveAReload() async throws {
+    let url = tempStoreURL()
+    let item = myPR(1)
+    let first = StubNotificationPoster()
+    let model = try await coordinatorModel(at: url, seed: [item], poster: first)
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+    await model.runCoordinatorPass()
+    await first.waitForNeedsYou(atLeast: 1)
+
+    let second = StubNotificationPoster()
+    let reloaded = try await coordinatorModel(at: url, poster: second)
+    reloaded.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+    await reloaded.runCoordinatorPass()
+    await second.settle()
+
+    #expect(await first.needsYou.count == 1)
+    #expect(await second.needsYou.isEmpty)
+}
+
+@Test @MainActor func causesOfRemovedTicketsArePruned() async throws {
+    let url = tempStoreURL()
+    let item = myPR(1)
+    let model = try await coordinatorModel(at: url, seed: [item])
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+    await model.runCoordinatorPass()
+    #expect(model.handledCauses.count == 1)
+
+    await model.removeReview(id: item.id)
+    await model.runCoordinatorPass()
+
+    #expect(model.handledCauses.isEmpty)
+    #expect(await (try ReviewStore(fileURL: url)).handledCauses().isEmpty)
+}
+
+@Test @MainActor func waitingAgentNotifiesAsCaseTwo() async throws {
+    let poster = StubNotificationPoster()
+    let item = myPR(1)
+    let model = try await coordinatorModel(at: tempStoreURL(), seed: [item], poster: poster)
+    model.setClaudeStatusForTesting(.awaitingInput(since: Date(timeIntervalSince1970: 1_800_000_000), lastVerdictSnippet: nil), for: item.id)
+
+    await model.runCoordinatorPass()
+    await poster.waitForNeedsYou(atLeast: 1)
+
+    #expect(model.nextUpRows.first?.kase == .sessionWaits)
+    #expect(await poster.needsYou.first?.body.contains("Agent waits for your answer") == true)
+}
+
+@Test @MainActor func issueCoveredByAPRGivesNoRow() async throws {
+    var pr = myPR(1)
+    pr.closingIssueNumber = 7
+    let issue = WorkItem(
+        title: "issue 7", repoKey: "github.com/o/r", baseBranch: "main",
+        issueRef: IssueRef(owner: "o", repo: "r", number: 7, url: URL(string: "https://github.com/o/r/issues/7")!, authorLogin: "x"),
+        prState: .open, origin: .added, addedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let model = try await coordinatorModel(at: tempStoreURL(), seed: [pr, issue])
+    model.setClaudeStatusForTesting(.awaitingInput(since: Date(timeIntervalSince1970: 1_800_000_000), lastVerdictSnippet: nil), for: issue.id)
+
+    await model.runCoordinatorPass()
+
+    #expect(model.nextUpRows.isEmpty)
 }
