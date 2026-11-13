@@ -39,19 +39,23 @@ public struct BoardInput: Sendable, Equatable {
     public var facts: SidebarItemFacts
     public var prStatus: PRStatus?
     public var issueStatus: IssueWorkStatus?
+    /// When the agent last stopped. The coordinator reads it for the "waits" and "idle" cases.
+    public var agentStoppedAt: Date?
 
     public init(
         item: WorkItem,
         myLogin: String?,
         facts: SidebarItemFacts = SidebarItemFacts(),
         prStatus: PRStatus? = nil,
-        issueStatus: IssueWorkStatus? = nil
+        issueStatus: IssueWorkStatus? = nil,
+        agentStoppedAt: Date? = nil
     ) {
         self.item = item
         self.myLogin = myLogin
         self.facts = facts
         self.prStatus = prStatus
         self.issueStatus = issueStatus
+        self.agentStoppedAt = agentStoppedAt
     }
 }
 
