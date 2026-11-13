@@ -109,7 +109,7 @@ public func autoDecision(
     facts: AutoFacts,
     handled: [String: HandledKind]
 ) -> AutoDecision {
-    if row.kase == .issueInProgress { return .skip(.rowOnly) }
+    if row.kase == .issueInProgress || (row.kase == .reviewRequested && row.step == .open) { return .skip(.rowOnly) }
 
     let autoStep = autoStep(for: row.kase)
 

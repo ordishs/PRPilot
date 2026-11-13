@@ -146,3 +146,10 @@ private func decide(
 @Test func causeKeyHoldsTicketCaseAndTrigger() {
     #expect(row(.ciRed, trigger: "abc", id: "t9").cause.key == "t9|3|abc")
 }
+
+@Test func aRunningReviewIsOnlyAListRowInBothModes() {
+    let running = NextUpRow(itemID: "t1", kase: .reviewRequested, reason: "r", step: .open, since: at, trigger: "h1")
+
+    #expect(decide(running, .ask) == .skip(.rowOnly))
+    #expect(decide(running, .auto) == .skip(.rowOnly))
+}

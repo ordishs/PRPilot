@@ -251,3 +251,30 @@ private func rows(
 @Test func nextUpStepHasNoMergeOrPostCase() {
     #expect(NextUpStep.allCases.map(\.rawValue).sorted() == ["continueWork", "open", "rebase", "startFix", "startReview"])
 }
+
+@Test func aReviewRequestStaysAtTheTopWhileItsReviewRuns() throws {
+    let running = rows(pr(author: "bob"), facts: SidebarItemFacts(isWorking: true), status: status(authorUpdatedAt: hoursAgo(1)))
+    let row = try #require(running.first)
+
+    #expect(running.count == 1)
+    #expect(row.kase == .reviewRequested)
+    #expect(row.step == .open)
+    #expect(row.reason == "Review running · requested by bob · 1h")
+}
+
+@Test func aRunningReviewSitsAmongTheOtherReviewRequestsAndAboveFixes() {
+    let ci = SidebarItemFacts(ciFailing: true)
+    let inputs = [
+        BoardInput(item: pr(author: me, id: "fix"), myLogin: me, facts: ci, prStatus: status(ci: .failing)),
+        BoardInput(
+            item: pr(author: "bob", id: "running"), myLogin: me, facts: SidebarItemFacts(isWorking: true),
+            prStatus: status(authorUpdatedAt: hoursAgo(1))
+        ),
+        BoardInput(
+            item: pr(author: "bob", id: "idle"), myLogin: me, facts: SidebarItemFacts(),
+            prStatus: status(authorUpdatedAt: hoursAgo(2))
+        ),
+    ]
+
+    #expect(nextUp(inputs: inputs, now: now).map(\.itemID) == ["idle", "running", "fix"])
+}

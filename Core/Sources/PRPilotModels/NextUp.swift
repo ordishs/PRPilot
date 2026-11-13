@@ -47,7 +47,8 @@ public struct NextUpRow: Sendable, Equatable, Identifiable {
 /// `BoardInput` the board reads, so a row never disagrees with a badge.
 ///
 /// A ticket gives at most one row, at its lowest rank number. A ticket that is disabled, on
-/// hold, finished, or has a working agent gives none: the step is already under way.
+/// hold, or finished gives none. A working agent gives none either, except that a review
+/// request stays in the list while its review runs, so the list matches the sidebar.
 public func nextUp(inputs: [BoardInput], now: Date) -> [NextUpRow] {
     inputs
         .compactMap { nextUpRow(for: $0, now: now) }
@@ -62,7 +63,7 @@ public func nextUp(inputs: [BoardInput], now: Date) -> [NextUpRow] {
 private func nextUpRow(for input: BoardInput, now: Date) -> NextUpRow? {
     let item = input.item
 
-    if item.disabled || input.facts.isWorking { return nil }
+    if item.disabled { return nil }
     if item.prState == .merged || item.prState == .closed { return nil }
     if let issueStatus = input.issueStatus, issueStatus == .onHold || issueStatus == .done || issueStatus == .closed {
         return nil
@@ -81,15 +82,16 @@ private func nextUpRow(for input: BoardInput, now: Date) -> NextUpRow? {
     if category == .reviewRequest, item.prState != .draft, needsMyReview(item: item, facts: facts) {
         let since = status?.authorUpdatedAt ?? item.addedAt
         let author = item.author ?? "author"
+        let age = trailAgeLabel(since: since, now: now)
 
-        return row(
-            .reviewRequested,
-            "Review requested by \(author) · \(trailAgeLabel(since: since, now: now))",
-            .startReview,
-            since: since,
-            trigger: stamp(since)
-        )
+        if facts.isWorking {
+            return row(.reviewRequested, "Review running · requested by \(author) · \(age)", .open, since: since, trigger: stamp(since))
+        }
+
+        return row(.reviewRequested, "Review requested by \(author) · \(age)", .startReview, since: since, trigger: stamp(since))
     }
+
+    if facts.isWorking { return nil }
 
     if facts.needsInput {
         let since = input.agentStoppedAt ?? now
