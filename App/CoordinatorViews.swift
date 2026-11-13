@@ -194,19 +194,36 @@ private struct NextUpRowView: View {
     let model: AppModel
     let row: NextUpRow
     @Binding var viewMode: MainViewMode
+    @State private var isRunning = false
+    @State private var outcome: StepResult?
 
     var body: some View {
         let item = model.reviews.first { $0.id == row.itemID }
 
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title(item)).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                Text(row.reason).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title(item)).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                    Text(row.reason).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button(label) { run() }
-                .controlSize(.small)
+                if isRunning {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button(label) { run() }
+                        .controlSize(.small)
+                }
+            }
+
+            switch outcome {
+            case .done(let message):
+                Text(message).font(.system(size: 11)).foregroundStyle(.green)
+            case .failed(let message):
+                Text(message).font(.system(size: 11)).foregroundStyle(.red)
+            case nil:
+                EmptyView()
+            }
         }
         .padding(8)
         .background(Color.secondary.opacity(0.08))
@@ -236,10 +253,18 @@ private struct NextUpRowView: View {
     }
 
     private func run() {
-        if row.step == .open || row.step == .continueWork {
-            viewMode = .list
-        }
+        viewMode = .list
+        isRunning = true
+        outcome = nil
 
-        Task { _ = await model.performStep(row.step, row: row, auto: false) }
+        Task {
+            if row.step == .startFix || row.step == .startReview {
+                model.jump(to: row.itemID)
+                await model.setPane(.claude, for: row.itemID)
+            }
+
+            outcome = await model.performStep(row.step, row: row, auto: false)
+            isRunning = false
+        }
     }
 }
