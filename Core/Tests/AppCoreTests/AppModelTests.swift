@@ -6289,3 +6289,178 @@ private func rowFor(_ item: WorkItem, _ kase: NextUpCase, step: NextUpStep) -> N
     #expect(arguments.contains { $0.contains("gh pr checks") })
     #expect(!arguments.contains { $0.contains("checks are: .") })
 }
+
+@MainActor private func autoModel(
+    seed: [WorkItem],
+    ops: StubWorktreeOps = StubWorktreeOps(),
+    cap: Int = 5,
+    url: URL = tempStoreURL(),
+    poster: StubNotificationPoster = StubNotificationPoster()
+) async throws -> AppModel {
+    let store = try ReviewStore(fileURL: url)
+    for item in seed { try await store.upsertItem(item) }
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: ops, claudePath: "/usr/bin/true", notificationPoster: poster)
+    await model.load()
+    model.setCurrentLoginForTesting("me")
+    var settings = model.settings
+    settings.coordinatorAuto = true
+    settings.maxLiveAgentSessions = cap
+    await model.updateSettings(settings)
+    return model
+}
+
+@Test @MainActor func autoPassStartsTheStepAndLogsIt() async throws {
+    let poster = StubNotificationPoster()
+    let item = withWorktree(myPR(20))
+    let model = try await autoModel(seed: [item], poster: poster)
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+
+    await model.runCoordinatorPass()
+    await poster.settle()
+
+    let arguments = model.claudeSessions[item.id]?.spec.arguments ?? []
+    #expect(arguments.first == "--disallowedTools")
+    #expect(model.autoLog.count == 1)
+    #expect(model.autoLog[0].action == "Start fix")
+    #expect(model.autoLog[0].result == "Started a fix session")
+    #expect(model.autoLog[0].kase == .ciRed)
+    #expect(model.handledCauses.values.contains(.acted))
+    #expect(await poster.needsYou.isEmpty)
+}
+
+@Test @MainActor func autoWaitsWhenTheSessionCapIsFullAndNeverEvicts() async throws {
+    let busy = withWorktree(myPR(21))
+    let waiting = withWorktree(myPR(22))
+    let model = try await autoModel(seed: [busy, waiting], cap: 1)
+    await model.ensureAgentSession(for: busy)
+    let liveSession = model.claudeSessions[busy.id]
+    model.setPRStatusForTesting(redCI(head: "h1"), for: waiting.id)
+
+    await model.runCoordinatorPass()
+
+    #expect(model.claudeSessions[waiting.id] == nil)
+    #expect(model.claudeSessions[busy.id] === liveSession)
+    #expect(model.handledCauses.isEmpty)
+    #expect(model.autoLog.isEmpty)
+}
+
+@Test @MainActor func twoRowsOneSlotTheLowerRankWinsAndTheOtherStaysUnhandled() async throws {
+    let review = withWorktree(reviewRequest(23))
+    let red = withWorktree(myPR(24))
+    let model = try await autoModel(seed: [review, red], cap: 1)
+    model.setPRStatusForTesting(redCI(head: "h1"), for: red.id)
+
+    await model.runCoordinatorPass()
+
+    #expect(model.claudeSessions[review.id] != nil)
+    #expect(model.claudeSessions[red.id] == nil)
+    #expect(model.handledCauses.count == 1)
+    #expect(model.autoLog.map(\.kase) == [.reviewRequested])
+}
+
+@Test @MainActor func autoSkipsATicketWithUncommittedChangesAndSaysWhy() async throws {
+    let ops = StubWorktreeOps()
+    await ops.set(localChangesResult: ["a.go"])
+    let item = withWorktree(myPR(25))
+    let model = try await autoModel(seed: [item], ops: ops)
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+
+    await model.runCoordinatorPass()
+    await model.runCoordinatorPass()
+
+    #expect(model.claudeSessions[item.id] == nil)
+    #expect(model.handledCauses.isEmpty)
+    #expect(model.autoLog.count == 1)
+    #expect(model.autoLog[0].result == "Skipped: uncommitted changes in the worktree")
+}
+
+@Test @MainActor func autoSkipsATicketWithNoWorktreeOrCloneAndSaysWhyOnce() async throws {
+    let item = myPR(26)
+    let model = try await autoModel(seed: [item])
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+
+    await model.runCoordinatorPass()
+    await model.runCoordinatorPass()
+
+    #expect(model.claudeSessions[item.id] == nil)
+    #expect(model.autoLog.count == 1)
+    #expect(model.autoLog[0].result == "Skipped: no worktree and no registered clone")
+}
+
+@Test @MainActor func aWorkingAgentGivesNoRowSoAutoLoadAndAutoDoNotDoubleStart() async throws {
+    let item = withWorktree(myPR(27))
+    let model = try await autoModel(seed: [item])
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+    model.setClaudeStatusForTesting(.working, for: item.id)
+
+    await model.runCoordinatorPass()
+
+    #expect(model.nextUpRows.isEmpty)
+    #expect(model.autoLog.isEmpty)
+}
+
+@Test @MainActor func fixThatDoesNotClearNotifiesOnceThenStops() async throws {
+    let poster = StubNotificationPoster()
+    let item = withWorktree(myPR(28))
+    let model = try await autoModel(seed: [item], poster: poster)
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+    await model.runCoordinatorPass()
+    let session = model.claudeSessions[item.id]
+    #expect(session != nil)
+
+    model.setClaudeStatusForTesting(.awaitingInput(since: Date(timeIntervalSince1970: 1_800_000_000), lastVerdictSnippet: nil), for: item.id)
+    await model.runCoordinatorPass()
+    await model.runCoordinatorPass()
+    await poster.settle()
+
+    let bodies = await poster.needsYou.map(\.body)
+    #expect(bodies.filter { $0.contains("AUTO fix did not clear") }.count == 1)
+    #expect(model.handledCauses.values.contains(.failureNotified))
+    #expect(model.claudeSessions[item.id] === session)
+    #expect(model.autoLog.count == 1)
+}
+
+@Test @MainActor func autoOnlyNotifiesForReadyToMergeAndNeverPushesOrMerges() async throws {
+    let poster = StubNotificationPoster()
+    let ops = StubWorktreeOps()
+    let item = withWorktree(myPR(29))
+    let model = try await autoModel(seed: [item], ops: ops, poster: poster)
+    model.setPRStatusForTesting(PRStatus(ci: .passing, mergeState: .clean, readiness: .approved, headOID: "h1"), for: item.id)
+
+    await model.runCoordinatorPass()
+    await poster.waitForNeedsYou(atLeast: 1)
+
+    #expect(model.nextUpRows.first?.kase == .readyToMerge)
+    #expect(await poster.needsYou.first?.body.contains("ready to merge") == true)
+    #expect(model.claudeSessions.isEmpty)
+    #expect(await ops.recordedPushCalls.isEmpty)
+    #expect(model.autoLog.isEmpty)
+}
+
+@Test @MainActor func autoRebasesABehindPRAndPushes() async throws {
+    let ops = StubWorktreeOps()
+    await ops.set(currentBranchResult: "mine-30")
+    await ops.set(aheadBehindByUpstream: ["origin/mine-30": (ahead: 2, behind: 2)])
+    let item = withWorktree(myPR(30))
+    let model = try await autoModel(seed: [item], ops: ops)
+    model.setPRStatusForTesting(PRStatus(ci: .passing, mergeState: .behind, readiness: .reviewRequired, headOID: "h1"), for: item.id)
+
+    await model.runCoordinatorPass()
+
+    #expect(await ops.recordedPushCalls.count == 1)
+    #expect(model.autoLog.first?.action == "Rebase and push")
+    #expect(model.autoLog.first?.result == "Rebased and pushed")
+}
+
+@Test @MainActor func autoLogAndCausesSurviveAReload() async throws {
+    let url = tempStoreURL()
+    let item = withWorktree(myPR(31))
+    let model = try await autoModel(seed: [item], url: url)
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+    await model.runCoordinatorPass()
+
+    let reloaded = try await autoModel(seed: [], url: url)
+
+    #expect(reloaded.autoLog.count == 1)
+    #expect(reloaded.handledCauses.count == 1)
+}

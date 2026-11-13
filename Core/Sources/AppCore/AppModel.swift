@@ -38,6 +38,8 @@ public final class AppModel {
     public private(set) var nextUpRows: [NextUpRow] = []
     public private(set) var handledCauses: [String: HandledKind] = [:]
     public var coordinatorPanelOpen = false
+    public private(set) var autoLog: [AutoLogEntry] = []
+    private var loggedSkips: Set<String> = []
     private var autoLimitSessions: Set<String> = []
     private var localConflicts: [String: String] = [:]
     var lastStepPrompt: [String: String] = [:]
@@ -180,6 +182,7 @@ public final class AppModel {
         registeredRepos = await store.allRepos()
         settings = await store.settings()
         handledCauses = await store.handledCauses()
+        autoLog = await store.autoLog()
 
         let storedTrail = await store.recentTrail()
         recentTrail = storedTrail
@@ -2266,14 +2269,20 @@ public final class AppModel {
         )
     }
 
-    func recomputeNextUp(now: Date = Date()) {
-        let visible = reviews.filter { !isIssueCoveredByPR($0, among: reviews) }
-        nextUpRows = nextUp(inputs: visible.map(boardInput(for:)), now: now)
+    private func nextUpInputs() -> [BoardInput] {
+        reviews.filter { !isIssueCoveredByPR($0, among: reviews) }.map(boardInput(for:))
     }
 
-    /// Ranks the tickets again, then notifies once for each row whose cause is new. Marking
-    /// the cause handled comes before any suspension, so two passes that overlap cannot both
-    /// notify. Causes of removed tickets are dropped.
+    func recomputeNextUp(now: Date = Date()) {
+        nextUpRows = nextUp(inputs: nextUpInputs(), now: now)
+    }
+
+    /// Ranks the tickets again, then notifies or acts once for each row whose cause is new.
+    /// Marking a cause handled comes before any suspension, so two passes that overlap cannot
+    /// both notify or both act. Causes of removed tickets are dropped.
+    ///
+    /// In AUTO mode a pass starts at most one session, taking rows in rank order, and never
+    /// stops a live session to make room.
     public func runCoordinatorPass(now: Date = Date()) async {
         recomputeNextUp(now: now)
 
@@ -2282,19 +2291,138 @@ public final class AppModel {
         var changed = kept.count != handledCauses.count
         handledCauses = kept
 
+        let mode: CoordinatorMode = settings.coordinatorAuto ? .auto : .ask
+        var startedSession = false
+
         for row in nextUpRows {
-            let decision = autoDecision(row: row, mode: .ask, facts: AutoFacts(), handled: handledCauses)
+            guard let item = reviews.first(where: { $0.id == row.itemID }) else { continue }
 
-            guard case .notify(.newCause) = decision else { continue }
+            var facts = autoFacts(for: item)
+            var decision = autoDecision(row: row, mode: mode, facts: facts, handled: handledCauses)
 
-            handledCauses[row.cause.key] = .notified
-            changed = true
-            postNeedsYouNotification(for: row)
+            if case .act = decision, await hasUncommittedChanges(item) {
+                facts.hasUncommittedChanges = true
+                decision = autoDecision(row: row, mode: mode, facts: facts, handled: handledCauses)
+            }
+
+            switch decision {
+            case .notify(.newCause):
+                handledCauses[row.cause.key] = .notified
+                changed = true
+                postNeedsYouNotification(for: row, title: "Needs you", body: row.reason)
+
+            case .notify(.fixDidNotClear), .skip(.alreadyHandled), .skip(.rowOnly), .skip(.ticketBusy), .skip(.noSlot):
+                if case .skip(.ticketBusy) = decision, facts.hasUncommittedChanges {
+                    await logSkip(row, item: item, result: "Skipped: uncommitted changes in the worktree", now: now)
+                }
+
+            case .skip(.noWorktree):
+                await logSkip(row, item: item, result: "Skipped: no worktree and no registered clone", now: now)
+
+            case .act(let step):
+                if startedSession && step != .rebase { continue }
+
+                handledCauses[row.cause.key] = .acted
+                try? await store.setHandledCauses(handledCauses)
+
+                if step != .rebase { startedSession = true }
+
+                let result = await performStep(step, row: row, auto: true)
+                await logAuto(row, item: item, action: autoActionLabel(step), result: result, now: now)
+            }
+        }
+
+        if mode == .auto {
+            for row in nextUp(inputs: nextUpInputs().map(ignoringWaitingAgent), now: now) {
+                guard handledCauses[row.cause.key] == .acted, let item = reviews.first(where: { $0.id == row.itemID }) else { continue }
+
+                let decision = autoDecision(row: row, mode: mode, facts: autoFacts(for: item), handled: handledCauses)
+
+                guard case .notify(.fixDidNotClear) = decision else { continue }
+
+                handledCauses[row.cause.key] = .failureNotified
+                changed = true
+                postNeedsYouNotification(
+                    for: row,
+                    title: "AUTO needs you",
+                    body: "AUTO \(autoStepNoun(row.step)) did not clear: \(row.reason)"
+                )
+            }
         }
 
         if changed {
             try? await store.setHandledCauses(handledCauses)
         }
+    }
+
+    private func ignoringWaitingAgent(_ input: BoardInput) -> BoardInput {
+        var copy = input
+        copy.facts.needsInput = false
+
+        return copy
+    }
+
+    private func autoFacts(for item: WorkItem) -> AutoFacts {
+        let status = claudeStatuses[item.id]
+        let clone = registeredClonePath(for: item)
+
+        return AutoFacts(
+            isBusy: status?.tag == 0 || status?.tag == 1,
+            hasUncommittedChanges: false,
+            rebaseInProgress: rebaseStates[item.id] != nil,
+            hasWorktree: item.worktreePath != nil,
+            hasClone: clone.map { FileManager.default.fileExists(atPath: $0) } ?? false,
+            hasLiveSession: claudeSessions[item.id] != nil,
+            slotFree: claudeSessions.count < settings.maxLiveAgentSessions
+        )
+    }
+
+    private func hasUncommittedChanges(_ item: WorkItem) async -> Bool {
+        guard let path = item.worktreePath else { return false }
+
+        return !((try? await worktreeOps.localChanges(worktreePath: path)) ?? []).isEmpty
+    }
+
+    private func autoStepNoun(_ step: NextUpStep) -> String {
+        switch step {
+        case .startReview: return "review"
+        case .startFix: return "fix"
+        case .rebase: return "rebase"
+        case .continueWork, .open: return "step"
+        }
+    }
+
+    private func autoActionLabel(_ step: NextUpStep) -> String {
+        switch step {
+        case .startReview: return "Start review"
+        case .startFix: return "Start fix"
+        case .rebase: return "Rebase and push"
+        case .continueWork: return "Continue"
+        case .open: return "Open"
+        }
+    }
+
+    private func logAuto(_ row: NextUpRow, item: WorkItem, action: String, result: StepResult, now: Date) async {
+        switch result {
+        case .done(let message): await appendAutoLog(row, item: item, action: action, result: message, now: now)
+        case .failed(let message): await appendAutoLog(row, item: item, action: action, result: "Failed: \(message)", now: now)
+        }
+    }
+
+    private func logSkip(_ row: NextUpRow, item: WorkItem, result: String, now: Date) async {
+        let key = row.cause.key + "|" + result
+
+        guard loggedSkips.insert(key).inserted else { return }
+
+        await appendAutoLog(row, item: item, action: "Skip", result: result, now: now)
+    }
+
+    private func appendAutoLog(_ row: NextUpRow, item: WorkItem, action: String, result: String, now: Date) async {
+        let label = item.displayNumber.map { "#\($0) \(item.title)" } ?? item.title
+        let entry = AutoLogEntry(at: now, itemID: item.id, title: label, kase: row.kase, action: action, result: result)
+
+        try? await store.appendAutoLog(entry)
+        autoLog = await store.autoLog()
     }
 
     public func hasAutoLimits(_ id: String) -> Bool {
@@ -2437,15 +2565,15 @@ public final class AppModel {
         return .done("Rebased and pushed")
     }
 
-    private func postNeedsYouNotification(for row: NextUpRow) {
+    private func postNeedsYouNotification(for row: NextUpRow, title: String, body: String) {
         guard settings.notificationsEnabled, let item = reviews.first(where: { $0.id == row.itemID }) else { return }
 
         let number = item.displayNumber.map { "#\($0)" } ?? item.title
-        let title = "Needs you · \(number)"
-        let body = "\(row.reason) · \(item.owner)/\(item.repo)"
+        let fullTitle = "\(title) · \(number)"
+        let fullBody = "\(body) · \(item.owner)/\(item.repo)"
         let poster = notificationPoster
 
-        Task { await poster.postNeedsYou(reviewID: row.itemID, title: title, body: body) }
+        Task { await poster.postNeedsYou(reviewID: row.itemID, title: fullTitle, body: fullBody) }
     }
 
     /// Whether the "Updated" chip shows for an item: the poll found author activity newer
