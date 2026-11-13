@@ -188,7 +188,8 @@ private actor StubWorktreeOps: WorktreeManaging {
     func fetch(clonePath: String, remoteName: String, ref: String) async throws {}
     func rebaseOnto(worktreePath: String, upstream: String) async throws -> RebaseOutcome { rebaseResult }
     func rebaseContinue(worktreePath: String) async throws -> RebaseOutcome { rebaseResult }
-    func rebaseAbort(worktreePath: String) async throws {}
+    private(set) var abortedRebases = 0
+    func rebaseAbort(worktreePath: String) async throws { abortedRebases += 1 }
     func push(worktreePath: String, remoteName: String, branch: String, force: Bool) async throws {
         recordedPushCalls.append((remoteName: remoteName, branch: branch, force: force))
     }
@@ -6071,4 +6072,220 @@ private func redCI(head: String) -> PRStatus {
     await model.runCoordinatorPass()
 
     #expect(model.nextUpRows.isEmpty)
+}
+
+
+private func withWorktree(_ item: WorkItem) -> WorkItem {
+    var copy = item
+    copy.worktreePath = "/tmp/wt"
+    return copy
+}
+
+private func reviewRequest(_ number: Int) -> WorkItem {
+    var item = myPR(number)
+    item.prRef?.authorLogin = "alice"
+    return item
+}
+
+private func rowFor(_ item: WorkItem, _ kase: NextUpCase, step: NextUpStep) -> NextUpRow {
+    NextUpRow(itemID: item.id, kase: kase, reason: "r", step: step, since: Date(), trigger: "h1")
+}
+
+@MainActor private func stepModel(
+    seed: [WorkItem],
+    ops: StubWorktreeOps = StubWorktreeOps(),
+    worktreePath: String = "/tmp/wt"
+) async throws -> AppModel {
+    let store = try ReviewStore(fileURL: tempStoreURL())
+    for item in seed { try await store.upsertItem(item) }
+    let provider = StubWorktreeProvider(result: WorktreeReady(clonePath: "/tmp/clone", worktreePath: worktreePath, remoteName: "origin"))
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: provider, cloneRegistrar: StubRegistrar(), worktreeOps: ops, claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+    model.setCurrentLoginForTesting("me")
+    return model
+}
+
+@Test @MainActor func startReviewUsesTheExistingSessionStartWithNoDenyRules() async throws {
+    let item = reviewRequest(1)
+    let model = try await stepModel(seed: [item])
+
+    let result = await model.performStep(.startReview, row: rowFor(item, .reviewRequested, step: .startReview), auto: true)
+
+    let arguments = model.claudeSessions[item.id]?.spec.arguments ?? []
+    #expect(result == .done("Started the review session"))
+    #expect(arguments.contains("/review https://github.com/o/r/pull/1"))
+    #expect(!arguments.contains("--disallowedTools"))
+    #expect(model.hasAutoLimits(item.id) == false)
+}
+
+@Test @MainActor func startFixRendersTheTemplateWithChecksAndBase() async throws {
+    let item = myPR(2)
+    let model = try await stepModel(seed: [item])
+    model.setPRStatusForTesting(PRStatus(ci: .failing, mergeState: .clean, readiness: .none, headOID: "h1", failedChecks: ["build", "lint"]), for: item.id)
+
+    let result = await model.performStep(.startFix, row: rowFor(item, .ciRed, step: .startFix), auto: false)
+
+    let arguments = model.claudeSessions[item.id]?.spec.arguments ?? []
+    #expect(result == .done("Started a fix session"))
+    #expect(arguments.contains { $0.contains("build, lint") && $0.contains("--force-with-lease") })
+}
+
+@Test @MainActor func conflictFixPromptNamesTheBaseBranch() async throws {
+    let item = myPR(3)
+    let model = try await stepModel(seed: [item])
+
+    _ = await model.performStep(.startFix, row: rowFor(item, .conflict, step: .startFix), auto: false)
+
+    #expect((model.claudeSessions[item.id]?.spec.arguments ?? []).contains { $0.contains("conflicts with main") })
+}
+
+@Test @MainActor func autoFixLaunchCarriesTheDenyRulesAndTheBadge() async throws {
+    let item = myPR(4)
+    let model = try await stepModel(seed: [item])
+
+    _ = await model.performStep(.startFix, row: rowFor(item, .ciRed, step: .startFix), auto: true)
+
+    let arguments = model.claudeSessions[item.id]?.spec.arguments ?? []
+    #expect(arguments.first == "--disallowedTools")
+    #expect(arguments.dropFirst().first == DenyRules.autoFix.joined(separator: ","))
+    #expect(model.hasAutoLimits(item.id))
+}
+
+@Test @MainActor func userFixClickCarriesNoDenyRules() async throws {
+    let item = myPR(5)
+    let model = try await stepModel(seed: [item])
+
+    _ = await model.performStep(.startFix, row: rowFor(item, .ciRed, step: .startFix), auto: false)
+
+    let arguments = model.claudeSessions[item.id]?.spec.arguments ?? []
+    #expect(!arguments.isEmpty)
+    #expect(!arguments.contains("--disallowedTools"))
+    #expect(model.hasAutoLimits(item.id) == false)
+}
+
+@Test @MainActor func idleLiveSessionRestartsWithResumeAndRulesThenReceivesThePrompt() async throws {
+    let item = myPR(6)
+    let worktree = "/tmp/wt-\(UUID().uuidString)"
+    let model = try await stepModel(seed: [item], worktreePath: worktree)
+    await model.ensureAgentSession(for: item)
+    let firstSession = model.claudeSessions[item.id]
+    let sessionID = model.reviews.first { $0.id == item.id }?.claudeSessionID
+    #expect(firstSession != nil)
+    #expect(sessionID != nil)
+
+    let transcriptDirectory = AgentTranscriptPath.directoryURL(for: .claudeCode, worktreePath: worktree)
+    try FileManager.default.createDirectory(at: transcriptDirectory, withIntermediateDirectories: true)
+    try Data("{}\n".utf8).write(to: transcriptDirectory.appendingPathComponent("\(sessionID ?? "").jsonl"))
+    defer { try? FileManager.default.removeItem(at: transcriptDirectory) }
+
+    let result = await model.performStep(.startFix, row: rowFor(item, .ciRed, step: .startFix), auto: true)
+
+    let arguments = model.claudeSessions[item.id]?.spec.arguments ?? []
+    #expect(result == .done("Restarted the session with limits and sent the fix prompt"))
+    #expect(model.claudeSessions[item.id] !== firstSession)
+    #expect(arguments.first == "--disallowedTools")
+    #expect(arguments.contains("--resume"))
+    #expect(model.lastStepPrompt[item.id]?.contains("--force-with-lease") == true)
+}
+
+@Test @MainActor func userFixClickSendsToALiveSessionWithoutRestarting() async throws {
+    let item = myPR(7)
+    let model = try await stepModel(seed: [item])
+    await model.ensureAgentSession(for: item)
+    let firstSession = model.claudeSessions[item.id]
+
+    let result = await model.performStep(.startFix, row: rowFor(item, .ciRed, step: .startFix), auto: false)
+
+    #expect(result == .done("Sent the fix prompt to the live session"))
+    #expect(model.claudeSessions[item.id] === firstSession)
+    #expect(model.lastStepPrompt[item.id] != nil)
+}
+
+@Test @MainActor func rebaseThenPushesWithForceWhenTheBranchDiverged() async throws {
+    let ops = StubWorktreeOps()
+    await ops.set(currentBranchResult: "mine-8")
+    await ops.set(aheadBehindByUpstream: ["origin/mine-8": (ahead: 3, behind: 2)])
+    let item = withWorktree(myPR(8))
+    let model = try await stepModel(seed: [item], ops: ops)
+
+    let result = await model.performStep(.rebase, row: rowFor(item, .behind, step: .rebase), auto: true)
+
+    #expect(result == .done("Rebased and pushed"))
+    #expect(await ops.recordedPushCalls.count == 1)
+    #expect(await ops.recordedPushCalls.first?.force == true)
+}
+
+@Test @MainActor func rebaseThatChangesNothingPushesNothing() async throws {
+    let ops = StubWorktreeOps()
+    await ops.set(currentBranchResult: "mine-9")
+    let item = withWorktree(myPR(9))
+    let model = try await stepModel(seed: [item], ops: ops)
+
+    let result = await model.performStep(.rebase, row: rowFor(item, .behind, step: .rebase), auto: true)
+
+    #expect(result == .done("Rebased; nothing to push"))
+    #expect(await ops.recordedPushCalls.isEmpty)
+}
+
+@Test @MainActor func conflictingRebaseAbortsAndBecomesTheConflictCase() async throws {
+    let ops = StubWorktreeOps()
+    await ops.set(rebaseResult: .conflicts(["a.go", "b.go"]))
+    let item = withWorktree(myPR(10))
+    let model = try await stepModel(seed: [item], ops: ops)
+    model.setPRStatusForTesting(PRStatus(ci: .passing, mergeState: .behind, readiness: .reviewRequired, headOID: "h1"), for: item.id)
+
+    let result = await model.performStep(.rebase, row: rowFor(item, .behind, step: .rebase), auto: true)
+    await model.runCoordinatorPass()
+
+    #expect(result == .failed("Rebase stopped on 2 conflicting files and was aborted"))
+    #expect(await ops.abortedRebases == 1)
+    #expect(await ops.recordedPushCalls.isEmpty)
+    #expect(model.rebaseStates[item.id] == nil)
+    #expect(model.nextUpRows.first?.kase == .conflict)
+}
+
+@Test @MainActor func rebaseWithoutAWorktreeFailsCleanly() async throws {
+    let item = myPR(11)
+    let model = try await stepModel(seed: [item])
+
+    let result = await model.performStep(.rebase, row: rowFor(item, .behind, step: .rebase), auto: true)
+
+    #expect(result == .failed("No worktree to rebase"))
+}
+
+@Test @MainActor func continueSelectsTheTicketAndOpensItsAgentTab() async throws {
+    let item = myPR(12)
+    let model = try await stepModel(seed: [item])
+
+    let result = await model.performStep(.continueWork, row: rowFor(item, .issueInProgress, step: .continueWork), auto: false)
+    await model.waitForPendingItemEdits()
+
+    #expect(result == .done("Opened the agent tab"))
+    #expect(model.selection == item.id)
+    #expect(model.reviews.first { $0.id == item.id }?.lastPane == .claude)
+}
+
+@Test @MainActor func openOnReadyToMergeSelectsTheGitHubTabAndOtherOpensKeepTheTab() async throws {
+    let ready = myPR(13)
+    let waiting = myPR(14)
+    let model = try await stepModel(seed: [ready, waiting])
+
+    _ = await model.performStep(.open, row: rowFor(ready, .readyToMerge, step: .open), auto: false)
+    _ = await model.performStep(.open, row: rowFor(waiting, .sessionWaits, step: .open), auto: false)
+    await model.waitForPendingItemEdits()
+
+    #expect(model.reviews.first { $0.id == ready.id }?.lastPane == .github)
+    #expect(model.reviews.first { $0.id == waiting.id }?.lastPane == nil)
+    #expect(model.selection == waiting.id)
+}
+
+@Test @MainActor func ciFixPromptSaysHowToFindChecksWhenNoneAreListed() async throws {
+    let item = myPR(15)
+    let model = try await stepModel(seed: [item])
+
+    _ = await model.performStep(.startFix, row: rowFor(item, .ciRed, step: .startFix), auto: false)
+
+    let arguments = model.claudeSessions[item.id]?.spec.arguments ?? []
+    #expect(arguments.contains { $0.contains("gh pr checks") })
+    #expect(!arguments.contains { $0.contains("checks are: .") })
 }

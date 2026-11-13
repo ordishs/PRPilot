@@ -7,6 +7,20 @@ import AgentKit
 import CommandSupport
 import WorktreeKit
 
+/// What `ensureAgentSession` did. A fresh launch carries the first prompt in its arguments;
+/// a resumed or already live session does not.
+public enum SessionLaunch: Sendable, Equatable {
+    case notStarted
+    case alreadyLive
+    case fresh
+    case resumed
+}
+
+public enum StepResult: Sendable, Equatable {
+    case done(String)
+    case failed(String)
+}
+
 public enum ClaudePaneState: Sendable, Equatable {
     case idle
     case preparingWorktree
@@ -24,6 +38,10 @@ public final class AppModel {
     public private(set) var nextUpRows: [NextUpRow] = []
     public private(set) var handledCauses: [String: HandledKind] = [:]
     public var coordinatorPanelOpen = false
+    private var autoLimitSessions: Set<String> = []
+    private var localConflicts: [String: String] = [:]
+    var lastStepPrompt: [String: String] = [:]
+    var promptReadyTimeoutSeconds: TimeInterval = 30
     public private(set) var errorMessage: String?
     public private(set) var isAdding = false
     public private(set) var diffStates: [String: DiffLoadState] = [:]
@@ -754,13 +772,19 @@ public final class AppModel {
         claudePrepLog[id, default: []].append(PrepLogEntry(date: Date(), message: message))
     }
 
-    public func ensureAgentSession(for review: WorkItem, forceFresh: Bool = false) async {
-        guard !review.disabled else { return }
+    @discardableResult
+    public func ensureAgentSession(
+        for review: WorkItem,
+        forceFresh: Bool = false,
+        denyRules: [String] = [],
+        promptOverride: String? = nil
+    ) async -> SessionLaunch {
+        guard !review.disabled else { return .notStarted }
         if claudeSessions[review.id] != nil {
             claudePaneState[review.id] = .sessionLive
-            return
+            return .alreadyLive
         }
-        if claudePreparing.contains(review.id) { return }
+        if claudePreparing.contains(review.id) { return .notStarted }
         claudePreparing.insert(review.id)
         defer { claudePreparing.remove(review.id) }
 
@@ -771,7 +795,7 @@ public final class AppModel {
         guard let executable = await agentExecutable(for: kind) else {
             claudePaneState[review.id] = .claudeUnavailable(Self.notFoundMessage(for: kind))
             claudePrepLog[review.id] = nil
-            return
+            return .notStarted
         }
         let reviewID = review.id
         let progress: PrepProgress = { [weak self] message in
@@ -788,13 +812,13 @@ public final class AppModel {
             )
         } catch {
             claudePaneState[review.id] = .worktreeFailed(String(describing: error))
-            return
+            return .notStarted
         }
         if claudeSessions[review.id] != nil {
             claudePaneState[review.id] = .sessionLive
-            return
+            return .alreadyLive
         }
-        guard reviews.contains(where: { $0.id == review.id }) else { return }
+        guard reviews.contains(where: { $0.id == review.id }) else { return .notStarted }
         var updated = review
         updated.worktreePath = ready.worktreePath
 
@@ -862,7 +886,9 @@ public final class AppModel {
             kind: kind,
             resolvedExecutablePath: executable,
             sessionID: sessionID,
-            resume: resume
+            resume: resume,
+            denyRules: denyRules,
+            promptOverride: promptOverride
         )
         if handoverToClear != nil {
             updated.pendingHandoverPath = nil
@@ -873,6 +899,11 @@ public final class AppModel {
             reviews = await store.allItems()
         }
         let session = AgentSession(spec: spec)
+        if kind == .claudeCode, !denyRules.isEmpty {
+            autoLimitSessions.insert(review.id)
+        } else {
+            autoLimitSessions.remove(review.id)
+        }
         claudeSessions[review.id] = session
         claudePaneState[review.id] = .sessionLive
         session.applyAppearance(isDark: terminalIsDark)
@@ -888,6 +919,7 @@ public final class AppModel {
         if editable {
             await refreshPushability(for: review.id)
         }
+        return resume ? .resumed : .fresh
     }
 
     private func attachTranscriptWatcher(reviewID: String, worktreePath: String, kind: AgentKind) {
@@ -1215,6 +1247,8 @@ public final class AppModel {
     }
 
     func terminateAgentSession(for id: String) {
+        localConflicts.removeValue(forKey: id)
+        autoLimitSessions.remove(id)
         claudeSessions[id]?.terminate()
         claudeSessions.removeValue(forKey: id)
         autoLoadSpentIDs.remove(id)
@@ -2194,7 +2228,8 @@ public final class AppModel {
             hasReviewerUpdate: hasUnseenReviewerUpdate(review),
             ciFailing: prStatus?.ci == .failing,
             isBehind: prStatus?.isBehind ?? false,
-            hasConflict: prStatus?.mergeState == .conflict,
+            hasConflict: prStatus?.mergeState == .conflict
+                || localConflicts[review.id] == (prStatus?.headOID ?? ""),
             isReady: prStatus?.isReadyToMerge(prState: review.prState) ?? false,
             hasLocalChanges: (worktreeLocalChanges[review.id] ?? 0) > 0,
             hasWorktree: review.worktreePath != nil,
@@ -2260,6 +2295,146 @@ public final class AppModel {
         if changed {
             try? await store.setHandledCauses(handledCauses)
         }
+    }
+
+    public func hasAutoLimits(_ id: String) -> Bool {
+        autoLimitSessions.contains(id) && claudeSessions[id] != nil
+    }
+
+    /// Runs one step from the next-up table. The panel buttons and AUTO both call it. No case
+    /// here merges a PR or posts to GitHub; the step type has none.
+    public func performStep(_ step: NextUpStep, row: NextUpRow, auto: Bool) async -> StepResult {
+        guard let item = reviews.first(where: { $0.id == row.itemID }) else { return .failed("Ticket not found") }
+
+        switch step {
+        case .startReview:
+            let launch = await ensureAgentSession(for: item)
+
+            guard claudeSessions[item.id] != nil else { return .failed(sessionFailure(for: item.id)) }
+
+            return .done(launch == .alreadyLive ? "The session was already running" : "Started the review session")
+
+        case .startFix:
+            return await startFix(for: item, kase: row.kase, auto: auto)
+
+        case .rebase:
+            return await rebaseAndPush(item)
+
+        case .continueWork:
+            jump(to: item.id)
+            await markReviewOpened(item.id)
+            await setPane(.claude, for: item.id)
+
+            return .done("Opened the agent tab")
+
+        case .open:
+            jump(to: item.id)
+            await markReviewOpened(item.id)
+
+            if row.kase == .readyToMerge {
+                await setPane(.github, for: item.id)
+            }
+
+            return .done("Opened the ticket")
+        }
+    }
+
+    private func fixTemplate(for kase: NextUpCase) -> String? {
+        switch kase {
+        case .ciRed: return settings.ciFixPromptTemplate
+        case .changesRequested: return settings.changesFixPromptTemplate
+        case .conflict: return settings.conflictFixPromptTemplate
+        default: return nil
+        }
+    }
+
+    private func startFix(for item: WorkItem, kase: NextUpCase, auto: Bool) async -> StepResult {
+        guard let template = fixTemplate(for: kase) else { return .failed("No fix prompt for this case") }
+
+        let failed = prStatuses[item.id]?.failedChecks ?? []
+        let checks = failed.isEmpty ? "not listed, run `gh pr checks` to see them" : failed.joined(separator: ", ")
+        let prompt = LaunchPrompt.render(template, for: item, url: item.url, extras: ["{checks}": checks])
+        let rules = auto ? DenyRules.autoFix : []
+        var restarted = false
+
+        if claudeSessions[item.id] != nil {
+            guard auto else {
+                guard await sendWhenReady(prompt, to: item.id) else { return .failed(promptNotSent) }
+
+                return .done("Sent the fix prompt to the live session")
+            }
+
+            evictAgentSession(for: item.id)
+            restarted = true
+        }
+
+        let launch = await ensureAgentSession(for: item, denyRules: rules, promptOverride: prompt)
+
+        guard claudeSessions[item.id] != nil else { return .failed(sessionFailure(for: item.id)) }
+
+        if launch == .fresh {
+            lastStepPrompt[item.id] = prompt
+
+            return .done("Started a fix session")
+        }
+
+        guard await sendWhenReady(prompt, to: item.id) else { return .failed(promptNotSent) }
+
+        return .done(restarted ? "Restarted the session with limits and sent the fix prompt" : "Resumed the session and sent the fix prompt")
+    }
+
+    private let promptNotSent = "The agent did not become ready, so the fix prompt was not sent"
+
+    private func sendWhenReady(_ prompt: String, to id: String) async -> Bool {
+        let deadline = Date().addingTimeInterval(promptReadyTimeoutSeconds)
+
+        while Date() < deadline {
+            if let status = claudeStatuses[id], status.tag != 0 { break }
+
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+
+        guard let session = claudeSessions[id], let status = claudeStatuses[id], status.tag != 0 else { return false }
+
+        session.send(prompt: prompt)
+        lastStepPrompt[id] = prompt
+
+        return true
+    }
+
+    private func sessionFailure(for id: String) -> String {
+        switch claudePaneState[id] {
+        case .worktreeFailed(let message), .claudeUnavailable(let message): return message
+        default: return "The session did not start"
+        }
+    }
+
+    private func rebaseAndPush(_ item: WorkItem) async -> StepResult {
+        guard item.worktreePath != nil, item.headBranch != nil else { return .failed("No worktree to rebase") }
+
+        await rebase(id: item.id)
+
+        switch rebaseStates[item.id] {
+        case .conflicted(let files):
+            await abortRebase(id: item.id)
+            localConflicts[item.id] = prStatuses[item.id]?.headOID ?? ""
+
+            return .failed("Rebase stopped on \(files.count) conflicting \(files.count == 1 ? "file" : "files") and was aborted")
+
+        case .failed(let message):
+            return .failed(message)
+
+        case nil:
+            break
+        }
+
+        guard let reach = pushability[item.id], reach.canPush || reach.needsForce else {
+            return .done("Rebased; nothing to push")
+        }
+
+        await push(id: item.id)
+
+        return .done("Rebased and pushed")
     }
 
     private func postNeedsYouNotification(for row: NextUpRow) {
