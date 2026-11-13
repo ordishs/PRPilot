@@ -224,3 +224,14 @@ private func sampleItem(number: Int = 944, title: String = "centrifuge fix") -> 
     #expect(await reloaded.handledCauses().isEmpty)
     #expect(await reloaded.autoLog().isEmpty)
 }
+
+@Test func coordinatorSessionIDsSurviveAReloadPerAgent() async throws {
+    let url = tempStoreURL()
+    let store = try ReviewStore(fileURL: url)
+    try await store.setCoordinatorSessionID("abc", for: "claudeCode")
+    try await store.setCoordinatorSessionID("def", for: "pi")
+
+    let reloaded = try ReviewStore(fileURL: url)
+
+    #expect(await reloaded.coordinatorSessionIDs() == ["claudeCode": "abc", "pi": "def"])
+}

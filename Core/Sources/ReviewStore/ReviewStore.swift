@@ -90,6 +90,17 @@ public actor ReviewStore {
         try persist()
     }
 
+    public func coordinatorSessionIDs() -> [String: String] {
+        state.coordinatorSessionIDs ?? [:]
+    }
+
+    public func setCoordinatorSessionID(_ id: String, for agent: String) throws {
+        var ids = state.coordinatorSessionIDs ?? [:]
+        ids[agent] = id
+        state.coordinatorSessionIDs = ids
+        try persist()
+    }
+
     private static let autoLogLimit = 50
 
     private func persist() throws {

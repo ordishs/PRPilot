@@ -326,3 +326,43 @@ private func launch(
     #expect(!DenyRules.autoFix.contains("Bash(gh api:*)"))
     #expect(!DenyRules.autoFix.contains("Bash(gh api*)"))
 }
+
+@Test func promptOverrideReachesATaskLaunchAsTheLastArgument() {
+    let task = WorkItem(
+        title: "coordinator", repoKey: "local/prpilot/coordinator", baseBranch: "main",
+        origin: .added, addedAt: Date()
+    )
+
+    for kind in [AgentKind.claudeCode, .pi, .codex] {
+        let spec = AgentLaunchBuilder.build(
+            settings: .default, review: task, worktreePath: "/tmp/c", kind: kind,
+            resolvedExecutablePath: "/bin/agent", sessionID: "abc", resume: false,
+            promptOverride: "read state.json"
+        )
+
+        #expect(spec.arguments.last == "read state.json")
+        #expect(spec.arguments.filter { $0 == "read state.json" }.count == 1)
+    }
+}
+
+@Test func taskLaunchWithoutOverrideHasNoPromptAndResumeIgnoresIt() {
+    let task = WorkItem(
+        title: "coordinator", repoKey: "local/prpilot/coordinator", baseBranch: "main",
+        origin: .added, addedAt: Date()
+    )
+
+    for kind in [AgentKind.claudeCode, .pi, .codex] {
+        let plain = AgentLaunchBuilder.build(
+            settings: .default, review: task, worktreePath: "/tmp/c", kind: kind,
+            resolvedExecutablePath: "/bin/agent", sessionID: "abc", resume: false
+        )
+        let resumed = AgentLaunchBuilder.build(
+            settings: .default, review: task, worktreePath: "/tmp/c", kind: kind,
+            resolvedExecutablePath: "/bin/agent", sessionID: "abc", resume: true,
+            promptOverride: "read state.json"
+        )
+
+        #expect(!plain.arguments.contains("read state.json"))
+        #expect(!resumed.arguments.contains("read state.json"))
+    }
+}

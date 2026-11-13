@@ -6567,3 +6567,134 @@ private func tickets(_ object: [String: Any]) -> [[String: Any]] {
     #expect(log[0]["action"] as? String == "Start fix")
     #expect(object["generatedAt"] as? String == "2027-01-15T08:00:00Z")
 }
+
+@MainActor private func coordinatorAgentModel(
+    seed: [WorkItem] = [],
+    cap: Int = 5,
+    agent: AgentKind = .claudeCode,
+    root: URL = FileManager.default.temporaryDirectory.appendingPathComponent("prpilot-coord-\(UUID().uuidString)", isDirectory: true),
+    url: URL = tempStoreURL()
+) async throws -> (AppModel, URL) {
+    let store = try ReviewStore(fileURL: url)
+    for item in seed { try await store.upsertItem(item) }
+    let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: StubWorktreeProvider(), cloneRegistrar: StubRegistrar(), worktreeOps: StubWorktreeOps(), claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
+    await model.load()
+    model.setCurrentLoginForTesting("me")
+    var settings = model.settings
+    settings.managedRoot = root.path
+    settings.maxLiveAgentSessions = cap
+    settings.defaultAgent = agent
+    settings.piPath = "/usr/bin/true"
+    await model.updateSettings(settings)
+    return (model, root.appendingPathComponent("coordinator", isDirectory: true))
+}
+
+private func stateFile(_ directory: URL) throws -> [String: Any] {
+    try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("state.json"))) as! [String: Any]
+}
+
+@Test @MainActor func startWritesStateJsonAndLaunchesInTheCoordinatorDirectoryWithDenyRules() async throws {
+    let item = withWorktree(myPR(50))
+    let (model, directory) = try await coordinatorAgentModel(seed: [item])
+    defer { model.terminateAllAgentSessions() }
+
+    await model.startCoordinator()
+
+    let spec = model.coordinatorSession?.spec
+    #expect(spec?.cwd == directory.path)
+    #expect(spec?.arguments.first == "--disallowedTools")
+    #expect(spec?.arguments.dropFirst().first == DenyRules.coordinator.joined(separator: ","))
+    #expect(spec?.arguments.last?.contains("state.json") == true)
+    #expect((try stateFile(directory)["tickets"] as! [[String: Any]]).count == 1)
+}
+
+@Test @MainActor func coordinatorDoesNotCountAgainstTheSessionCapAndIsNotEvicted() async throws {
+    let item = withWorktree(myPR(51))
+    let (model, _) = try await coordinatorAgentModel(seed: [item], cap: 1)
+    defer { model.terminateAllAgentSessions() }
+    await model.startCoordinator()
+    let coordinator = model.coordinatorSession
+
+    await model.ensureAgentSession(for: item)
+    model.enforceSessionBudget()
+
+    #expect(model.claudeSessions.count == 1)
+    #expect(model.claudeSessions[item.id] != nil)
+    #expect(model.coordinatorSession === coordinator)
+}
+
+@Test @MainActor func coordinatorStopsAfterTenIdleMinutes() async throws {
+    let (model, _) = try await coordinatorAgentModel()
+    defer { model.terminateAllAgentSessions() }
+    await model.startCoordinator()
+
+    model.stopCoordinatorIfIdle(now: Date().addingTimeInterval(599))
+    #expect(model.coordinatorSession != nil)
+
+    model.stopCoordinatorIfIdle(now: Date().addingTimeInterval(601))
+    #expect(model.coordinatorSession == nil)
+}
+
+@Test @MainActor func nextQuestionResumesTheSameConversation() async throws {
+    let (model, directory) = try await coordinatorAgentModel()
+    defer {
+        model.terminateAllAgentSessions()
+        try? FileManager.default.removeItem(at: AgentTranscriptPath.directoryURL(for: .claudeCode, worktreePath: directory.path))
+    }
+    await model.startCoordinator()
+    let firstArguments = model.coordinatorSession?.spec.arguments ?? []
+    let sessionID = firstArguments.drop { $0 != "--session-id" }.dropFirst().first
+    #expect(sessionID != nil)
+
+    let transcripts = AgentTranscriptPath.directoryURL(for: .claudeCode, worktreePath: directory.path)
+    try FileManager.default.createDirectory(at: transcripts, withIntermediateDirectories: true)
+    try Data("{}\n".utf8).write(to: transcripts.appendingPathComponent("\(sessionID ?? "").jsonl"))
+    model.stopCoordinatorIfIdle(now: Date().addingTimeInterval(601))
+    #expect(model.coordinatorSession == nil)
+
+    await model.startCoordinator()
+
+    let resumed = model.coordinatorSession?.spec.arguments ?? []
+    #expect(resumed.contains("--resume"))
+    #expect(resumed.contains(sessionID ?? "missing"))
+    #expect(!resumed.contains { $0.contains("state.json") })
+}
+
+@Test @MainActor func refreshRewritesTheStateWhileTheSessionLives() async throws {
+    let item = withWorktree(myPR(52))
+    let (model, directory) = try await coordinatorAgentModel(seed: [item])
+    defer { model.terminateAllAgentSessions() }
+    await model.startCoordinator()
+    #expect(((try stateFile(directory)["tickets"] as! [[String: Any]])[0]["ci"]) == nil)
+
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+    await model.runCoordinatorPass()
+
+    #expect(((try stateFile(directory)["tickets"] as! [[String: Any]])[0]["ci"] as? String) == "failing")
+}
+
+@Test @MainActor func piCoordinatorLaunchCarriesTheRulesInThePromptOnly() async throws {
+    let (model, _) = try await coordinatorAgentModel(agent: .pi)
+    defer { model.terminateAllAgentSessions() }
+
+    await model.startCoordinator()
+
+    let arguments = model.coordinatorSession?.spec.arguments ?? []
+    #expect(model.coordinatorSession != nil)
+    #expect(!arguments.contains("--disallowedTools"))
+    #expect(arguments.last?.contains("Never merge") == true)
+}
+
+@Test @MainActor func coordinatorSessionIDSurvivesAReload() async throws {
+    let url = tempStoreURL()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("prpilot-coord-\(UUID().uuidString)", isDirectory: true)
+    let (model, directory) = try await coordinatorAgentModel(root: root, url: url)
+    defer {
+        model.terminateAllAgentSessions()
+        try? FileManager.default.removeItem(at: AgentTranscriptPath.directoryURL(for: .claudeCode, worktreePath: directory.path))
+    }
+    await model.startCoordinator()
+    let sessionID = (model.coordinatorSession?.spec.arguments ?? []).drop { $0 != "--session-id" }.dropFirst().first
+
+    #expect(await (try ReviewStore(fileURL: url)).coordinatorSessionIDs()["claudeCode"] == sessionID)
+}

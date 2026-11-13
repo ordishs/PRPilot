@@ -8,4 +8,5 @@ struct StoreState: Codable, Sendable {
     var recentTrail: RecentTrail?
     var handledCauses: [String: HandledKind]?
     var autoLog: [AutoLogEntry]?
+    var coordinatorSessionIDs: [String: String]?
 }

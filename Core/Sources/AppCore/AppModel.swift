@@ -39,6 +39,10 @@ public final class AppModel {
     public private(set) var handledCauses: [String: HandledKind] = [:]
     public var coordinatorPanelOpen = false
     public private(set) var autoLog: [AutoLogEntry] = []
+    public private(set) var coordinatorSession: AgentSession?
+    public private(set) var coordinatorError: String?
+    private var coordinatorStartedAt = Date()
+    private var coordinatorSessionIDs: [String: String] = [:]
     private var loggedSkips: Set<String> = []
     private var autoLimitSessions: Set<String> = []
     private var localConflicts: [String: String] = [:]
@@ -183,6 +187,7 @@ public final class AppModel {
         settings = await store.settings()
         handledCauses = await store.handledCauses()
         autoLog = await store.autoLog()
+        coordinatorSessionIDs = await store.coordinatorSessionIDs()
 
         let storedTrail = await store.recentTrail()
         recentTrail = storedTrail
@@ -231,6 +236,7 @@ public final class AppModel {
 
     private func tickAllActiveStatuses() {
         let now = Date()
+        stopCoordinatorIfIdle(now: now)
         for id in claudeSessions.keys {
             recomputeStatus(for: id, now: now)
         }
@@ -1482,6 +1488,7 @@ public final class AppModel {
         discoveryTask = nil
         for session in claudeSessions.values { session.terminate() }
         for watcher in transcriptWatchers.values { watcher.stop() }
+        stopCoordinator()
         clearSessionState()
     }
 
@@ -1555,6 +1562,11 @@ public final class AppModel {
             }
         }
         for stop in stops { await stop.value }
+
+        if let coordinator = coordinatorSession {
+            coordinatorSession = nil
+            await coordinator.terminateAndWait()
+        }
 
         clearSessionState()
     }
@@ -2353,6 +2365,10 @@ public final class AppModel {
         if changed {
             try? await store.setHandledCauses(handledCauses)
         }
+
+        if coordinatorSession != nil {
+            await writeCoordinatorState(now: now)
+        }
     }
 
     private func ignoringWaitingAgent(_ input: BoardInput) -> BoardInput {
@@ -2468,6 +2484,115 @@ public final class AppModel {
         }
 
         return CoordinatorState(generatedAt: now, tickets: tickets, autoLog: autoLog)
+    }
+
+    public var coordinatorDirectory: URL {
+        URL(fileURLWithPath: settings.managedRoot, isDirectory: true).appendingPathComponent("coordinator", isDirectory: true)
+    }
+
+    public func writeCoordinatorState(now: Date = Date()) async {
+        do {
+            try FileManager.default.createDirectory(at: coordinatorDirectory, withIntermediateDirectories: true)
+            try coordinatorState(now: now).jsonData().write(
+                to: coordinatorDirectory.appendingPathComponent("state.json"),
+                options: [.atomic]
+            )
+        } catch {
+            coordinatorError = "Could not write the coordinator state: \(error.localizedDescription)"
+        }
+    }
+
+    /// Starts the coordinator agent, or resumes its conversation. It runs in its own folder,
+    /// outside every worktree, and stays out of `claudeSessions`, so the session cap never
+    /// counts it and never evicts it.
+    public func startCoordinator() async {
+        if let live = coordinatorSession, case .exited = live.state {
+            coordinatorSession = nil
+        }
+
+        guard coordinatorSession == nil else { return }
+
+        let kind = settings.defaultAgent
+        coordinatorError = nil
+
+        guard let executable = await agentExecutable(for: kind) else {
+            coordinatorError = Self.notFoundMessage(for: kind)
+            return
+        }
+
+        await writeCoordinatorState()
+
+        guard coordinatorError == nil else { return }
+
+        let directory = coordinatorDirectory.path
+        let backend = AgentBackends.backend(for: kind)
+        var sessionID = UUID().uuidString.lowercased()
+        var resume = false
+
+        if let stored = coordinatorSessionIDs[kind.rawValue],
+           AgentTranscriptPath.transcriptExists(for: kind, worktreePath: directory, sessionID: stored) {
+            sessionID = stored
+            resume = true
+        } else if let latest = AgentTranscriptPath.latestSessionID(for: kind, worktreePath: directory) {
+            sessionID = latest
+            resume = true
+        }
+
+        if resume || backend.acceptsAssignedSessionID {
+            coordinatorSessionIDs[kind.rawValue] = sessionID
+            try? await store.setCoordinatorSessionID(sessionID, for: kind.rawValue)
+        }
+
+        let item = WorkItem(
+            id: "coordinator", title: "Coordinator", repoKey: "local/prpilot/coordinator",
+            baseBranch: "main", origin: .added, addedAt: Date()
+        )
+        let prompt = LaunchPrompt.render(settings.coordinatorPromptTemplate, for: item, url: nil)
+        let spec = AgentLaunchBuilder.build(
+            settings: settings,
+            review: item,
+            worktreePath: directory,
+            kind: kind,
+            resolvedExecutablePath: executable,
+            sessionID: sessionID,
+            resume: resume,
+            denyRules: DenyRules.coordinator,
+            promptOverride: prompt
+        )
+        let session = AgentSession(spec: spec)
+
+        session.applyAppearance(isDark: terminalIsDark)
+        coordinatorStartedAt = Date()
+        coordinatorSession = session
+        session.start()
+    }
+
+    public func stopCoordinator() {
+        coordinatorSession?.terminate()
+        coordinatorSession = nil
+    }
+
+    /// Stops the coordinator once nothing has been typed or printed for ten minutes. Both
+    /// show up as writes to its transcript, so the newest transcript write is the activity.
+    func stopCoordinatorIfIdle(now: Date) {
+        guard coordinatorSession != nil else { return }
+
+        if now.timeIntervalSince(coordinatorLastActivity()) >= Self.coordinatorIdleSeconds {
+            stopCoordinator()
+        }
+    }
+
+    private static let coordinatorIdleSeconds: TimeInterval = 600
+
+    private func coordinatorLastActivity() -> Date {
+        let kind = settings.defaultAgent
+        let directory = coordinatorDirectory.path
+        let newest = AgentBackends.backend(for: kind).transcriptDirectories(forWorktreePath: directory)
+            .flatMap { (try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] }
+            .compactMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
+            .max()
+
+        return max(coordinatorStartedAt, newest ?? .distantPast)
     }
 
     public func hasAutoLimits(_ id: String) -> Bool {

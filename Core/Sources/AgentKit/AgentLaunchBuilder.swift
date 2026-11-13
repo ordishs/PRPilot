@@ -60,6 +60,9 @@ public enum AgentLaunchBuilder {
             sessionID: sessionID,
             resume: resume
         ))
+        if !resume, let promptOverride, review.prRef == nil, review.issueNumber == nil {
+            args.append(LaunchPrompt.render(promptOverride, for: review, url: nil))
+        }
         return AgentLaunchSpec(
             executable: resolvedExecutablePath,
             cwd: worktreePath,
