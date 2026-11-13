@@ -44,11 +44,14 @@ public final class AppModel {
     private var coordinatorStartedAt = Date()
     private var coordinatorSessionIDs: [String: String] = [:]
     private var needsCauseBaseline = false
+    private var prStatusFetchedAt: [String: Date] = [:]
+    private var autoActedAt: [String: Date] = [:]
     private var loggedSkips: Set<String> = []
     private var autoLimitSessions: Set<String> = []
     private var localConflicts: [String: String] = [:]
     var lastStepPrompt: [String: String] = [:]
     var promptReadyTimeoutSeconds: TimeInterval = 30
+    var promptSettleSeconds: TimeInterval = 1.5
     public private(set) var errorMessage: String?
     public private(set) var isAdding = false
     public private(set) var diffStates: [String: DiffLoadState] = [:]
@@ -1259,6 +1262,7 @@ public final class AppModel {
     }
 
     func terminateAgentSession(for id: String) {
+        prStatusFetchedAt.removeValue(forKey: id)
         localConflicts.removeValue(forKey: id)
         autoLimitSessions.remove(id)
         claudeSessions[id]?.terminate()
@@ -1474,6 +1478,10 @@ public final class AppModel {
 
     func setPRStatusForTesting(_ status: PRStatus, for id: String) {
         prStatuses[id] = status
+    }
+
+    func setPRStatusFetchedForTesting(_ date: Date, for id: String) {
+        prStatusFetchedAt[id] = date
     }
 
     func setClaudeStatusForTesting(_ status: AgentStatus, for id: String) {
@@ -2026,6 +2034,7 @@ public final class AppModel {
             }
         }
         prStatuses[id] = snapshot.status
+        prStatusFetchedAt[id] = Date()
     }
 
     /// Reads the base branch's merge rules when the app has none, or a stale copy. A read
@@ -2326,6 +2335,7 @@ public final class AppModel {
         let kept = handledCauses.filter { live.contains(String($0.key.prefix { $0 != "|" })) }
         var changed = kept.count != handledCauses.count
         handledCauses = kept
+        autoActedAt = autoActedAt.filter { kept[$0.key] != nil }
 
         let mode: CoordinatorMode = settings.coordinatorAuto ? .auto : .ask
         var startedSession = false
@@ -2359,6 +2369,7 @@ public final class AppModel {
                 if startedSession && step != .rebase { continue }
 
                 handledCauses[row.cause.key] = .acted
+                autoActedAt[row.cause.key] = now
                 try? await store.setHandledCauses(handledCauses)
 
                 if step != .rebase { startedSession = true }
@@ -2371,6 +2382,10 @@ public final class AppModel {
         if mode == .auto {
             for row in nextUp(inputs: nextUpInputs().map(ignoringWaitingAgent), now: now) {
                 guard handledCauses[row.cause.key] == .acted, let item = reviews.first(where: { $0.id == row.itemID }) else { continue }
+
+                let settledAt = max(autoActedAt[row.cause.key] ?? .distantPast, claudeStatuses[item.id]?.stoppedAt ?? .distantPast)
+
+                guard (prStatusFetchedAt[item.id] ?? .distantPast) > settledAt else { continue }
 
                 let decision = autoDecision(row: row, mode: mode, facts: autoFacts(for: item), handled: handledCauses)
 
@@ -2716,7 +2731,13 @@ public final class AppModel {
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
 
-        guard let session = claudeSessions[id], let status = claudeStatuses[id], status.tag != 0 else { return false }
+        guard claudeSessions[id] != nil, let status = claudeStatuses[id], status.tag != 0 else { return false }
+
+        if promptSettleSeconds > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(promptSettleSeconds * 1_000_000_000))
+        }
+
+        guard let session = claudeSessions[id] else { return false }
 
         session.send(prompt: prompt)
         lastStepPrompt[id] = prompt

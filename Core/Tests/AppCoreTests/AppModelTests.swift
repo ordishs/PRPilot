@@ -6102,6 +6102,7 @@ private func rowFor(_ item: WorkItem, _ kase: NextUpCase, step: NextUpStep) -> N
     let model = AppModel(store: store, client: stubClient(), diffLoader: StubDiffLoader(), worktreeProvider: provider, cloneRegistrar: StubRegistrar(), worktreeOps: ops, claudePath: "/usr/bin/true", notificationPoster: StubNotificationPoster())
     await model.load()
     model.setCurrentLoginForTesting("me")
+    model.promptSettleSeconds = 0
     return model
 }
 
@@ -6409,6 +6410,7 @@ private func rowFor(_ item: WorkItem, _ kase: NextUpCase, step: NextUpStep) -> N
     #expect(session != nil)
 
     model.setClaudeStatusForTesting(.awaitingInput(since: Date(timeIntervalSince1970: 1_800_000_000), lastVerdictSnippet: nil), for: item.id)
+    model.setPRStatusFetchedForTesting(Date(timeIntervalSince1970: 1_900_000_000), for: item.id)
     await model.runCoordinatorPass()
     await model.runCoordinatorPass()
     await poster.settle()
@@ -6418,6 +6420,38 @@ private func rowFor(_ item: WorkItem, _ kase: NextUpCase, step: NextUpStep) -> N
     #expect(model.handledCauses.values.contains(.failureNotified))
     #expect(model.claudeSessions[item.id] === session)
     #expect(model.autoLog.count == 1)
+}
+
+@Test @MainActor func staleStatusAfterTheFixStoppedNeverReportsDidNotClear() async throws {
+    let poster = StubNotificationPoster()
+    let item = withWorktree(myPR(32))
+    let model = try await autoModel(seed: [item], poster: poster)
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+    model.setPRStatusFetchedForTesting(Date(timeIntervalSince1970: 1_700_000_000), for: item.id)
+    await model.runCoordinatorPass()
+
+    model.setClaudeStatusForTesting(.awaitingInput(since: Date(timeIntervalSince1970: 1_800_000_000), lastVerdictSnippet: nil), for: item.id)
+    await model.runCoordinatorPass()
+    await poster.settle()
+
+    #expect(await poster.needsYou.filter { $0.body.contains("did not clear") }.isEmpty)
+    #expect(!model.handledCauses.values.contains(.failureNotified))
+}
+
+@Test @MainActor func fixThatPushedANewHeadIsANewCauseNotAFailure() async throws {
+    let poster = StubNotificationPoster()
+    let item = withWorktree(myPR(33))
+    let model = try await autoModel(seed: [item], poster: poster)
+    model.setPRStatusForTesting(redCI(head: "h1"), for: item.id)
+    await model.runCoordinatorPass()
+
+    model.setClaudeStatusForTesting(.awaitingInput(since: Date(timeIntervalSince1970: 1_800_000_000), lastVerdictSnippet: nil), for: item.id)
+    model.setPRStatusForTesting(PRStatus(ci: .passing, mergeState: .clean, readiness: .reviewRequired, headOID: "h2"), for: item.id)
+    model.setPRStatusFetchedForTesting(Date(timeIntervalSince1970: 1_900_000_000), for: item.id)
+    await model.runCoordinatorPass()
+    await poster.settle()
+
+    #expect(await poster.needsYou.filter { $0.body.contains("did not clear") }.isEmpty)
 }
 
 @Test @MainActor func autoOnlyNotifiesForReadyToMergeAndNeverPushesOrMerges() async throws {
