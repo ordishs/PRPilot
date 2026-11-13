@@ -43,13 +43,19 @@ public enum AgentLaunchBuilder {
         kind: AgentKind,
         resolvedExecutablePath: String,
         sessionID: String,
-        resume: Bool
+        resume: Bool,
+        denyRules: [String] = [],
+        promptOverride: String? = nil
     ) -> AgentLaunchSpec {
         let backend = AgentBackends.backend(for: kind)
         var args: [String] = []
+        if kind == .claudeCode, !denyRules.isEmpty {
+            args.append("--disallowedTools")
+            args.append(denyRules.joined(separator: ","))
+        }
         args.append(contentsOf: review.agentFlags ?? [])
         args.append(contentsOf: backend.launchArguments(
-            settings: settings,
+            settings: promptOverride.map { settings.withEveryLaunchPrompt($0) } ?? settings,
             review: review,
             sessionID: sessionID,
             resume: resume
@@ -89,4 +95,41 @@ public enum AgentLaunchBuilder {
         }
         return review.title
     }
+}
+
+extension Settings {
+    /// Settings whose launch templates all say `prompt`. The backends pick a template by agent
+    /// and by ticket kind, so setting every one makes a one-off first prompt reach whichever
+    /// backend launches. A resume sends no prompt, so it ignores them.
+    fileprivate func withEveryLaunchPrompt(_ prompt: String) -> Settings {
+        var copy = self
+        copy.reviewPromptTemplate = prompt
+        copy.issuePromptTemplate = prompt
+        copy.piReviewPromptTemplate = prompt
+        copy.piIssuePromptTemplate = prompt
+        copy.codexReviewPromptTemplate = prompt
+        copy.codexIssuePromptTemplate = prompt
+        return copy
+    }
+}
+
+/// Claude Code deny rules for sessions the app starts on its own. A prompt is not a limit,
+/// so these block the commands that merge or post, at the tool layer.
+public enum DenyRules {
+    public static let autoFix: [String] = [
+        "Bash(gh pr merge:*)",
+        "Bash(gh pr review:*)",
+        "Bash(gh pr comment:*)",
+        "Bash(gh issue comment:*)",
+        "Bash(gh api*graphql*)",
+        "Bash(gh api* -X*)",
+        "Bash(gh api* --method*)",
+        "Bash(gh api* -f *)",
+        "Bash(gh api* -F *)",
+        "Bash(gh api* --field*)",
+        "Bash(gh api* --raw-field*)",
+        "Bash(gh api* --input*)",
+    ]
+
+    public static let coordinator: [String] = autoFix + ["Bash(git push:*)"]
 }

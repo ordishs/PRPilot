@@ -242,3 +242,87 @@ private func settings(review: String? = nil, issue: String? = nil) -> Settings {
     #expect(decoded.reviewPromptTemplate == "/review {url}")
     #expect(decoded.issuePromptTemplate == "/start-issue {number}")
 }
+
+private func launch(
+    _ kind: AgentKind,
+    resume: Bool = false,
+    denyRules: [String] = [],
+    promptOverride: String? = nil
+) -> AgentLaunchSpec {
+    AgentLaunchBuilder.build(
+        settings: .default,
+        review: sampleReview(),
+        worktreePath: "/tmp/wt",
+        kind: kind,
+        resolvedExecutablePath: "/bin/agent",
+        sessionID: "abc",
+        resume: resume,
+        denyRules: denyRules,
+        promptOverride: promptOverride
+    )
+}
+
+@Test func claudeLaunchPutsDenyRulesBeforeNameAsOneArgument() {
+    let rules = ["Bash(gh pr merge:*)", "Bash(gh pr review:*)"]
+    let args = launch(.claudeCode, denyRules: rules).arguments
+
+    #expect(args[0] == "--disallowedTools")
+    #expect(args[1] == "Bash(gh pr merge:*),Bash(gh pr review:*)")
+    #expect(args[2] == "--name")
+}
+
+@Test func claudeResumeAlsoCarriesTheDenyRules() {
+    let args = launch(.claudeCode, resume: true, denyRules: ["Bash(gh pr merge:*)"]).arguments
+
+    #expect(args.starts(with: ["--disallowedTools", "Bash(gh pr merge:*)", "--name"]))
+    #expect(args.contains("--resume"))
+}
+
+@Test func piAndCodexLaunchIgnoreDenyRules() {
+    for kind in [AgentKind.pi, .codex] {
+        let args = launch(kind, denyRules: ["Bash(gh pr merge:*)"]).arguments
+
+        #expect(!args.contains("--disallowedTools"))
+        #expect(!args.contains { $0.contains("gh pr merge") })
+    }
+}
+
+@Test func emptyDenyRulesChangeNothing() {
+    for kind in [AgentKind.claudeCode, .pi, .codex] {
+        #expect(launch(kind, denyRules: []) == launch(kind))
+    }
+}
+
+@Test func promptOverrideReplacesTheTemplateOnAFreshLaunch() {
+    for kind in [AgentKind.claudeCode, .pi, .codex] {
+        let args = launch(kind, promptOverride: "fix the build").arguments
+
+        #expect(args.contains("fix the build"))
+        #expect(!args.contains { $0.contains("/review") || $0.contains("Review the pull request") })
+    }
+}
+
+@Test func promptOverrideIsIgnoredOnResume() {
+    for kind in [AgentKind.claudeCode, .pi, .codex] {
+        #expect(!launch(kind, resume: true, promptOverride: "fix the build").arguments.contains("fix the build"))
+    }
+}
+
+@Test func denyRuleListsBlockMergeReviewAndCommentAndOnlyTheCoordinatorBlocksPush() {
+    for needle in ["gh pr merge", "gh pr review", "gh pr comment", "gh issue comment", "gh api"] {
+        #expect(DenyRules.autoFix.contains { $0.contains(needle) })
+        #expect(DenyRules.coordinator.contains { $0.contains(needle) })
+    }
+
+    #expect(!DenyRules.autoFix.contains { $0.contains("git push") })
+    #expect(DenyRules.coordinator.contains("Bash(git push:*)"))
+}
+
+@Test func apiDenyRulesBlockEveryWriteFormAndGraphqlButNotPlainReads() {
+    for needle in ["graphql", " -X", "--method", " -f ", " -F ", "--field", "--raw-field", "--input"] {
+        #expect(DenyRules.autoFix.contains { $0.hasPrefix("Bash(gh api") && $0.contains(needle) })
+    }
+
+    #expect(!DenyRules.autoFix.contains("Bash(gh api:*)"))
+    #expect(!DenyRules.autoFix.contains("Bash(gh api*)"))
+}
