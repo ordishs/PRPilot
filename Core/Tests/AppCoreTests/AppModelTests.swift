@@ -6464,3 +6464,106 @@ private func rowFor(_ item: WorkItem, _ kase: NextUpCase, step: NextUpStep) -> N
     #expect(reloaded.autoLog.count == 1)
     #expect(reloaded.handledCauses.count == 1)
 }
+
+@MainActor private func stateObject(_ model: AppModel) throws -> [String: Any] {
+    let data = try model.coordinatorState(now: Date(timeIntervalSince1970: 1_800_000_000)).jsonData()
+
+    return try JSONSerialization.jsonObject(with: data) as! [String: Any]
+}
+
+private func tickets(_ object: [String: Any]) -> [[String: Any]] {
+    object["tickets"] as! [[String: Any]]
+}
+
+@Test @MainActor func stateJSONHoldsEveryFieldForAPR() async throws {
+    let item = withWorktree(myPR(40))
+    let model = try await stepModel(seed: [item])
+    model.setPRStatusForTesting(
+        PRStatus(
+            ci: .failing, mergeState: .behind, readiness: .changesRequested, unresolvedThreads: 2,
+            threadsAwaitingMe: 1, changeRequests: ChangeRequestTally(current: 1, outdated: 0),
+            headOID: "h1", failedChecks: ["build", "lint"]
+        ),
+        for: item.id
+    )
+
+    let ticket = tickets(try stateObject(model))[0]
+
+    #expect(ticket["id"] as? String == item.id)
+    #expect(ticket["number"] as? Int == 40)
+    #expect(ticket["title"] as? String == "mine 40")
+    #expect(ticket["url"] as? String == "https://github.com/o/r/pull/40")
+    #expect(ticket["repo"] as? String == "o/r")
+    #expect(ticket["kind"] as? String == "pr")
+    #expect(ticket["author"] as? String == "me")
+    #expect(ticket["headBranch"] as? String == "mine-40")
+    #expect(ticket["baseBranch"] as? String == "main")
+    #expect(ticket["boardColumn"] as? String == "inProgress")
+    #expect((ticket["nextUp"] as? [String: Any])?["case"] as? String == "ciRed")
+    #expect((ticket["nextUp"] as? [String: Any])?["reason"] as? String == "CI red: build, lint")
+    #expect(ticket["ci"] as? String == "failing")
+    #expect(ticket["failedChecks"] as? [String] == ["build", "lint"])
+    #expect(ticket["mergeState"] as? String == "behind")
+    #expect(ticket["reviewReadiness"] as? String == "changesRequested")
+    #expect(ticket["readyToMerge"] as? Bool == false)
+    #expect(ticket["unresolvedThreads"] as? Int == 2)
+    #expect(ticket["threadsAwaitingMe"] as? Int == 1)
+    #expect(ticket["changeRequestsCurrent"] as? Int == 1)
+    #expect(ticket["agentStatus"] as? String == "none")
+    #expect(ticket["worktreePath"] as? String == "/tmp/wt")
+    #expect(ticket["disabled"] as? Bool == false)
+}
+
+@Test @MainActor func stateJSONHoldsTheFieldsForAnIssue() async throws {
+    let issue = WorkItem(
+        title: "bug", repoKey: "github.com/o/r", baseBranch: "main",
+        issueRef: IssueRef(owner: "o", repo: "r", number: 7, url: URL(string: "https://github.com/o/r/issues/7")!, authorLogin: "x"),
+        prState: .open, origin: .added, addedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let model = try await stepModel(seed: [issue])
+    model.setClaudeStatusForTesting(.idle(since: Date(timeIntervalSince1970: 1_799_990_000), lastVerdictSnippet: "tests pass"), for: issue.id)
+
+    let ticket = tickets(try stateObject(model))[0]
+
+    #expect(ticket["kind"] as? String == "issue")
+    #expect(ticket["number"] as? Int == 7)
+    #expect(ticket["author"] as? String == "x")
+    #expect(ticket["url"] as? String == "https://github.com/o/r/issues/7")
+    #expect(ticket["agentStatus"] as? String == "idle")
+    #expect(ticket["lastVerdict"] as? String == "tests pass")
+    #expect(ticket["ci"] == nil)
+}
+
+@Test @MainActor func stateJSONHoldsTheFieldsForATask() async throws {
+    var task = WorkItem(
+        title: "spike", repoKey: "github.com/o/r", baseBranch: "main", headBranch: "spike",
+        origin: .added, addedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    task.worktreePath = "/tmp/wt"
+    let model = try await stepModel(seed: [task])
+
+    let ticket = tickets(try stateObject(model))[0]
+
+    #expect(ticket["kind"] as? String == "task")
+    #expect(ticket["number"] == nil)
+    #expect(ticket["headBranch"] as? String == "spike")
+    #expect(ticket["worktreePath"] as? String == "/tmp/wt")
+    #expect(ticket["boardColumn"] as? String == "inProgress")
+}
+
+@Test @MainActor func stateJSONLeavesOutMergedAndClosedTicketsAndCarriesTheAutoLog() async throws {
+    var merged = myPR(41)
+    merged.prState = .merged
+    let live = withWorktree(myPR(42))
+    let model = try await autoModel(seed: [merged, live])
+    model.setPRStatusForTesting(redCI(head: "h1"), for: live.id)
+    await model.runCoordinatorPass()
+
+    let object = try stateObject(model)
+    let log = object["autoLog"] as! [[String: Any]]
+
+    #expect(tickets(object).map { $0["number"] as? Int } == [42])
+    #expect(log.count == 1)
+    #expect(log[0]["action"] as? String == "Start fix")
+    #expect(object["generatedAt"] as? String == "2027-01-15T08:00:00Z")
+}

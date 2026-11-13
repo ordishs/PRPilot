@@ -2425,6 +2425,51 @@ public final class AppModel {
         autoLog = await store.autoLog()
     }
 
+    public func coordinatorState(now: Date = Date()) -> CoordinatorState {
+        let rows = Dictionary(nextUp(inputs: nextUpInputs(), now: now).map { ($0.itemID, $0) }, uniquingKeysWith: { first, _ in first })
+        let open = reviews.filter { $0.prState != .merged && $0.prState != .closed }
+
+        let tickets = open.map { item -> CoordinatorState.Ticket in
+            let status = prStatuses[item.id]
+            let input = boardInput(for: item)
+            let agent = claudeStatuses[item.id]
+            let kind: String
+            switch item.category(myLogin: currentLogin) {
+            case .myPR, .reviewRequest: kind = "pr"
+            case .issue: kind = "issue"
+            case .task: kind = "task"
+            }
+
+            return CoordinatorState.Ticket(
+                id: item.id,
+                number: item.displayNumber,
+                title: item.title,
+                url: item.url?.absoluteString,
+                repo: "\(item.owner)/\(item.repo)",
+                kind: kind,
+                author: item.author,
+                headBranch: item.headBranch,
+                baseBranch: item.baseBranch,
+                boardColumn: boardColumn(for: input).rawValue,
+                nextUp: rows[item.id].map { .init(kase: String(describing: $0.kase), reason: $0.reason, step: $0.step.rawValue) },
+                ci: status?.ci.rawValue,
+                failedChecks: status?.failedChecks,
+                mergeState: status?.mergeState.rawValue,
+                reviewReadiness: status?.readiness.rawValue,
+                readyToMerge: status?.isReadyToMerge(prState: item.prState),
+                unresolvedThreads: status?.unresolvedThreads,
+                threadsAwaitingMe: status?.threadsAwaitingMe,
+                changeRequestsCurrent: status?.changeRequests.current,
+                agentStatus: agent?.name ?? "none",
+                lastVerdict: agent?.verdict,
+                worktreePath: item.worktreePath,
+                disabled: item.disabled
+            )
+        }
+
+        return CoordinatorState(generatedAt: now, tickets: tickets, autoLog: autoLog)
+    }
+
     public func hasAutoLimits(_ id: String) -> Bool {
         autoLimitSessions.contains(id) && claudeSessions[id] != nil
     }
@@ -2727,6 +2772,25 @@ private extension AgentStatus {
         case .limited: return 4
         case .ready: return 5
         case .failed: return 6
+        }
+    }
+
+    var name: String {
+        switch self {
+        case .starting: return "starting"
+        case .working: return "working"
+        case .awaitingInput: return "awaitingInput"
+        case .idle: return "idle"
+        case .limited: return "limited"
+        case .ready: return "ready"
+        case .failed: return "failed"
+        }
+    }
+
+    var verdict: String? {
+        switch self {
+        case .awaitingInput(_, let snippet), .idle(_, let snippet): return snippet
+        default: return nil
         }
     }
 
