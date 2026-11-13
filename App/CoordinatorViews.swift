@@ -258,12 +258,14 @@ private struct NextUpRowView: View {
         outcome = nil
 
         Task {
+            let result = await model.performStep(row.step, row: row, auto: false)
+
             if row.step == .startFix || row.step == .startReview {
-                model.jump(to: row.itemID)
                 await model.setPane(.claude, for: row.itemID)
+                model.jump(to: row.itemID)
             }
 
-            outcome = await model.performStep(row.step, row: row, auto: false)
+            outcome = result
             isRunning = false
         }
     }

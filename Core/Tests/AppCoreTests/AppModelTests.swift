@@ -6769,3 +6769,44 @@ private func stateFile(_ directory: URL) throws -> [String: Any] {
 
     #expect(await poster.needsYou.count == 1)
 }
+
+@Test @MainActor func tabIsSetBeforeTheTicketIsSelectedSoTheDetailViewShowsIt() async throws {
+    let ready = myPR(70)
+    let other = myPR(71)
+    let model = try await stepModel(seed: [ready, other])
+    model.jump(to: other.id)
+    var paneWhenSelectionChanged: PaneSelection?
+
+    withObservationTracking {
+        _ = model.selection
+    } onChange: {
+        MainActor.assumeIsolated {
+            paneWhenSelectionChanged = model.reviews.first { $0.id == ready.id }?.lastPane
+        }
+    }
+
+    _ = await model.performStep(.open, row: rowFor(ready, .readyToMerge, step: .open), auto: false)
+
+    #expect(model.selection == ready.id)
+    #expect(paneWhenSelectionChanged == .github)
+}
+
+@Test @MainActor func continueSetsTheAgentTabBeforeSelecting() async throws {
+    let item = myPR(72)
+    let other = myPR(73)
+    let model = try await stepModel(seed: [item, other])
+    model.jump(to: other.id)
+    var paneWhenSelectionChanged: PaneSelection?
+
+    withObservationTracking {
+        _ = model.selection
+    } onChange: {
+        MainActor.assumeIsolated {
+            paneWhenSelectionChanged = model.reviews.first { $0.id == item.id }?.lastPane
+        }
+    }
+
+    _ = await model.performStep(.continueWork, row: rowFor(item, .issueInProgress, step: .continueWork), auto: false)
+
+    #expect(paneWhenSelectionChanged == .claude)
+}

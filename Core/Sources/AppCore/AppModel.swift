@@ -2658,19 +2658,19 @@ public final class AppModel {
             return await rebaseAndPush(item)
 
         case .continueWork:
+            await setPane(.claude, for: item.id)
             jump(to: item.id)
             await markReviewOpened(item.id)
-            await setPane(.claude, for: item.id)
 
             return .done("Opened the agent tab")
 
         case .open:
-            jump(to: item.id)
-            await markReviewOpened(item.id)
-
             if row.kase == .readyToMerge {
                 await setPane(.github, for: item.id)
             }
+
+            jump(to: item.id)
+            await markReviewOpened(item.id)
 
             return .done("Opened the ticket")
         }
