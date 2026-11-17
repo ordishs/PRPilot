@@ -41,7 +41,6 @@ public final class AppModel {
     public private(set) var autoLog: [AutoLogEntry] = []
     public private(set) var coordinatorSession: AgentSession?
     public private(set) var coordinatorError: String?
-    private var coordinatorStartedAt = Date()
     private var coordinatorSessionIDs: [String: String] = [:]
     private var needsCauseBaseline = false
     private var prStatusFetchedAt: [String: Date] = [:]
@@ -240,9 +239,8 @@ public final class AppModel {
         }
     }
 
-    private func tickAllActiveStatuses() {
+    func tickAllActiveStatuses() {
         let now = Date()
-        stopCoordinatorIfIdle(now: now)
         for id in claudeSessions.keys {
             recomputeStatus(for: id, now: now)
         }
@@ -2601,7 +2599,6 @@ public final class AppModel {
         let session = AgentSession(spec: spec)
 
         session.applyAppearance(isDark: terminalIsDark)
-        coordinatorStartedAt = Date()
         coordinatorSession = session
         session.start()
     }
@@ -2609,29 +2606,6 @@ public final class AppModel {
     public func stopCoordinator() {
         coordinatorSession?.terminate()
         coordinatorSession = nil
-    }
-
-    /// Stops the coordinator once nothing has been typed or printed for ten minutes. Both
-    /// show up as writes to its transcript, so the newest transcript write is the activity.
-    func stopCoordinatorIfIdle(now: Date) {
-        guard coordinatorSession != nil else { return }
-
-        if now.timeIntervalSince(coordinatorLastActivity()) >= Self.coordinatorIdleSeconds {
-            stopCoordinator()
-        }
-    }
-
-    private static let coordinatorIdleSeconds: TimeInterval = 600
-
-    private func coordinatorLastActivity() -> Date {
-        let kind = settings.defaultAgent
-        let directory = coordinatorDirectory.path
-        let newest = AgentBackends.backend(for: kind).transcriptDirectories(forWorktreePath: directory)
-            .flatMap { (try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] }
-            .compactMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
-            .max()
-
-        return max(coordinatorStartedAt, newest ?? .distantPast)
     }
 
     public func hasAutoLimits(_ id: String) -> Bool {

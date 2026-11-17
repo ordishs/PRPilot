@@ -6657,16 +6657,16 @@ private func stateFile(_ directory: URL) throws -> [String: Any] {
     #expect(model.coordinatorSession === coordinator)
 }
 
-@Test @MainActor func coordinatorStopsAfterTenIdleMinutes() async throws {
+@Test @MainActor func coordinatorStaysAliveWhateverTheIdleTime() async throws {
     let (model, _) = try await coordinatorAgentModel()
     defer { model.terminateAllAgentSessions() }
     await model.startCoordinator()
+    let coordinator = model.coordinatorSession
 
-    model.stopCoordinatorIfIdle(now: Date().addingTimeInterval(599))
-    #expect(model.coordinatorSession != nil)
+    model.tickAllActiveStatuses()
 
-    model.stopCoordinatorIfIdle(now: Date().addingTimeInterval(601))
-    #expect(model.coordinatorSession == nil)
+    #expect(coordinator != nil)
+    #expect(model.coordinatorSession === coordinator)
 }
 
 @Test @MainActor func nextQuestionResumesTheSameConversation() async throws {
@@ -6683,7 +6683,7 @@ private func stateFile(_ directory: URL) throws -> [String: Any] {
     let transcripts = AgentTranscriptPath.directoryURL(for: .claudeCode, worktreePath: directory.path)
     try FileManager.default.createDirectory(at: transcripts, withIntermediateDirectories: true)
     try Data("{}\n".utf8).write(to: transcripts.appendingPathComponent("\(sessionID ?? "").jsonl"))
-    model.stopCoordinatorIfIdle(now: Date().addingTimeInterval(601))
+    model.stopCoordinator()
     #expect(model.coordinatorSession == nil)
 
     await model.startCoordinator()

@@ -134,5 +134,16 @@ public enum DenyRules {
         "Bash(gh api* --input*)",
     ]
 
-    public static let coordinator: [String] = autoFix + ["Bash(git push:*)"]
+    /// The coordinator may read through `gh api --method GET`. A blanket `--method*` rule would
+    /// block that read, and a deny rule cannot carve out one verb, so each write verb is named.
+    /// The other `gh api` rules stay: `-X`, `-f`, `-F`, `--field`, `--raw-field`, `--input` and
+    /// the graphql endpoint still deny.
+    private static let writeVerbs = ["POST", "PUT", "PATCH", "DELETE"]
+
+    public static let coordinator: [String] = autoFix
+        .filter { $0 != "Bash(gh api* --method*)" }
+        + writeVerbs.flatMap { verb in
+            [verb, verb.lowercased()].map { "Bash(gh api* --method*\($0)*)" }
+        }
+        + ["Bash(git push:*)"]
 }

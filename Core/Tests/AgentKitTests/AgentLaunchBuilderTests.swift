@@ -366,3 +366,25 @@ private func launch(
         #expect(!resumed.arguments.contains("read state.json"))
     }
 }
+
+@Test func coordinatorRulesDoNotBlockAGetThroughGhApi() {
+    #expect(!DenyRules.coordinator.contains("Bash(gh api* --method*)"))
+
+    for verb in ["POST", "PUT", "PATCH", "DELETE", "post", "put", "patch", "delete"] {
+        #expect(DenyRules.coordinator.contains("Bash(gh api* --method*\(verb)*)"))
+    }
+}
+
+@Test func coordinatorRulesKeepTheOtherWriteBlocks() {
+    for rule in DenyRules.autoFix where rule != "Bash(gh api* --method*)" {
+        #expect(DenyRules.coordinator.contains(rule))
+    }
+
+    #expect(DenyRules.coordinator.contains("Bash(git push:*)"))
+    #expect(DenyRules.coordinator.contains("Bash(gh api* -X*)"))
+    #expect(DenyRules.coordinator.contains("Bash(gh api* -f *)"))
+}
+
+@Test func autoFixRulesStillBlockEveryGhApiMethod() {
+    #expect(DenyRules.autoFix.contains("Bash(gh api* --method*)"))
+}
