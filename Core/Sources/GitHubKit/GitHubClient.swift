@@ -489,6 +489,10 @@ private struct GHSearchHit: Decodable {
     let repository: Repository
 }
 
+struct GHIssueState: Decodable {
+    let state: String
+}
+
 struct GHIssue: Decodable {
     struct Author: Decodable { let login: String }
     let number: Int
@@ -582,6 +586,23 @@ extension GitHubClient {
                 updatedAt: row.updatedAt
             )
         }
+    }
+
+    public func fetchIssueState(for loc: IssueLocator) async throws -> PRState {
+        let result = try await runner.run(
+            executable: ghPath,
+            arguments: ["issue", "view", String(loc.number), "--repo", "\(loc.owner)/\(loc.repo)", "--json", "state"]
+        )
+        guard result.exitCode == 0 else {
+            throw GitHubError.commandFailed(exitCode: result.exitCode, message: result.standardError)
+        }
+        let view: GHIssueState
+        do {
+            view = try JSONDecoder().decode(GHIssueState.self, from: Data(result.standardOutput.utf8))
+        } catch {
+            throw GitHubError.decodingFailed(String(describing: error))
+        }
+        return GitHubClient.mapIssueState(state: view.state)
     }
 
     public func fetchIssue(for loc: IssueLocator, origin: ReviewOrigin = .added, now: Date = Date()) async throws -> WorkItem {

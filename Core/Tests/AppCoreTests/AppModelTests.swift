@@ -2129,6 +2129,62 @@ private let issueSearchHitJSON = """
     #expect(item.category(myLogin: "user") == .issue)
 }
 
+@MainActor
+private func discoverWithStoredIssue(viewState: String) async throws -> AppModel {
+    let url = tempStoreURL()
+    let seedStore = try ReviewStore(fileURL: url)
+    var seed = Settings.default
+    seed.reviewRequestsEnabled = false
+    seed.myPRsEnabled = false
+    seed.issuesEnabled = true
+    seed.issueQueries = [DiscoveryQuery(text: "assignee:@me is:open")]
+    try await seedStore.updateSettings(seed)
+    let stored = WorkItem(
+        title: "Login crash",
+        repoKey: "github.com/bsv-blockchain/teranode",
+        baseBranch: "main",
+        headBranch: "issue-42-login-crash",
+        issueRef: IssueRef(owner: "bsv-blockchain", repo: "teranode", number: 42,
+            url: URL(string: "https://github.com/bsv-blockchain/teranode/issues/42")!, authorLogin: "alice"),
+        prState: .open,
+        origin: .discovered,
+        addedAt: Date()
+    )
+    try await seedStore.upsertItem(stored)
+    let store = try ReviewStore(fileURL: url)
+    let runner = StubRunner(results: [
+        CommandResult(exitCode: 0, standardOutput: "user\n", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: "[]", standardError: ""),
+        CommandResult(exitCode: 0, standardOutput: "{\"state\":\"\(viewState)\"}", standardError: ""),
+    ])
+    let model = AppModel(
+        store: store,
+        client: GitHubClient(runner: runner, ghPath: "gh"),
+        diffLoader: StubDiffLoader(),
+        worktreeProvider: StubWorktreeProvider(),
+        cloneRegistrar: StubRegistrar(),
+        worktreeOps: StubWorktreeOps(),
+        claudePath: "/usr/bin/true",
+        notificationPoster: StubNotificationPoster()
+    )
+    await model.load()
+    await model.discoverNow()
+    return model
+}
+
+@Test @MainActor func discoveredIssueClosedOnGitHubIsRemovedWhenSearchNoLongerReturnsIt() async throws {
+    let model = try await discoverWithStoredIssue(viewState: "CLOSED")
+
+    #expect(model.reviews.isEmpty)
+}
+
+@Test @MainActor func discoveredIssueStillOpenIsKeptWhenSearchNoLongerReturnsIt() async throws {
+    let model = try await discoverWithStoredIssue(viewState: "OPEN")
+
+    #expect(model.reviews.count == 1)
+    #expect(model.reviews.first?.prState == .open)
+}
+
 @Test @MainActor func setIssueStatusSetsAndClearsManualOverride() async throws {
     let url = tempStoreURL()
     let store = try ReviewStore(fileURL: url)

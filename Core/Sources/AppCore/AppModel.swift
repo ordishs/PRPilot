@@ -455,11 +455,20 @@ public final class AppModel {
     }
 
     private func pruneStaleDiscoveredIssues(currentIssueIDs: Set<String>) async {
-        let staleIDs = reviews.compactMap { item -> String? in
-            guard item.origin == .discovered, item.issueRef != nil else { return nil }
-            guard item.prState == .closed else { return nil }
-            guard let key = issueKey(item), !currentIssueIDs.contains(key) else { return nil }
-            return item.id
+        let missing = reviews.filter { item in
+            guard item.origin == .discovered, item.issueRef != nil, let key = issueKey(item) else { return false }
+            return !currentIssueIDs.contains(key)
+        }
+        var staleIDs: [String] = []
+        for item in missing {
+            guard let ref = item.issueRef else { continue }
+            if item.prState == .closed {
+                staleIDs.append(item.id)
+                continue
+            }
+            let loc = IssueLocator(owner: ref.owner, repo: ref.repo, number: ref.number)
+            guard let state = try? await client.fetchIssueState(for: loc), state == .closed else { continue }
+            staleIDs.append(item.id)
         }
         for id in staleIDs {
             await releaseWorktree(for: id)
